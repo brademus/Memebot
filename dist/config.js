@@ -28,5 +28,7 @@ exports.env = {
     HELIUS_API_KEY: process.env.HELIUS_API_KEY || '',
     TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || '',
     TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID || '',
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
+    ADMIN_KEY: process.env.ADMIN_KEY || '',
     PORT: parseInt(process.env.PORT || '3000', 10),
 };

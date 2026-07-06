@@ -8,6 +8,9 @@ const score_1 = require("./scoring/score");
 const states_1 = require("./scoring/states");
 const telegram_1 = require("./alerts/telegram");
 const logger_1 = require("./outcomes/logger");
+const wallets_1 = require("./ingest/wallets");
+const autotune_1 = require("./tuning/autotune");
+const analyst_1 = require("./ai/analyst");
 const server_1 = require("./api/server");
 const store_1 = require("./store");
 // gate retry policy: new mints have no liquidity yet — re-check every 30s for up to 30min
@@ -17,6 +20,8 @@ async function main() {
     await (0, db_1.initDb)();
     (0, server_1.startServer)();
     (0, logger_1.startOutcomeLogger)();
+    (0, wallets_1.startWalletTracker)();
+    (0, autotune_1.startAutotune)();
     // Pipeline: enrichment update → (gate if pending) → score → state → alert → broadcast
     (0, dexscreener_1.startDexscreenerPoller)(async (t) => {
         if (t.gated === null) {
@@ -48,6 +53,7 @@ async function main() {
             (0, score_1.scoreToken)(t);
             const changed = (0, states_1.updateState)(t);
             if (changed === 'TRIGGER') {
+                await (0, analyst_1.generateNote)(t); // analyst thesis before the alert goes out
                 (0, telegram_1.alertTrigger)(t);
                 console.log(`[state] 🎯 TRIGGER $${t.symbol} score=${t.score}`);
             }

@@ -18,7 +18,8 @@ export async function alertTrigger(t: TokenRecord) {
     `chart: https://dexscreener.com/solana/${t.pairAddress || t.ca}`,
     `swap: https://jup.ag/swap/SOL-${t.ca}`,
     `CA: ${t.ca}`,
-  ].join('\n');
+    t.aiNote ? `\n🧠 ${t.aiNote}` : '',
+  ].filter(Boolean).join('\n');
 
   try {
     await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {

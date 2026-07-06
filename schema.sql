@@ -12,8 +12,10 @@ CREATE TABLE IF NOT EXISTS tokens (
   first_score_price NUMERIC,          -- price when first scored (for EXTENDED calc)
   peak_score NUMERIC DEFAULT 0,
   last_state TEXT,
-  last_score NUMERIC
+  last_score NUMERIC,
+  subs JSONB
 );
+ALTER TABLE tokens ADD COLUMN IF NOT EXISTS subs JSONB;
 
 CREATE TABLE IF NOT EXISTS outcomes (
   ca TEXT REFERENCES tokens(ca),

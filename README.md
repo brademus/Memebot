@@ -67,3 +67,26 @@ Gate order (cheap → expensive): liquidity math → deployer fingerprint → Ru
 Once `outcomes` has data:
 - `SELECT ca FROM outcomes WHERE multiple_from_first >= 10` → walk back first buyers via Helius → wallets appearing on multiple winners = your proprietary list
 - Fit weights via logistic regression on gated-token outcomes
+
+## v2 additions
+
+**Curve-aware gates (bug fix):** bonding-curve tokens have no LP token — liquidity is locked in pump.fun's curve contract. The LP-lock and liq:mcap gates now only apply post-graduation (PumpSwap/Raydium). Curve tokens use a lower liquidity floor (`min_liquidity_usd_curve`). This is why the feed was empty before — every curve token was dying on `lp_not_locked`.
+
+**Smart-money wallet tracker** (`src/ingest/wallets.ts`): add wallets via the API, tracker polls their swaps via Helius. A tracked wallet buying a token adds a `smart_money` signal (weight 20). Only `type:SWAP` counts — dust transfers are ignored (anti-poisoning). Wallets a tracked wallet buys that we haven't seen become discovery sources.
+
+Manage wallets (needs `ADMIN_KEY` env var set):
+```
+curl -X POST https://YOUR-APP.up.railway.app/api/wallets \
+  -H "x-admin-key: YOUR_ADMIN_KEY" -H "content-type: application/json" \
+  -d '{"wallet":"WALLET_ADDRESS","type":"sniper"}'
+```
+
+**AI analyst** (`src/ai/analyst.ts`): on TRIGGER, Claude Haiku writes a 2-3 sentence thesis — strongest reason it passed, biggest risk, entry-quality GOOD/MIXED/LATE. Shows on the dashboard under the token row and in the Telegram alert. Needs `ANTHROPIC_API_KEY`. Costs ~$0.001 per note.
+
+**Full history tab:** the dashboard's FULL HISTORY tab pages through every token ever logged in Postgres, with each one's 4h outcome multiple. Winners (≥2x) highlighted. This is the raw record behind the autotuner.
+
+**Autotune** (`src/tuning/autotune.ts`): nightly, joins passed tokens with 4h outcomes, measures how well each sub-score separated winners (≥2x) from losers, and suggests new weights at `/api/tuning`. **Suggest-only** — you apply changes to `config.yaml` yourself. Needs 50+ outcomes and 10+ winners before it says anything; until then it reports how many more it needs.
+
+## New env vars
+- `ANTHROPIC_API_KEY` — AI analyst notes (optional)
+- `ADMIN_KEY` — protects wallet-admin endpoints (set to any long random string)

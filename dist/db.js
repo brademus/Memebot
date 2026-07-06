@@ -10,6 +10,10 @@ exports.logOutcome = logOutcome;
 exports.bumpDeployer = bumpDeployer;
 exports.isBlacklistedDeployer = isBlacklistedDeployer;
 exports.markRug = markRug;
+exports.fetchHistory = fetchHistory;
+exports.addSmartWallet = addSmartWallet;
+exports.removeSmartWallet = removeSmartWallet;
+exports.listSmartWallets = listSmartWallets;
 const pg_1 = require("pg");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
@@ -29,11 +33,12 @@ async function initDb() {
 async function upsertToken(t) {
     if (!exports.pool)
         return;
-    await exports.pool.query(`INSERT INTO tokens (ca, symbol, name, creator, source, first_seen, gate_result, gate_fail_reason, first_score_price, peak_score, last_state, last_score)
-     VALUES ($1,$2,$3,$4,$5,to_timestamp($6/1000.0),$7,$8,$9,$10,$11,$12)
-     ON CONFLICT (ca) DO UPDATE SET gate_result=$7, gate_fail_reason=$8, first_score_price=COALESCE(tokens.first_score_price,$9), peak_score=GREATEST(tokens.peak_score,$10), last_state=$11, last_score=$12`, [t.ca, t.symbol, t.name, t.creator, t.source, t.firstSeen,
+    await exports.pool.query(`INSERT INTO tokens (ca, symbol, name, creator, source, first_seen, gate_result, gate_fail_reason, first_score_price, peak_score, last_state, last_score, subs)
+     VALUES ($1,$2,$3,$4,$5,to_timestamp($6/1000.0),$7,$8,$9,$10,$11,$12,$13)
+     ON CONFLICT (ca) DO UPDATE SET gate_result=$7, gate_fail_reason=$8, first_score_price=COALESCE(tokens.first_score_price,$9), peak_score=GREATEST(tokens.peak_score,$10), last_state=$11, last_score=$12, subs=COALESCE($13, tokens.subs)`, [t.ca, t.symbol, t.name, t.creator, t.source, t.firstSeen,
         t.gated === null ? null : t.gated ? 'passed' : 'failed',
-        t.gateFailReason, t.firstScorePrice, t.peakScore, t.state, t.score]).catch(e => console.error('[db] upsert', e.message));
+        t.gateFailReason, t.firstScorePrice, t.peakScore, t.state, t.score,
+        t.gated === true ? JSON.stringify(t.subs) : null]).catch(e => console.error('[db] upsert', e.message));
 }
 async function logOutcome(ca, minutes, price, liq, mcap, firstPrice) {
     if (!exports.pool)
@@ -59,4 +64,31 @@ async function markRug(ca) {
     // called by outcome logger when a token round-trips to ~zero: increment deployer rug count, auto-blacklist at 2+
     await exports.pool.query(`UPDATE deployers d SET rugs = rugs + 1, blacklisted = (rugs + 1 >= 2)
      FROM tokens t WHERE t.ca = $1 AND d.wallet = t.creator`, [ca]).catch(() => { });
+}
+async function fetchHistory(before, limit) {
+    if (!exports.pool)
+        return [];
+    const r = await exports.pool.query(`SELECT t.ca, t.symbol, t.source, t.first_seen, t.gate_result, t.gate_fail_reason,
+            t.last_state, t.last_score, o.multiple_from_first AS multiple_4h
+     FROM tokens t LEFT JOIN outcomes o ON o.ca = t.ca AND o.snapshot_minutes = 240
+     WHERE ($1::timestamptz IS NULL OR t.first_seen < $1)
+     ORDER BY t.first_seen DESC LIMIT $2`, [before, Math.min(limit, 200)]).catch(() => null);
+    return r ? r.rows : [];
+}
+async function addSmartWallet(wallet, type) {
+    if (!exports.pool)
+        throw new Error('no database');
+    await exports.pool.query(`INSERT INTO smart_wallets (wallet, type, active, last_validated) VALUES ($1,$2,TRUE,now())
+     ON CONFLICT (wallet) DO UPDATE SET active=TRUE, type=$2`, [wallet, type]);
+}
+async function removeSmartWallet(wallet) {
+    if (!exports.pool)
+        throw new Error('no database');
+    await exports.pool.query(`UPDATE smart_wallets SET active=FALSE WHERE wallet=$1`, [wallet]);
+}
+async function listSmartWallets() {
+    if (!exports.pool)
+        return [];
+    const r = await exports.pool.query(`SELECT wallet, type, active, last_validated FROM smart_wallets ORDER BY last_validated DESC`).catch(() => null);
+    return r ? r.rows : [];
 }

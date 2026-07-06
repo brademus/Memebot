@@ -10,8 +10,13 @@ import { checkBundle } from './bundle';
 export async function runGates(t: TokenRecord): Promise<string | null> {
   const g = cfg().gates;
 
+  // curve-stage tokens (dexId 'pumpfun') have liquidity locked in the bonding curve by
+  // the program itself — LP-lock doesn't apply, and the liquidity floor is lower
+  const onCurve = t.dex === 'pumpfun';
+
   // liquidity math first — free, uses Dexscreener data already on the record
-  if (t.liquidityUsd < g.min_liquidity_usd) return `liq_below_min_${Math.round(t.liquidityUsd)}`;
+  const liqFloor = onCurve ? g.min_liquidity_usd_curve : g.min_liquidity_usd;
+  if (t.liquidityUsd < liqFloor) return `liq_below_min_${Math.round(t.liquidityUsd)}`;
   if (t.mcapUsd > 0 && t.liquidityUsd / t.mcapUsd < g.liq_to_mcap_ratio_min)
     return `liq_mcap_ratio_${(t.liquidityUsd / t.mcapUsd).toFixed(3)}`;
 
@@ -30,7 +35,7 @@ export async function runGates(t: TokenRecord): Promise<string | null> {
   if (g.freeze_authority_inactive && !r.freezeAuthorityInactive) return 'freeze_authority_active';
   if (r.topHolderPct > g.hard_reject_top_holder_pct) return `top_holder_${r.topHolderPct.toFixed(0)}pct`;
   if (r.top3HolderPct > g.top3_holder_pct_max) return `top3_${r.top3HolderPct.toFixed(0)}pct`;
-  if (g.lp_locked_or_burned && !r.lpLockedOrBurned) return 'lp_not_locked';
+  if (!onCurve && g.lp_locked_or_burned && !r.lpLockedOrBurned) return 'lp_not_locked';
   if (r.riskScore > g.rugcheck_score_max) return `rugcheck_score_${r.riskScore}`;
 
   // honeypot last — Jupiter quote

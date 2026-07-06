@@ -9,10 +9,48 @@ const express_1 = __importDefault(require("express"));
 const path_1 = __importDefault(require("path"));
 const config_1 = require("../config");
 const store_1 = require("../store");
+const db_1 = require("../db");
+const autotune_1 = require("../tuning/autotune");
 const clients = new Set();
 function startServer() {
     const app = (0, express_1.default)();
+    app.use(express_1.default.json());
     app.use(express_1.default.static(path_1.default.join(process.cwd(), 'public')));
+    // full history from Postgres (everything ever seen), cursor-paged
+    app.get('/api/history', async (req, res) => {
+        const before = req.query.before || null;
+        const rows = await (0, db_1.fetchHistory)(before, parseInt(req.query.limit || '100', 10));
+        res.json(rows);
+    });
+    // autotune's latest weight suggestion (apply manually in config.yaml)
+    app.get('/api/tuning', (_req, res) => res.json((0, autotune_1.latestSuggestion)()));
+    // smart-wallet admin — write ops require ADMIN_KEY header
+    app.get('/api/wallets', async (_req, res) => res.json(await (0, db_1.listSmartWallets)()));
+    app.post('/api/wallets', async (req, res) => {
+        if (!config_1.env.ADMIN_KEY || req.header('x-admin-key') !== config_1.env.ADMIN_KEY)
+            return res.status(401).json({ error: 'set ADMIN_KEY env var and pass x-admin-key header' });
+        const { wallet, type } = req.body || {};
+        if (!wallet || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(wallet))
+            return res.status(400).json({ error: 'invalid wallet address' });
+        try {
+            await (0, db_1.addSmartWallet)(wallet, type || 'unspecified');
+            res.json({ ok: true, wallet });
+        }
+        catch (e) {
+            res.status(500).json({ error: e.message });
+        }
+    });
+    app.delete('/api/wallets/:wallet', async (req, res) => {
+        if (!config_1.env.ADMIN_KEY || req.header('x-admin-key') !== config_1.env.ADMIN_KEY)
+            return res.status(401).json({ error: 'unauthorized' });
+        try {
+            await (0, db_1.removeSmartWallet)(req.params.wallet);
+            res.json({ ok: true });
+        }
+        catch (e) {
+            res.status(500).json({ error: e.message });
+        }
+    });
     app.get('/api/tokens', (_req, res) => res.json(payload()));
     app.get('/api/stream', (req, res) => {
         res.setHeader('Content-Type', 'text/event-stream');
@@ -85,6 +123,8 @@ function pick(t) {
         movedPct: t.firstScorePrice && t.priceUsd ? +(((t.priceUsd / t.firstScorePrice) - 1) * 100).toFixed(1) : 0,
         insider: t.bundle ? t.bundle.insiderPct : null,
         funded: t.bundle ? t.bundle.fundedSnipers : 0,
+        smart: new Set(t.smartHits.map(h => h.wallet)).size,
+        aiNote: t.aiNote,
         pair: t.pairAddress,
     };
 }

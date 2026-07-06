@@ -58,6 +58,9 @@
   .links a{color:var(--dim);text-decoration:none;margin-right:10px;border-bottom:1px dotted var(--dim)}
   .links a:hover{color:var(--txt)}
   .moved-hot{color:var(--dying);font-weight:600}
+  tr.ainote td{border-bottom:1px solid var(--line);padding:2px 12px 10px;font-size:12px;color:var(--dim);line-height:1.5}
+  tr.ainote.TRIGGER td{border-left:3px solid var(--trigger)}
+  .ai-label{font-family:'Barlow Condensed';font-weight:600;letter-spacing:.1em;color:var(--trigger);font-size:11px;margin-right:8px}
 
   #empty{padding:60px 20px;color:var(--dim);text-align:center}
   #empty b{color:var(--txt);display:block;margin-bottom:8px;font-family:'Barlow Condensed';font-size:18px;letter-spacing:.08em}
@@ -78,6 +81,14 @@
   .seen .sy{color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
   .seen .ag{color:var(--ext);flex-shrink:0}
 
+  #tabs{display:flex;gap:0;border-bottom:1px solid var(--line);padding:0 20px}
+  .tab{background:none;border:none;border-bottom:2px solid transparent;color:var(--dim);font-family:'Barlow Condensed';font-weight:600;font-size:14px;letter-spacing:.1em;padding:12px 18px;cursor:pointer}
+  .tab.on{color:var(--txt);border-bottom-color:var(--trigger)}
+  #historyview{padding-bottom:40px}
+  .mult-win{color:var(--trigger);font-weight:600}
+  .mult-loss{color:var(--dim)}
+  #loadmore{margin:20px;background:none;border:1px solid var(--line);color:var(--txt);padding:8px 18px;font:13px 'IBM Plex Mono';cursor:pointer}
+  #loadmore:hover{border-color:var(--trigger)}
   #scanpanel{border-top:1px solid var(--line);margin-top:24px;padding:14px 20px 40px}
   #scanpanel h2{font-family:'Barlow Condensed';font-weight:600;font-size:15px;letter-spacing:.12em;color:var(--dim);margin-bottom:10px}
   #scanpanel h2 span{font-weight:500;color:var(--ext)}
@@ -100,10 +111,16 @@
   <button id="mute" aria-pressed="false">SOUND OFF</button>
 </header>
 
+<nav id="tabs">
+  <button class="tab on" data-view="live">LIVE</button>
+  <button class="tab" data-view="history">FULL HISTORY</button>
+</nav>
+
+<div id="liveview">
 <table>
   <thead><tr>
     <th>State</th><th>Token</th><th>Age</th><th>Score</th><th>Liq</th><th>Liq:MC</th>
-    <th>B:S 5m</th><th>Δ5m</th><th>Moved</th><th>Insider</th><th>Open</th>
+    <th>B:S 5m</th><th>Δ5m</th><th>Moved</th><th>Insider</th><th>Smart</th><th>Open</th>
   </tr></thead>
   <tbody id="rows"></tbody>
 </table>
@@ -119,6 +136,15 @@
   <h2>SCAN FEED <span id="scancount"></span></h2>
   <div id="scanlist"></div>
 </section>
+</div>
+
+<div id="historyview" hidden>
+  <table>
+    <thead><tr><th>Seen</th><th>Token</th><th>Source</th><th>Result</th><th>State</th><th>Score</th><th>4h Result</th></tr></thead>
+    <tbody id="histrows"></tbody>
+  </table>
+  <button id="loadmore">Load older →</button>
+</div>
 
 <script>
 const MAX_AGE = 240; // keep in sync with config age.max_token_age_minutes
@@ -172,11 +198,18 @@ function render(data){
       <td class="${t.chg5m >= 0 ? 'pos':'neg'}">${t.chg5m > 0 ? '+':''}${t.chg5m}%</td>
       <td class="${movedCls}">${t.movedPct > 0 ? '+':''}${t.movedPct}%</td>
       <td class="${t.insider === null ? 'mut' : t.insider > 15 ? 'neg' : 'pos'}" title="${t.funded} deployer-linked snipers">${t.insider === null ? '—' : t.insider + '%'}</td>
+      <td class="${t.smart > 0 ? 'pos' : 'mut'}">${t.smart || '—'}</td>
       <td class="links">
         <a href="https://dexscreener.com/solana/${t.pair || t.ca}" target="_blank" rel="noopener">chart</a>
         <a href="https://jup.ag/swap/SOL-${t.ca}" target="_blank" rel="noopener">swap</a>
       </td>`;
     tb.appendChild(tr);
+    if (t.aiNote) {
+      const nr = document.createElement('tr');
+      nr.className = 'ainote ' + t.state;
+      nr.innerHTML = `<td></td><td colspan="10"><span class="ai-label">ANALYST</span> ${esc(t.aiNote)}</td>`;
+      tb.appendChild(nr);
+    }
     prevStates[t.ca] = t.state;
   }
   if (newTriggers.length) ding();
@@ -191,6 +224,47 @@ function connect(){
     es.close(); setTimeout(connect, 3000);
   };
 }
+// ---- tab switching + history ----
+let histCursor = null, histLoading = false;
+document.querySelectorAll('.tab').forEach(btn => btn.onclick = () => {
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b === btn));
+  const isHist = btn.dataset.view === 'history';
+  $('liveview').hidden = isHist;
+  $('historyview').hidden = !isHist;
+  if (isHist && !$('histrows').children.length) loadHistory(true);
+});
+$('loadmore').onclick = () => loadHistory(false);
+
+async function loadHistory(reset){
+  if (histLoading) return; histLoading = true;
+  if (reset) { $('histrows').innerHTML = ''; histCursor = null; }
+  try {
+    const url = '/api/history?limit=100' + (histCursor ? '&before=' + encodeURIComponent(histCursor) : '');
+    const rows = await (await fetch(url)).json();
+    const tb = $('histrows');
+    for (const r of rows){
+      const tr = document.createElement('tr');
+      tr.className = 'row';
+      const when = new Date(r.first_seen);
+      const mult = r.multiple_4h != null ? Number(r.multiple_4h) : null;
+      const multCell = mult != null
+        ? `<span class="${mult >= 2 ? 'mult-win':'mult-loss'}">${mult.toFixed(2)}x</span>` : '—';
+      const resultCls = r.gate_result === 'passed' ? 'pos' : r.gate_result === 'failed' ? 'neg' : 'mut';
+      tr.innerHTML = `<td class="mut">${when.toLocaleString()}</td>
+        <td><span class="sym">$${esc(r.symbol)}</span></td>
+        <td class="mut">${esc(r.source)}</td>
+        <td class="${resultCls}">${r.gate_result || 'pending'}${r.gate_fail_reason ? ' ('+esc(r.gate_fail_reason)+')' : ''}</td>
+        <td>${r.last_state || '—'}</td>
+        <td>${r.last_score ?? '—'}</td>
+        <td>${multCell}</td>`;
+      tb.appendChild(tr);
+      histCursor = r.first_seen;
+    }
+    $('loadmore').style.display = rows.length < 100 ? 'none' : 'block';
+  } catch { $('histrows').innerHTML = '<tr><td colspan="7" class="mut" style="padding:20px">History needs the Postgres database. Add the plugin on Railway.</td></tr>'; }
+  histLoading = false;
+}
+
 connect();
 setInterval(async () => {
   try {

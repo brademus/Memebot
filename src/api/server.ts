@@ -2,13 +2,44 @@ import express from 'express';
 import path from 'path';
 import { env } from '../config';
 import { activeTokens, allTokens, recentScans } from '../store';
+import { fetchHistory, addSmartWallet, removeSmartWallet, listSmartWallets } from '../db';
+import { latestSuggestion } from '../tuning/autotune';
 import { TokenRecord } from '../types';
 
 const clients = new Set<express.Response>();
 
 export function startServer() {
   const app = express();
+  app.use(express.json());
   app.use(express.static(path.join(process.cwd(), 'public')));
+
+  // full history from Postgres (everything ever seen), cursor-paged
+  app.get('/api/history', async (req, res) => {
+    const before = (req.query.before as string) || null;
+    const rows = await fetchHistory(before, parseInt((req.query.limit as string) || '100', 10));
+    res.json(rows);
+  });
+
+  // autotune's latest weight suggestion (apply manually in config.yaml)
+  app.get('/api/tuning', (_req, res) => res.json(latestSuggestion()));
+
+  // smart-wallet admin — write ops require ADMIN_KEY header
+  app.get('/api/wallets', async (_req, res) => res.json(await listSmartWallets()));
+  app.post('/api/wallets', async (req, res) => {
+    if (!env.ADMIN_KEY || req.header('x-admin-key') !== env.ADMIN_KEY)
+      return res.status(401).json({ error: 'set ADMIN_KEY env var and pass x-admin-key header' });
+    const { wallet, type } = req.body || {};
+    if (!wallet || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(wallet))
+      return res.status(400).json({ error: 'invalid wallet address' });
+    try { await addSmartWallet(wallet, type || 'unspecified'); res.json({ ok: true, wallet }); }
+    catch (e) { res.status(500).json({ error: (e as Error).message }); }
+  });
+  app.delete('/api/wallets/:wallet', async (req, res) => {
+    if (!env.ADMIN_KEY || req.header('x-admin-key') !== env.ADMIN_KEY)
+      return res.status(401).json({ error: 'unauthorized' });
+    try { await removeSmartWallet(req.params.wallet); res.json({ ok: true }); }
+    catch (e) { res.status(500).json({ error: (e as Error).message }); }
+  });
 
   app.get('/api/tokens', (_req, res) => res.json(payload()));
 
@@ -86,6 +117,8 @@ function pick(t: TokenRecord) {
     movedPct: t.firstScorePrice && t.priceUsd ? +(((t.priceUsd / t.firstScorePrice) - 1) * 100).toFixed(1) : 0,
     insider: t.bundle ? t.bundle.insiderPct : null,
     funded: t.bundle ? t.bundle.fundedSnipers : 0,
+    smart: new Set(t.smartHits.map(h => h.wallet)).size,
+    aiNote: t.aiNote,
     pair: t.pairAddress,
   };
 }

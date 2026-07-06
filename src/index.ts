@@ -6,6 +6,9 @@ import { scoreToken } from './scoring/score';
 import { updateState } from './scoring/states';
 import { alertTrigger } from './alerts/telegram';
 import { startOutcomeLogger } from './outcomes/logger';
+import { startWalletTracker } from './ingest/wallets';
+import { startAutotune } from './tuning/autotune';
+import { generateNote } from './ai/analyst';
 import { startServer, broadcast } from './api/server';
 import { getToken, removeToken, allTokens, recordScan } from './store';
 import { TokenRecord } from './types';
@@ -18,6 +21,8 @@ async function main() {
   await initDb();
   startServer();
   startOutcomeLogger();
+  startWalletTracker();
+  startAutotune();
 
   // Pipeline: enrichment update → (gate if pending) → score → state → alert → broadcast
   startDexscreenerPoller(async (t: TokenRecord) => {
@@ -50,6 +55,7 @@ async function main() {
       scoreToken(t);
       const changed = updateState(t);
       if (changed === 'TRIGGER') {
+        await generateNote(t);           // analyst thesis before the alert goes out
         alertTrigger(t);
         console.log(`[state] 🎯 TRIGGER $${t.symbol} score=${t.score}`);
       }

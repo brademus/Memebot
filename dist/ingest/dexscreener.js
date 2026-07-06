@@ -42,6 +42,8 @@ async function enrich(batch, onUpdated) {
             t.sells5m = p.txns?.m5?.sells || 0;
             t.priceChange5m = p.priceChange?.m5 || 0;
             t.pairAddress = p.pairAddress || null;
+            t.dex = p.dexId || null;
+            t.dexId = p.dexId || null;
             t.uniqueBuyerSamples.push(t.buys5m);
             if (t.uniqueBuyerSamples.length > 6)
                 t.uniqueBuyerSamples.shift();
