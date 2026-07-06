@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'path';
 import { env } from '../config';
-import { activeTokens, allTokens } from '../store';
+import { activeTokens, allTokens, recentScans } from '../store';
 import { TokenRecord } from '../types';
 
 const clients = new Set<express.Response>();
@@ -10,14 +10,14 @@ export function startServer() {
   const app = express();
   app.use(express.static(path.join(process.cwd(), 'public')));
 
-  app.get('/api/tokens', (_req, res) => res.json(serialize()));
+  app.get('/api/tokens', (_req, res) => res.json(payload()));
 
   app.get('/api/stream', (req, res) => {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders();
-    res.write(`data: ${JSON.stringify(serialize())}\n\n`);
+    res.write(`data: ${JSON.stringify(payload())}\n\n`);
     clients.add(res);
     req.on('close', () => clients.delete(res));
   });
@@ -38,9 +38,11 @@ export function startServer() {
 // push to all SSE clients — call after each scoring pass
 export function broadcast() {
   if (!clients.size) return;
-  const payload = `data: ${JSON.stringify(serialize())}\n\n`;
-  for (const c of clients) c.write(payload);
+  const msg = `data: ${JSON.stringify(payload())}\n\n`;
+  for (const c of clients) c.write(msg);
 }
+
+const payload = () => ({ tokens: serialize(), scans: recentScans().slice(0, 60) });
 
 const STATE_ORDER: Record<string, number> = { TRIGGER: 0, HEATING: 1, WATCHING: 2, EXTENDED: 3, DYING: 4 };
 
@@ -60,6 +62,8 @@ function pick(t: TokenRecord) {
     ratio: t.mcapUsd > 0 ? +(t.liquidityUsd / t.mcapUsd).toFixed(3) : 0,
     buys: t.buys5m, sells: t.sells5m, chg5m: t.priceChange5m,
     movedPct: t.firstScorePrice && t.priceUsd ? +(((t.priceUsd / t.firstScorePrice) - 1) * 100).toFixed(1) : 0,
+    insider: t.bundle ? t.bundle.insiderPct : null,
+    funded: t.bundle ? t.bundle.fundedSnipers : 0,
     pair: t.pairAddress,
   };
 }

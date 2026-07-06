@@ -61,6 +61,16 @@
 
   #empty{padding:60px 20px;color:var(--dim);text-align:center}
   #empty b{color:var(--txt);display:block;margin-bottom:8px;font-family:'Barlow Condensed';font-size:18px;letter-spacing:.08em}
+
+  #scanpanel{border-top:1px solid var(--line);margin-top:24px;padding:14px 20px 40px}
+  #scanpanel h2{font-family:'Barlow Condensed';font-weight:600;font-size:15px;letter-spacing:.12em;color:var(--dim);margin-bottom:10px}
+  #scanpanel h2 span{font-weight:500;color:var(--ext)}
+  .scan{display:flex;gap:14px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line);font-size:12px}
+  .scan .t{color:var(--ext);min-width:52px}
+  .scan .v{font-family:'Barlow Condensed';font-weight:600;letter-spacing:.08em;min-width:44px}
+  .scan .v.PASS{color:var(--trigger)} .scan .v.KILL{color:var(--dying)}
+  .scan .s{color:var(--txt);min-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .scan .r{color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -77,11 +87,16 @@
 <table>
   <thead><tr>
     <th>State</th><th>Token</th><th>Age</th><th>Score</th><th>Liq</th><th>Liq:MC</th>
-    <th>B:S 5m</th><th>Δ5m</th><th>Moved</th><th>Open</th>
+    <th>B:S 5m</th><th>Δ5m</th><th>Moved</th><th>Insider</th><th>Open</th>
   </tr></thead>
   <tbody id="rows"></tbody>
 </table>
-<div id="empty"><b>SCANNING</b>New launches appear here once they pass the rug gates. Killed tokens never hit your screen.</div>
+<div id="empty"><b>SCANNING</b>New launches appear here once they pass the rug gates. Killed tokens show below in the scan feed.</div>
+
+<section id="scanpanel">
+  <h2>SCAN FEED <span id="scancount"></span></h2>
+  <div id="scanlist"></div>
+</section>
 
 <script>
 const MAX_AGE = 240; // keep in sync with config age.max_token_age_minutes
@@ -110,7 +125,9 @@ function ding(){
 
 const fmt = n => n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(0)+'K' : n.toFixed(0);
 
-function render(tokens){
+function render(data){
+  const tokens = data.tokens || [];
+  renderScans(data.scans || []);
   $('empty').style.display = tokens.length ? 'none' : 'block';
   const tb = $('rows'); tb.innerHTML = '';
   const newTriggers = [];
@@ -131,6 +148,7 @@ function render(tokens){
       <td class="${t.buys > t.sells ? 'pos' : 'neg'}">${t.buys}:${t.sells}</td>
       <td class="${t.chg5m >= 0 ? 'pos':'neg'}">${t.chg5m > 0 ? '+':''}${t.chg5m}%</td>
       <td class="${movedCls}">${t.movedPct > 0 ? '+':''}${t.movedPct}%</td>
+      <td class="${t.insider === null ? 'mut' : t.insider > 15 ? 'neg' : 'pos'}" title="${t.funded} deployer-linked snipers">${t.insider === null ? '—' : t.insider + '%'}</td>
       <td class="links">
         <a href="https://dexscreener.com/solana/${t.pair || t.ca}" target="_blank" rel="noopener">chart</a>
         <a href="https://jup.ag/swap/SOL-${t.ca}" target="_blank" rel="noopener">swap</a>
@@ -158,6 +176,15 @@ setInterval(async () => {
     $('sWatch').textContent = s.watching; $('sTrig').textContent = s.triggers;
   } catch {}
 }, 5000);
+
+function renderScans(scans){
+  $('scancount').textContent = scans.length ? `— last ${scans.length}` : '';
+  const el = $('scanlist');
+  el.innerHTML = scans.map(s => {
+    const ago = Math.max(0, Math.round((Date.now() - s.at) / 60000));
+    return `<div class="scan"><span class="t">${ago}m ago</span><span class="v ${s.verdict}">${s.verdict}</span><span class="s">$${esc(s.symbol)}</span><span class="r">${esc(s.reason || 'passed all gates')}</span></div>`;
+  }).join('') || '<div class="scan"><span class="r">Nothing gated yet — new mints need liquidity before gates run.</span></div>';
+}
 
 const esc = s => (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 </script>

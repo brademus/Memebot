@@ -20,6 +20,13 @@ deployer:
   max_prior_tokens_24h: 3             # serial launcher = spray-and-rug pattern
   blacklist_auto: true                # auto-blacklist deployers of rugged tokens
 
+bundle:                               # same-block sniper / insider detection (needs HELIUS_API_KEY)
+  enabled: true
+  max_insider_supply_pct: 25          # kill if slot0 buyers hold more than this at launch
+  max_funded_snipers: 2               # kill if >=2 slot0 buyers have direct SOL links to deployer
+  count_all_slot0_as_insider: false   # true = stricter: all same-block buyers count as insiders
+  total_supply: 1000000000            # pump.fun standard 1B
+
 age:
   max_token_age_minutes: 240          # drop from active feed after 4h
   freshness_half_life_minutes: 90     # decay curve for freshness score

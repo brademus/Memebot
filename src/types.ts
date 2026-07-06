@@ -24,6 +24,7 @@ export interface TokenRecord {
   subs: { freshness: number; liquidity: number; buyPressure: number; holderGrowth: number };
   // holder proxy tracking
   uniqueBuyerSamples: number[];      // rolling buys5m samples for growth calc
+  bundle: { insiderPct: number; slot0Buyers: number; fundedSnipers: number } | null;
   // state machine
   state: 'PENDING' | 'WATCHING' | 'HEATING' | 'TRIGGER' | 'EXTENDED' | 'DYING' | 'DEAD';
   stateChangedAt: number;
@@ -47,6 +48,13 @@ export interface AppConfig {
     min_wallet_age_hours: number;
     max_prior_tokens_24h: number;
     blacklist_auto: boolean;
+  };
+  bundle: {
+    enabled: boolean;
+    max_insider_supply_pct: number;
+    max_funded_snipers: number;
+    count_all_slot0_as_insider: boolean;
+    total_supply: number;
   };
   age: { max_token_age_minutes: number; freshness_half_life_minutes: number };
   weights: { freshness: number; liquidity_health: number; buy_pressure: number; holder_growth: number };

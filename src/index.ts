@@ -7,7 +7,7 @@ import { updateState } from './scoring/states';
 import { alertTrigger } from './alerts/telegram';
 import { startOutcomeLogger } from './outcomes/logger';
 import { startServer, broadcast } from './api/server';
-import { getToken, removeToken, allTokens } from './store';
+import { getToken, removeToken, allTokens, recordScan } from './store';
 import { TokenRecord } from './types';
 
 // gate retry policy: new mints have no liquidity yet — re-check every 30s for up to 30min
@@ -31,10 +31,12 @@ async function main() {
           t.gated = true;
           t.state = 'WATCHING';
           gateAttempts.delete(t.ca);
+          recordScan({ ca: t.ca, symbol: t.symbol, verdict: 'PASS', reason: null, at: Date.now() });
           console.log(`[gate] PASS  $${t.symbol} ${t.ca}`);
         } else if (isTerminalFail(fail) || attempts >= MAX_GATE_ATTEMPTS) {
           t.gated = false;
           t.gateFailReason = fail;
+          recordScan({ ca: t.ca, symbol: t.symbol, verdict: 'KILL', reason: fail, at: Date.now() });
           console.log(`[gate] KILL  $${t.symbol} — ${fail}`);
           await upsertToken(t);
           removeToken(t.ca);           // logged to DB, off the live list

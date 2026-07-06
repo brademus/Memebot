@@ -3,6 +3,7 @@ import { TokenRecord } from '../types';
 import { fetchRugReport } from './rugcheck';
 import { canSell } from './honeypot';
 import { checkDeployer } from './deployer';
+import { checkBundle } from './bundle';
 
 // Ordered hard gates. First failure kills the token — cheap checks first.
 // Returns null on pass, or the fail reason string.
@@ -17,6 +18,10 @@ export async function runGates(t: TokenRecord): Promise<string | null> {
   // deployer fingerprint — one Helius call
   const dep = await checkDeployer(t.creator);
   if (!dep.pass) return dep.reason;
+
+  // bundle / same-block insider detection — two Helius calls
+  const b = await checkBundle(t);
+  if (!b.pass) return b.reason;
 
   // rugcheck — covers authorities, holders, LP, risk score
   const r = await fetchRugReport(t.ca);
