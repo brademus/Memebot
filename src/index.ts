@@ -39,7 +39,7 @@ async function main() {
           recordScan({ ca: t.ca, symbol: t.symbol, verdict: 'KILL', reason: fail, at: Date.now() });
           console.log(`[gate] KILL  $${t.symbol} — ${fail}`);
           await upsertToken(t);
-          removeToken(t.ca);           // logged to DB, off the live list
+          // keep in store briefly so it shows in the seen feed; janitor removes it after a grace window
           return;
         }
         // non-terminal fail (thin liq early on): stay pending, retry next poll
@@ -68,12 +68,14 @@ async function main() {
   // janitor: most pump.fun mints die on the curve with zero liquidity — purge
   // anything still PENDING after 45min so the store stays full of live candidates
   setInterval(() => {
-    const cutoff = Date.now() - 45 * 60_000;
+    const pendingCutoff = Date.now() - 45 * 60_000;    // pending-but-no-liquidity: dead on curve
+    const killedCutoff = Date.now() - 30 * 60_000;      // killed: keep 30min so they show in seen feed
     let purged = 0;
     for (const t of allTokens()) {
-      if (t.gated === null && t.firstSeen < cutoff) { removeToken(t.ca); gateAttempts.delete(t.ca); purged++; }
+      if (t.gated === null && t.firstSeen < pendingCutoff) { removeToken(t.ca); gateAttempts.delete(t.ca); purged++; }
+      else if (t.gated === false && t.firstSeen < killedCutoff) { removeToken(t.ca); purged++; }
     }
-    if (purged) console.log(`[janitor] purged ${purged} dead-on-curve tokens`);
+    if (purged) console.log(`[janitor] purged ${purged} stale tokens`);
   }, 5 * 60_000);
 
   console.log('[memewatch] running');

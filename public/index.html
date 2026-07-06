@@ -62,6 +62,22 @@
   #empty{padding:60px 20px;color:var(--dim);text-align:center}
   #empty b{color:var(--txt);display:block;margin-bottom:8px;font-family:'Barlow Condensed';font-size:18px;letter-spacing:.08em}
 
+  #seenpanel{border-top:1px solid var(--line);margin-top:24px;padding:14px 20px}
+  #seenpanel h2{font-family:'Barlow Condensed';font-weight:600;font-size:15px;letter-spacing:.12em;color:var(--dim);margin-bottom:4px}
+  #seenpanel h2 span{font-weight:500;color:var(--ext)}
+  #seenhint{color:var(--ext);font-size:11px;margin-bottom:10px;max-width:640px}
+  #seenlist{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px}
+  .seen{display:flex;gap:8px;align-items:baseline;padding:6px 8px;border:1px solid var(--line);font-size:12px}
+  .seen .st{font-family:'Barlow Condensed';font-weight:600;letter-spacing:.06em;font-size:11px;padding:1px 6px;border:1px solid;flex-shrink:0}
+  .seen .st.PENDING{color:var(--ext);border-color:var(--line)}
+  .seen .st.KILLED{color:var(--dying);border-color:var(--dying)}
+  .seen .st.WATCHING{color:var(--dim);border-color:var(--line)}
+  .seen .st.HEATING{color:var(--heating);border-color:var(--heating)}
+  .seen .st.TRIGGER{color:var(--trigger);border-color:var(--trigger)}
+  .seen .st.EXTENDED,.seen .st.DYING{color:var(--ext);border-color:var(--line)}
+  .seen .sy{color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+  .seen .ag{color:var(--ext);flex-shrink:0}
+
   #scanpanel{border-top:1px solid var(--line);margin-top:24px;padding:14px 20px 40px}
   #scanpanel h2{font-family:'Barlow Condensed';font-weight:600;font-size:15px;letter-spacing:.12em;color:var(--dim);margin-bottom:10px}
   #scanpanel h2 span{font-weight:500;color:var(--ext)}
@@ -92,6 +108,12 @@
   <tbody id="rows"></tbody>
 </table>
 <div id="empty"><b>SCANNING</b>New launches appear here once they pass the rug gates. Killed tokens show below in the scan feed.</div>
+
+<section id="seenpanel">
+  <h2>ALL SCANNED <span id="seencount"></span></h2>
+  <div id="seenhint">Every token detected, newest first. PENDING = seen, waiting for liquidity before gates run (most die here). Live view holds the recent ~150; full history is in the database.</div>
+  <div id="seenlist"></div>
+</section>
 
 <section id="scanpanel">
   <h2>SCAN FEED <span id="scancount"></span></h2>
@@ -128,6 +150,7 @@ const fmt = n => n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(
 function render(data){
   const tokens = data.tokens || [];
   renderScans(data.scans || []);
+  renderSeen(data.seenFeed || []);
   $('empty').style.display = tokens.length ? 'none' : 'block';
   const tb = $('rows'); tb.innerHTML = '';
   const newTriggers = [];
@@ -176,6 +199,17 @@ setInterval(async () => {
     $('sWatch').textContent = s.watching; $('sTrig').textContent = s.triggers;
   } catch {}
 }, 5000);
+
+function renderSeen(feed){
+  $('seencount').textContent = feed.length ? `— showing ${feed.length}` : '';
+  const el = $('seenlist');
+  el.innerHTML = feed.map(s => {
+    const detail = s.status === 'KILLED' ? esc(s.reason || 'killed')
+      : s.status === 'PENDING' ? 'no liquidity yet'
+      : (s.score != null ? 'score ' + s.score : '');
+    return `<div class="seen" title="${detail}"><span class="st ${s.status}">${s.status}</span><span class="sy">$${esc(s.symbol)}</span><span class="ag">${s.ageMin}m</span></div>`;
+  }).join('') || '<div class="seen"><span class="sy">Waiting for first mints…</span></div>';
+}
 
 function renderScans(scans){
   $('scancount').textContent = scans.length ? `— last ${scans.length}` : '';

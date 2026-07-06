@@ -42,7 +42,31 @@ function broadcast() {
     for (const c of clients)
         c.write(msg);
 }
-const payload = () => ({ tokens: serialize(), scans: (0, store_1.recentScans)().slice(0, 60) });
+const payload = () => ({ tokens: serialize(), scans: (0, store_1.recentScans)().slice(0, 60), seenFeed: seenFeed() });
+// Every token in the store, newest first, with whatever status it currently has.
+// This is the raw "everything that came through" view — including tokens still
+// pending gates (no liquidity yet) that never appear in the watchlist or scan feed.
+function seenFeed() {
+    return (0, store_1.allTokens)()
+        .sort((a, b) => b.firstSeen - a.firstSeen)
+        .slice(0, 150)
+        .map(t => {
+        let status;
+        if (t.gated === null)
+            status = 'PENDING'; // seen, waiting for liquidity to run gates
+        else if (t.gated === false)
+            status = 'KILLED';
+        else
+            status = t.state; // WATCHING/HEATING/TRIGGER/etc.
+        return {
+            ca: t.ca, symbol: t.symbol, source: t.source, status,
+            reason: t.gateFailReason,
+            ageMin: Math.round((Date.now() - t.firstSeen) / 60000),
+            liq: Math.round(t.liquidityUsd),
+            score: t.gated === true ? t.score : null,
+        };
+    });
+}
 const STATE_ORDER = { TRIGGER: 0, HEATING: 1, WATCHING: 2, EXTENDED: 3, DYING: 4 };
 function serialize() {
     return (0, store_1.activeTokens)()
