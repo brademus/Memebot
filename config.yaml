@@ -1,0 +1,52 @@
+# ============================================================
+# MEMEWATCH CONFIG — every threshold lives here, not in code.
+# Tune freely; worker hot-reloads this file every 60s.
+# ============================================================
+
+gates:
+  mint_authority_revoked: true        # kill if dev can still mint
+  freeze_authority_inactive: true     # kill if dev can freeze wallets
+  top3_holder_pct_max: 35             # excl. LP; kill above this
+  hard_reject_top_holder_pct: 50      # single holder above this = untradeable
+  honeypot_sim: true                  # Jupiter sell-quote must succeed
+  lp_locked_or_burned: true           # via RugCheck markets data
+  liq_to_mcap_ratio_min: 0.08
+  min_liquidity_usd: 12000
+  rugcheck_score_max: 5000            # RugCheck risk score ceiling (lower = safer)
+
+deployer:
+  enabled: true                       # requires HELIUS_API_KEY; skipped if absent
+  min_wallet_age_hours: 1             # fresh-funded deployer = suspicious
+  max_prior_tokens_24h: 3             # serial launcher = spray-and-rug pattern
+  blacklist_auto: true                # auto-blacklist deployers of rugged tokens
+
+age:
+  max_token_age_minutes: 240          # drop from active feed after 4h
+  freshness_half_life_minutes: 90     # decay curve for freshness score
+
+weights:                              # must sum to 100
+  freshness: 25
+  liquidity_health: 25
+  buy_pressure: 30
+  holder_growth: 20
+  # smart_money: 0                    # Phase 3 — re-weight to 30 and rebalance
+
+states:
+  heating_score_min: 45
+  trigger_score_min: 65
+  trigger_buy_ratio_min: 1.6          # buys:sells over last 5m window
+  extended_pct: 40                    # price ran +40% since first scored = too late
+  dying_score_drop: 15                # score falls this much from peak = demote
+  dying_buy_ratio_max: 0.8            # sells dominating = demote
+
+alerts:
+  telegram_on_trigger: true
+  realert_score_jump: 15              # re-alert same token only on +15 score move
+
+polling:
+  dexscreener_interval_ms: 10000      # enrichment poll for tracked tokens
+  outcome_snapshot_minutes: [60, 240, 1440]   # 1h / 4h / 24h outcome logging
+
+limits:
+  max_tracked_tokens: 400             # in-memory watchlist cap
+  dexscreener_batch_size: 30          # max token addresses per API call

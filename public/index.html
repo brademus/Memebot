@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MEMEWATCH</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Barlow+Condensed:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0B0F14; --panel:#121922; --line:#1E2937;
+    --txt:#C7D3DE; --dim:#64768A;
+    --trigger:#35E0A1; --heating:#E8A33D; --dying:#E85C6B; --ext:#4A5868;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--ink);color:var(--txt);font:14px/1.4 'IBM Plex Mono',monospace}
+  a{color:var(--txt)}
+  a:focus-visible,button:focus-visible{outline:2px solid var(--heating);outline-offset:2px}
+
+  header{display:flex;align-items:baseline;gap:24px;padding:14px 20px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--ink);z-index:2}
+  .wordmark{font-family:'Barlow Condensed';font-size:26px;font-weight:600;letter-spacing:.12em;color:var(--txt)}
+  .wordmark span{color:var(--trigger)}
+  .stat{color:var(--dim);font-size:12px}
+  .stat b{color:var(--txt);font-weight:500}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--dying);margin-right:6px;vertical-align:1px}
+  .dot.live{background:var(--trigger)}
+  #mute{margin-left:auto;background:none;border:1px solid var(--line);color:var(--dim);padding:4px 12px;font:12px 'IBM Plex Mono';cursor:pointer}
+  #mute.on{color:var(--trigger);border-color:var(--trigger)}
+
+  table{width:100%;border-collapse:collapse}
+  th{font-family:'Barlow Condensed';font-weight:500;font-size:13px;letter-spacing:.1em;color:var(--dim);text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);text-transform:uppercase}
+  td{padding:9px 12px;border-bottom:1px solid var(--line);white-space:nowrap;font-size:13px}
+  tr.row{border-left:3px solid transparent}
+  tr.TRIGGER{border-left-color:var(--trigger);background:rgba(53,224,161,.05)}
+  tr.HEATING{border-left-color:var(--heating)}
+  tr.DYING{border-left-color:var(--dying);opacity:.55}
+  tr.EXTENDED{opacity:.4}
+  tr.flash{animation:flash 1.2s ease-out 2}
+  @keyframes flash{0%{background:rgba(53,224,161,.35)}100%{background:rgba(53,224,161,.05)}}
+  @media (prefers-reduced-motion: reduce){tr.flash{animation:none}}
+
+  .chip{font-family:'Barlow Condensed';font-size:12px;font-weight:600;letter-spacing:.08em;padding:2px 8px;border:1px solid}
+  .chip.TRIGGER{color:var(--trigger);border-color:var(--trigger)}
+  .chip.HEATING{color:var(--heating);border-color:var(--heating)}
+  .chip.WATCHING{color:var(--dim);border-color:var(--line)}
+  .chip.DYING{color:var(--dying);border-color:var(--dying)}
+  .chip.EXTENDED{color:var(--ext);border-color:var(--ext)}
+
+  .sym{font-weight:600}
+  .name{color:var(--dim);font-size:11px}
+  /* the fuse: 4h window burning down under each ticker */
+  .fuse{height:3px;background:var(--line);margin-top:4px;width:110px}
+  .fuse i{display:block;height:100%;background:var(--heating)}
+  tr.TRIGGER .fuse i{background:var(--trigger)}
+
+  .score{font-weight:600;font-size:15px}
+  .pos{color:var(--trigger)} .neg{color:var(--dying)} .mut{color:var(--dim)}
+  .links a{color:var(--dim);text-decoration:none;margin-right:10px;border-bottom:1px dotted var(--dim)}
+  .links a:hover{color:var(--txt)}
+  .moved-hot{color:var(--dying);font-weight:600}
+
+  #empty{padding:60px 20px;color:var(--dim);text-align:center}
+  #empty b{color:var(--txt);display:block;margin-bottom:8px;font-family:'Barlow Condensed';font-size:18px;letter-spacing:.08em}
+</style>
+</head>
+<body>
+<header>
+  <div class="wordmark">MEME<span>WATCH</span></div>
+  <div class="stat"><span class="dot" id="conn"></span><span id="connTxt">connecting</span></div>
+  <div class="stat">seen <b id="sSeen">0</b></div>
+  <div class="stat">killed <b id="sKilled">0</b></div>
+  <div class="stat">watching <b id="sWatch">0</b></div>
+  <div class="stat">triggers <b id="sTrig">0</b></div>
+  <button id="mute" aria-pressed="false">SOUND OFF</button>
+</header>
+
+<table>
+  <thead><tr>
+    <th>State</th><th>Token</th><th>Age</th><th>Score</th><th>Liq</th><th>Liq:MC</th>
+    <th>B:S 5m</th><th>Δ5m</th><th>Moved</th><th>Open</th>
+  </tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+<div id="empty"><b>SCANNING</b>New launches appear here once they pass the rug gates. Killed tokens never hit your screen.</div>
+
+<script>
+const MAX_AGE = 240; // keep in sync with config age.max_token_age_minutes
+let sound = false, prevStates = {};
+const $ = id => document.getElementById(id);
+
+$('mute').onclick = () => {
+  sound = !sound;
+  $('mute').textContent = sound ? 'SOUND ON' : 'SOUND OFF';
+  $('mute').className = sound ? 'on' : '';
+  $('mute').setAttribute('aria-pressed', sound);
+  if (sound) ding(); // unlock audio context on user gesture
+};
+
+let ctx;
+function ding(){
+  if (!sound) return;
+  ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+  const o = ctx.createOscillator(), g = ctx.createGain();
+  o.type = 'sine'; o.frequency.value = 880;
+  g.gain.setValueAtTime(.25, ctx.currentTime);
+  g.gain.exponentialRampToValueAtTime(.001, ctx.currentTime + .5);
+  o.connect(g); g.connect(ctx.destination);
+  o.start(); o.frequency.setValueAtTime(1320, ctx.currentTime + .12); o.stop(ctx.currentTime + .5);
+}
+
+const fmt = n => n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(0)+'K' : n.toFixed(0);
+
+function render(tokens){
+  $('empty').style.display = tokens.length ? 'none' : 'block';
+  const tb = $('rows'); tb.innerHTML = '';
+  const newTriggers = [];
+  for (const t of tokens){
+    if (t.state === 'TRIGGER' && prevStates[t.ca] !== 'TRIGGER') newTriggers.push(t.ca);
+    const tr = document.createElement('tr');
+    tr.className = 'row ' + t.state + (newTriggers.includes(t.ca) ? ' flash' : '');
+    const fusePct = Math.max(0, 100 - (t.ageMin / MAX_AGE) * 100);
+    const movedCls = t.movedPct >= 40 ? 'moved-hot' : t.movedPct > 0 ? 'pos' : 'mut';
+    tr.innerHTML = `
+      <td><span class="chip ${t.state}">${t.state}</span></td>
+      <td><span class="sym">$${esc(t.symbol)}</span> <span class="name">${esc(t.name).slice(0,20)}</span>
+          <div class="fuse" title="${MAX_AGE - t.ageMin}m left in window"><i style="width:${fusePct}%"></i></div></td>
+      <td>${t.ageMin}m</td>
+      <td><span class="score" title="fresh ${t.subs.freshness} | liq ${t.subs.liquidity} | buy ${t.subs.buyPressure} | hold ${t.subs.holderGrowth}">${t.score}</span></td>
+      <td>$${fmt(t.liq)}</td>
+      <td class="${t.ratio >= .12 ? 'pos':'mut'}">${(t.ratio*100).toFixed(0)}%</td>
+      <td class="${t.buys > t.sells ? 'pos' : 'neg'}">${t.buys}:${t.sells}</td>
+      <td class="${t.chg5m >= 0 ? 'pos':'neg'}">${t.chg5m > 0 ? '+':''}${t.chg5m}%</td>
+      <td class="${movedCls}">${t.movedPct > 0 ? '+':''}${t.movedPct}%</td>
+      <td class="links">
+        <a href="https://dexscreener.com/solana/${t.pair || t.ca}" target="_blank" rel="noopener">chart</a>
+        <a href="https://jup.ag/swap/SOL-${t.ca}" target="_blank" rel="noopener">swap</a>
+      </td>`;
+    tb.appendChild(tr);
+    prevStates[t.ca] = t.state;
+  }
+  if (newTriggers.length) ding();
+}
+
+function connect(){
+  const es = new EventSource('/api/stream');
+  es.onopen = () => { $('conn').className = 'dot live'; $('connTxt').textContent = 'live'; };
+  es.onmessage = e => render(JSON.parse(e.data));
+  es.onerror = () => {
+    $('conn').className = 'dot'; $('connTxt').textContent = 'reconnecting';
+    es.close(); setTimeout(connect, 3000);
+  };
+}
+connect();
+setInterval(async () => {
+  try {
+    const s = await (await fetch('/api/stats')).json();
+    $('sSeen').textContent = s.seen; $('sKilled').textContent = s.gatedOut;
+    $('sWatch').textContent = s.watching; $('sTrig').textContent = s.triggers;
+  } catch {}
+}, 5000);
+
+const esc = s => (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+</script>
+</body>
+</html>
