@@ -26,6 +26,9 @@
   .dot.live{background:var(--trigger)}
   #report{margin-left:auto;background:none;border:1px solid var(--line);color:var(--dim);padding:4px 12px;font:12px 'IBM Plex Mono';cursor:pointer}
   #report:hover{color:var(--txt);border-color:var(--dim)}
+  #aireview{background:none;border:1px solid var(--line);color:var(--dim);padding:4px 12px;font:12px 'IBM Plex Mono';cursor:pointer}
+  #aireview:hover{color:var(--heating);border-color:var(--heating)}
+  #reviewout{display:none;border-top:1px solid var(--line);padding:14px 20px;white-space:pre-wrap;font-size:12px;color:var(--txt);max-width:900px}
   #mute{background:none;border:1px solid var(--line);color:var(--dim);padding:4px 12px;font:12px 'IBM Plex Mono';cursor:pointer}
   #mute.on{color:var(--trigger);border-color:var(--trigger)}
 
@@ -136,6 +139,7 @@
   <div class="stat">watching <b id="sWatch">0</b></div>
   <div class="stat">triggers <b id="sTrig">0</b></div>
   <button id="report">WEEKLY REPORT</button>
+  <button id="aireview">AI REVIEW</button>
   <button id="mute" aria-pressed="false">SOUND OFF</button>
 </header>
 
@@ -165,6 +169,8 @@
   <button id="loadhist">LOAD FROM DATABASE</button>
   <div id="histlist"></div>
 </section>
+
+<div id="reviewout"></div>
 
 <section id="walletpanel">
   <h2>TRACKED WALLETS <span id="walletcount"></span></h2>
@@ -345,6 +351,17 @@ $('report').onclick = async () => {
     $('report').textContent = 'FETCH FAILED';
     setTimeout(() => $('report').textContent = 'WEEKLY REPORT', 2000);
   }
+};
+
+$('aireview').onclick = async () => {
+  $('aireview').textContent = 'ANALYZING…';
+  try {
+    const d = await (await fetch('/api/ai-review')).json();
+    const out = $('reviewout');
+    out.style.display = 'block';
+    out.textContent = d.review || d.note || d.error || 'no output';
+  } catch { $('reviewout').style.display = 'block'; $('reviewout').textContent = 'review failed'; }
+  $('aireview').textContent = 'AI REVIEW';
 };
 
 let histOffset = 0;

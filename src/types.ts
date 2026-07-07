@@ -65,7 +65,7 @@ export interface AppConfig {
   };
   age: { max_token_age_minutes: number; freshness_half_life_minutes: number };
   weights: { freshness: number; liquidity_health: number; buy_pressure: number; holder_growth: number; smart_money: number };
-  ai: { enabled: boolean; model: string };
+  ai: { enabled: boolean; note_model: string; review_model: string };
   wallets: {
     enabled: boolean;
     discovery_min_multiple: number;

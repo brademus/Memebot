@@ -26,6 +26,7 @@ export const env = {
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || '',
   TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID || '',
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
+  GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
   ADMIN_KEY: process.env.ADMIN_KEY || '',
   PORT: parseInt(process.env.PORT || '3000', 10),
 };

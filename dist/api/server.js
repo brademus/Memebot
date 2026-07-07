@@ -11,6 +11,7 @@ const config_1 = require("../config");
 const store_1 = require("../store");
 const db_1 = require("../db");
 const report_1 = require("./report");
+const reviewer_1 = require("../ai/reviewer");
 const db_2 = require("../db");
 const autotune_1 = require("../tuning/autotune");
 const clients = new Set();
@@ -101,6 +102,16 @@ function startServer() {
          ORDER BY active DESC, winners_hit DESC LIMIT 100`);
             const c = await db_1.pool.query(`SELECT COUNT(*)::int n FROM smart_wallets WHERE active`);
             res.json({ active: c.rows[0].n, rows: r.rows });
+        }
+        catch (e) {
+            res.status(500).json({ error: e.message });
+        }
+    });
+    // on-demand AI review: Pro model analyzes the bot's own performance, suggests config changes
+    app.get('/api/ai-review', async (_req, res) => {
+        try {
+            const r = await (0, reviewer_1.runAiReview)();
+            res.json(r.review ? { review: r.review } : { note: 'GEMINI_API_KEY not set — review unavailable' });
         }
         catch (e) {
             res.status(500).json({ error: e.message });

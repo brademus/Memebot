@@ -4,6 +4,7 @@ import { env } from '../config';
 import { activeTokens, allTokens, recentScans } from '../store';
 import { pool } from '../db';
 import { buildReport } from './report';
+import { runAiReview } from '../ai/reviewer';
 import { fetchHistory, addSmartWallet, removeSmartWallet, listSmartWallets } from '../db';
 import { latestSuggestion } from '../tuning/autotune';
 import { TokenRecord } from '../types';
@@ -84,6 +85,14 @@ export function startServer() {
          ORDER BY active DESC, winners_hit DESC LIMIT 100`);
       const c = await pool.query(`SELECT COUNT(*)::int n FROM smart_wallets WHERE active`);
       res.json({ active: c.rows[0].n, rows: r.rows });
+    } catch (e) { res.status(500).json({ error: (e as Error).message }); }
+  });
+
+  // on-demand AI review: Pro model analyzes the bot's own performance, suggests config changes
+  app.get('/api/ai-review', async (_req, res) => {
+    try {
+      const r = await runAiReview();
+      res.json(r.review ? { review: r.review } : { note: 'GEMINI_API_KEY not set — review unavailable' });
     } catch (e) { res.status(500).json({ error: (e as Error).message }); }
   });
 

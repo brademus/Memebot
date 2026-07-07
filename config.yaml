@@ -47,9 +47,11 @@ states:
   dying_score_drop: 15                # score falls this much from peak = demote
   dying_buy_ratio_max: 0.8            # sells dominating = demote
 
-ai:                                   # analyst note on TRIGGER (needs ANTHROPIC_API_KEY; skipped if absent)
+ai:                                   # needs GEMINI_API_KEY (aistudio.google.com/apikey); skipped if absent
   enabled: true
-  model: claude-haiku-4-5
+  note_model: gemini-3-flash          # per-token TRIGGER notes: small, frequent -> Flash tier
+  review_model: gemini-3.1-pro        # weekly bot-performance review: big context -> Pro tier
+                                      # if a model 404s, check current names at ai.google.dev/gemini-api/docs/models
 
 alerts:
   telegram_on_trigger: true
