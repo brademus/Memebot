@@ -53,20 +53,21 @@ export function currentBestBuys() {
     else {
       const r = rankToken(t);
       slot.peakScore = Math.max(slot.peakScore, t.score);
-      // hard fails: drop immediately regardless of hold time
+      // ALL quality fails drop IMMEDIATELY. The min-hold protects against slot
+      // churn from supersession, never against showing a degraded coin — a D-grade
+      // card in Best Buys is a lie regardless of how recently it was admitted.
       if (t.bundle && t.bundle.fundedSnipers > 0) dropReason = 'insider detected';
       else if (t.state === 'DYING') dropReason = 'momentum died';
+      else if (t.score < bb.exit_score) dropReason = `score fell to ${t.score}`;
+      else if (r.grade === 'C' || r.grade === 'D') dropReason = `degraded to ${r.grade}`;
+      else if (r.timing === 'LATE' || r.timing === 'STALE') dropReason = 'entry window closed';
+      else if (t.devBuyPct > bb.max_dev_pct) dropReason = 'dev bag grew';
       else if (t.dex === 'pumpfun' && t.earlyBuyers.length >= 5
                && (1 - t.earlyExited.length / t.earlyBuyers.length) < bb.min_retention)
         dropReason = 'early buyers dumping';
       else if (t.dex === 'pumpfun' && t.peakCurveSol > 34 && t.curveSol < t.peakCurveSol * 0.85)
         dropReason = 'curve outflow';
-      else if (heldSec >= bb.min_hold_seconds) {
-        // soft fails: only after minimum hold
-        if (t.score < bb.exit_score) dropReason = `score fell to ${t.score}`;
-        else if (r.timing === 'LATE' || r.timing === 'STALE') dropReason = 'entry window closed';
-        else if (t.devBuyPct > bb.max_dev_pct) dropReason = 'dev bag grew';
-      }
+      void heldSec;   // min_hold now only shields incumbents from supersession, below
     }
     if (dropReason) {
       droppedAt.set(slot.ca, now);
