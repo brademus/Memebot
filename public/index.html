@@ -470,6 +470,33 @@ async function loadWins(){
 loadWins();
 setInterval(() => { if (document.querySelector('.tab.active')?.dataset.tab === 'wins') loadWins(); }, 30000);
 
+
+// ---- BEST BUYS client (rebuilt — was lost in tab restructure) ----
+async function loadBestBuys(){
+  try {
+    const d = await (await fetch('/api/bestbuys')).json();
+    const el = $('bblist');
+    $('bbnote').textContent = d.buys && d.buys.length
+      ? `— ${d.buys.length} earned slot${d.buys.length!==1?'s':''} of ${d.watching} watched · holds until it stops qualifying`
+      : `— 0 of ${d.watching||0} watched qualify`;
+    if (!d.buys || !d.buys.length) {
+      el.innerHTML = '<div class="bb" style="border-color:var(--line)"><span class="bblabel">EMPTY — no coin currently qualifies. A slot requires: 4+ min old (past the snipe window), early buyers still holding, SOL still flowing INTO the curve, score 68+, real socials, clean dev, no insider cluster. Empty most of the time is the filter working — these are graduation candidates, not a feed.</span></div>';
+      return;
+    }
+    el.innerHTML = d.buys.map(b => `
+      <div class="bb">
+        <div class="top"><span class="bbg">${b.grade}</span><span class="bbs">$${esc(b.symbol)}</span><span class="bbsc">score ${b.score}${b.peakScore>b.score?' (peak '+b.peakScore+')':''} · held ${b.heldMin}m · ${b.confidence} conf</span></div>
+        <div class="bblabel">${esc(b.label||'')}</div>
+        ${b.cautions && b.cautions.length ? `<div class="bbcaut">⚠ ${b.cautions.map(esc).join(' · ')}</div>` : ''}
+        <div class="bblinks"><a href="https://dexscreener.com/solana/${b.pair||b.ca}" target="_blank" rel="noopener">chart</a><a href="https://jup.ag/swap/SOL-${b.ca}" target="_blank" rel="noopener">swap</a><a href="https://solscan.io/token/${b.ca}" target="_blank" rel="noopener">contract</a></div>
+      </div>`).join('');
+  } catch (e) {
+    $('bblist').innerHTML = '<div class="bb" style="border-color:var(--dying)"><span class="bblabel">best-buys fetch failed</span></div>';
+  }
+}
+loadBestBuys();
+setInterval(loadBestBuys, 8000);
+
 showTab('live');
 
 </script>
