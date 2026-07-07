@@ -87,10 +87,21 @@ export interface AppConfig {
   states: {
     heating_score_min: number;
     trigger_score_min: number;
+    trigger_min_trades: number;
+    trigger_min_unique_buyers: number;
     trigger_buy_ratio_min: number;
     extended_pct: number;
     dying_score_drop: number;
     dying_buy_ratio_max: number;
+  };
+  bestbuys: {
+    max_shown: number;
+    min_score: number;
+    require_social: boolean;
+    min_unique_buyers: number;
+    min_trades: number;
+    min_curve_sol: number;
+    max_dev_pct: number;
   };
   alerts: { telegram_on_trigger: boolean; realert_score_jump: number };
   polling: { dexscreener_interval_ms: number; outcome_snapshot_minutes: number[] };

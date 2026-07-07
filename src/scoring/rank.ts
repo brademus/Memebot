@@ -65,14 +65,15 @@ export function rankToken(t: TokenRecord): Rank {
   // ---- grade: score gated by timing and confidence ----
   // a high score that's LATE or unconfirmed is NOT an A. timing and evidence cap the grade.
   let base: number;
-  if (t.score >= 75) base = 4;        // A+
-  else if (t.score >= 65) base = 3;   // A
-  else if (t.score >= 55) base = 2;   // B
+  if (t.score >= 80) base = 4;        // A+
+  else if (t.score >= 70) base = 3;   // A
+  else if (t.score >= 58) base = 2;   // B
   else if (t.score >= 45) base = 1;   // C
   else base = 0;                      // D
 
   if (timing === 'LATE' || timing === 'STALE') base = Math.min(base, 1);   // cap at C
-  if (confidence === 'low') base = Math.min(base, 2);                       // cap at B
+  if (confidence === 'low') base = Math.min(base, 2);                       // low evidence caps at B
+  if (confidence === 'medium') base = Math.min(base, 3);                    // A+ requires HIGH confidence (insider-checked + smart money)
   if (smart >= 2 && timing === 'EARLY' && confidence === 'high') base = Math.min(4, base + 1); // smart-money boost
 
   const grade = ['D', 'C', 'B', 'A', 'A+'][base];

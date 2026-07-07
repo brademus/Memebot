@@ -115,6 +115,11 @@
   .mult-loss{color:var(--dim)}
   #loadmore{margin:20px;background:none;border:1px solid var(--line);color:var(--txt);padding:8px 18px;font:13px 'IBM Plex Mono';cursor:pointer}
   #loadmore:hover{border-color:var(--trigger)}
+  #sysstatus{padding:12px 20px;border-bottom:1px solid var(--line);font-size:12px;display:flex;gap:18px;flex-wrap:wrap}
+  .ss{display:flex;align-items:center;gap:6px;color:var(--dim)}
+  .ss .d{width:8px;height:8px;border-radius:50%;display:inline-block}
+  .ss .d.on{background:var(--trigger)} .ss .d.off{background:var(--dying)}
+  .ss b{color:var(--txt);font-weight:500}
   #analyticspanel{border-top:1px solid var(--line);margin-top:24px;padding:14px 20px}
   #analyticspanel h2{font-family:'Barlow Condensed';font-weight:600;font-size:15px;letter-spacing:.12em;color:var(--dim);margin-bottom:10px}
   #analyticspanel h2 span{font-weight:500;color:var(--ext);font-size:13px}
@@ -196,6 +201,7 @@
 </div>
 
 <div id="tab-wallets" class="tabpanel">
+  <div id="sysstatus"></div>
   <section id="analyticspanel">
     <h2>ANALYTICS <span id="todaystats"></span></h2>
     <div class="anagrid">

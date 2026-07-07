@@ -1,6 +1,6 @@
 import express from 'express';
 import path from 'path';
-import { env } from '../config';
+import { env, cfg } from '../config';
 import { activeTokens, allTokens, recentScans } from '../store';
 import { pool } from '../db';
 import { buildReport } from './report';
@@ -122,11 +122,22 @@ export function startServer() {
   });
 
   app.get('/api/bestbuys', (_req, res) => {
-    const buys = activeTokens()
+    const bb = cfg().bestbuys;
+    const all = activeTokens();
+    const candidates = all
       .map(t => ({ t, r: rankToken(t) }))
-      .filter(x => ['A+', 'A'].includes(x.r.grade) && ['EARLY', 'FAIR'].includes(x.r.timing))
+      .filter(({ t, r }) =>
+        ['A+', 'A'].includes(r.grade)
+        && r.timing === 'EARLY'                                       // FAIR is not a best buy
+        && t.score >= bb.min_score
+        && (t.totalBuys + t.totalSells) >= bb.min_trades              // evidence floor
+        && t.uniqueBuyers.length >= bb.min_unique_buyers              // organic floor
+        && t.curveSol >= bb.min_curve_sol                             // real SOL bonded
+        && t.devBuyPct <= bb.max_dev_pct                              // no big dev bags
+        && (!bb.require_social || t.socials.tg || t.socials.x)        // 17x signal
+        && (!t.bundle || t.bundle.fundedSnipers === 0))               // insider-clean if known
       .sort((a, b) => b.t.score - a.t.score)
-      .slice(0, 8)
+      .slice(0, bb.max_shown)
       .map(({ t, r }) => ({
         ca: t.ca, symbol: t.symbol, grade: r.grade, label: r.label, timing: r.timing,
         confidence: r.confidence, score: t.score, cautions: r.cautions,
@@ -134,12 +145,40 @@ export function startServer() {
         smart: new Set(t.smartHits.map(h => h.wallet)).size,
         pair: t.pairAddress,
       }));
-    res.json({ buys, note: buys.length ? null : 'no A-grade early setups right now — this is normal most of the time' });
+    res.json({
+      buys: candidates,
+      watching: all.length,
+      note: candidates.length ? null
+        : `0 of ${all.length} watched tokens clear the best-buy bar right now. Empty is the normal state — the research base rate for real winners is ~0.2%.`,
+    });
   });
 
   app.get('/api/analytics', async (_req, res) => {
     try { res.json(await buildAnalytics()); }
     catch (e) { res.status(500).json({ error: (e as Error).message }); }
+  });
+
+  // system status: which subsystems are live and why others aren't
+  app.get('/api/status', async (_req, res) => {
+    const { env } = require('../config');
+    let walletCount = 0, lastDiscovery = null;
+    if (pool) {
+      try {
+        const w = await pool.query(`SELECT COUNT(*)::int c FROM smart_wallets WHERE active`);
+        walletCount = w.rows[0].c;
+        const d = await pool.query(`SELECT MAX(last_validated) m FROM smart_wallets`);
+        lastDiscovery = d.rows[0].m;
+      } catch {}
+    }
+    res.json({
+      db: !!pool,
+      helius: !!env.HELIUS_API_KEY,
+      gemini: !!env.GEMINI_API_KEY,
+      telegram: !!(env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID),
+      walletTracking: !!pool && !!env.HELIUS_API_KEY,
+      activeWallets: walletCount,
+      lastDiscovery,
+    });
   });
 
   app.get('/api/stats', (_req, res) => {

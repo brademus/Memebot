@@ -20,7 +20,9 @@ export function updateState(t: TokenRecord): TokenRecord['state'] | null {
   } else if ((t.peakScore - t.score >= s.dying_score_drop && t.peakScore >= s.heating_score_min) ||
              (buyRatio <= s.dying_buy_ratio_max && ageMin > 10)) {
     next = 'DYING';                                    // rollover — rotate attention away
-  } else if (t.score >= s.trigger_score_min && buyRatio >= s.trigger_buy_ratio_min) {
+  } else if (t.score >= s.trigger_score_min && buyRatio >= s.trigger_buy_ratio_min
+             && (t.totalBuys + t.totalSells) >= s.trigger_min_trades
+             && t.uniqueBuyers.length >= s.trigger_min_unique_buyers) {
     next = 'TRIGGER';                                  // decision time
   } else if (t.score >= s.heating_score_min) {
     next = 'HEATING';                                  // open the chart

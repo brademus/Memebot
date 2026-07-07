@@ -44,7 +44,9 @@ weights:                              # research-ranked (must sum to 100)
 
 states:
   heating_score_min: 45
-  trigger_score_min: 65
+  trigger_score_min: 70
+  trigger_min_trades: 20              # evidence floor: no TRIGGER on thin data
+  trigger_min_unique_buyers: 12       # organic floor: real wallets, not churn
   trigger_buy_ratio_min: 1.6          # buys:sells over last 5m window
   extended_pct: 40                    # price ran +40% since first scored = too late
   dying_score_drop: 15                # score falls this much from peak = demote
@@ -55,6 +57,15 @@ ai:                                   # needs GEMINI_API_KEY (aistudio.google.co
   note_model: gemini-3-flash          # per-token TRIGGER notes: small, frequent -> Flash tier
   review_model: gemini-3.1-pro        # weekly bot-performance review: big context -> Pro tier
                                       # if a model 404s, check current names at ai.google.dev/gemini-api/docs/models
+
+bestbuys:                             # BEST BUYS panel — deliberately brutal filter.
+  max_shown: 3                        # top 3 only. The research base rate is ~0.2%, not 20%.
+  min_score: 72
+  require_social: true                # no TG/X = not a best buy (17x differential)
+  min_unique_buyers: 15
+  min_trades: 25
+  min_curve_sol: 40                   # ≥10 SOL genuinely bonded beyond the 30 start
+  max_dev_pct: 7
 
 alerts:
   telegram_on_trigger: true
