@@ -41,7 +41,7 @@ export async function runGates(t: TokenRecord): Promise<string | null> {
   // revoked and there's no pullable LP, so RugCheck having no data yet is EXPECTED,
   // not a red flag. We still check holder concentration if data exists, but tolerate
   // its absence on-curve. Post-graduation we enforce the full rug suite.
-  const r = await fetchRugReport(t.ca);
+  const r = await fetchRugReport(t.ca, onCurve);
   if (!r.ok) {
     if (!onCurve) return 'rugcheck_unavailable';   // graduated token with no data = fail-closed
     // on-curve with no RugCheck data yet: allow through on curve guarantees

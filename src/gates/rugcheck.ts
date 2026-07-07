@@ -12,7 +12,7 @@ export interface RugReport {
   ok: boolean;                // fetch succeeded
 }
 
-export async function fetchRugReport(ca: string): Promise<RugReport> {
+export async function fetchRugReport(ca: string, onCurve = false): Promise<RugReport> {
   const fail: RugReport = {
     mintAuthorityRevoked: false, freezeAuthorityInactive: false,
     top3HolderPct: 100, topHolderPct: 100, lpLockedOrBurned: false, riskScore: 99999,
@@ -35,11 +35,13 @@ export async function fetchRugReport(ca: string): Promise<RugReport> {
       return !(r.markets || []).some((m: any) =>
         [m.liquidityA, m.liquidityB, m.lp?.lpMint].filter(Boolean).map((x: string) => x.toLowerCase()).includes(owner));
     });
-    const preGraduation = !(r.markets || []).length;
+    // On the bonding curve, the curve PDA is normally the largest "holder" — that's
+    // protocol-held unsold supply, not a dumper. The old markets-empty heuristic never
+    // fired because RugCheck lists the curve itself as a market; the gate now passes
+    // onCurve explicitly. Report data (2026-07-07): every top false-kill was
+    // top_holder_50-66pct — the curve's mid-fill fingerprint — incl. a missed 11.8x.
     let pcts = nonLp.map((h: any) => h.pct || 0).sort((a: number, b: number) => b - a);
-    // pre-graduation: the bonding curve account is normally the largest "holder" —
-    // it's protocol-held supply, not a dumper. Exclude the single largest entry.
-    if (preGraduation && pcts.length) pcts = pcts.slice(1);
+    if (onCurve && pcts.length) pcts = pcts.slice(1);
     const topHolderPct = pcts[0] || 0;
     const top3HolderPct = pcts.slice(0, 3).reduce((s: number, x: number) => s + x, 0);
 
