@@ -24,7 +24,9 @@
   .stat b{color:var(--txt);font-weight:500}
   .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--dying);margin-right:6px;vertical-align:1px}
   .dot.live{background:var(--trigger)}
-  #mute{margin-left:auto;background:none;border:1px solid var(--line);color:var(--dim);padding:4px 12px;font:12px 'IBM Plex Mono';cursor:pointer}
+  #report{margin-left:auto;background:none;border:1px solid var(--line);color:var(--dim);padding:4px 12px;font:12px 'IBM Plex Mono';cursor:pointer}
+  #report:hover{color:var(--txt);border-color:var(--dim)}
+  #mute{background:none;border:1px solid var(--line);color:var(--dim);padding:4px 12px;font:12px 'IBM Plex Mono';cursor:pointer}
   #mute.on{color:var(--trigger);border-color:var(--trigger)}
 
   table{width:100%;border-collapse:collapse}
@@ -121,6 +123,7 @@
   <div class="stat">killed <b id="sKilled">0</b></div>
   <div class="stat">watching <b id="sWatch">0</b></div>
   <div class="stat">triggers <b id="sTrig">0</b></div>
+  <button id="report">WEEKLY REPORT</button>
   <button id="mute" aria-pressed="false">SOUND OFF</button>
 </header>
 
@@ -312,6 +315,19 @@ function renderScans(scans){
     return `<div class="scan"><span class="t">${ago}m ago</span><span class="v ${s.verdict}">${s.verdict}</span><span class="s">$${esc(s.symbol)}</span><span class="r">${esc(s.reason || 'passed all gates')}</span></div>`;
   }).join('') || '<div class="scan"><span class="r">Nothing gated yet — new mints need liquidity before gates run.</span></div>';
 }
+
+$('report').onclick = async () => {
+  try {
+    const d = await (await fetch('/api/report')).json();
+    const txt = JSON.stringify(d, null, 2);
+    await navigator.clipboard.writeText(txt);
+    $('report').textContent = 'COPIED ✓';
+    setTimeout(() => $('report').textContent = 'WEEKLY REPORT', 2000);
+  } catch {
+    $('report').textContent = 'FETCH FAILED';
+    setTimeout(() => $('report').textContent = 'WEEKLY REPORT', 2000);
+  }
+};
 
 let histOffset = 0;
 $('loadhist').onclick = async () => {

@@ -14,6 +14,7 @@ exports.fetchHistory = fetchHistory;
 exports.addSmartWallet = addSmartWallet;
 exports.removeSmartWallet = removeSmartWallet;
 exports.listSmartWallets = listSmartWallets;
+exports.markTrigger = markTrigger;
 const pg_1 = require("pg");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
@@ -91,4 +92,9 @@ async function listSmartWallets() {
         return [];
     const r = await exports.pool.query(`SELECT wallet, type, active, last_validated FROM smart_wallets ORDER BY last_validated DESC`).catch(() => null);
     return r ? r.rows : [];
+}
+async function markTrigger(ca, price) {
+    if (!exports.pool)
+        return;
+    await exports.pool.query(`UPDATE tokens SET triggered_at = COALESCE(triggered_at, now()), trigger_price = COALESCE(trigger_price, $2) WHERE ca = $1`, [ca, price]).catch(() => { });
 }

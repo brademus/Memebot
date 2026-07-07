@@ -47,3 +47,8 @@ CREATE TABLE IF NOT EXISTS smart_wallets (       -- Phase 3, table ready now
 
 CREATE INDEX IF NOT EXISTS idx_tokens_first_seen ON tokens(first_seen DESC);
 CREATE INDEX IF NOT EXISTS idx_outcomes_multiple ON outcomes(multiple_from_first DESC);
+
+-- v2 additions (idempotent)
+ALTER TABLE tokens ADD COLUMN IF NOT EXISTS triggered_at TIMESTAMPTZ;
+ALTER TABLE tokens ADD COLUMN IF NOT EXISTS trigger_price NUMERIC;
+ALTER TABLE tokens ADD COLUMN IF NOT EXISTS insider_pct NUMERIC;

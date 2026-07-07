@@ -1,4 +1,4 @@
-import { initDb, upsertToken } from './db';
+import { initDb, upsertToken, markTrigger } from './db';
 import { startPumpfunMonitor } from './ingest/pumpfun';
 import { startDexscreenerPoller } from './ingest/dexscreener';
 import { runGates } from './gates';
@@ -16,7 +16,9 @@ import { TokenRecord } from './types';
 
 // gate retry policy: new mints have no liquidity yet — re-check every 30s for up to 30min
 const gateAttempts = new Map<string, number>();
+const lastGateAt = new Map<string, number>();
 const MAX_GATE_ATTEMPTS = 60;
+const GATE_COOLDOWN_MS = 45_000;   // efficiency: don't re-hit RugCheck/Helius every 10s poll
 
 async function main() {
   await initDb();
@@ -30,6 +32,9 @@ async function main() {
     if (t.gated === null) {
       // only attempt gates once the token has any liquidity showing
       if (t.liquidityUsd > 0) {
+        const last = lastGateAt.get(t.ca) || 0;
+        if (Date.now() - last < GATE_COOLDOWN_MS) return;
+        lastGateAt.set(t.ca, Date.now());
         const attempts = (gateAttempts.get(t.ca) || 0) + 1;
         gateAttempts.set(t.ca, attempts);
         const fail = await runGates(t);
@@ -42,6 +47,8 @@ async function main() {
         } else if (isTerminalFail(fail) || attempts >= MAX_GATE_ATTEMPTS) {
           t.gated = false;
           t.gateFailReason = fail;
+          // reference price at kill so the outcome logger can measure false kills
+          if (t.firstScorePrice === null && t.priceUsd > 0) t.firstScorePrice = t.priceUsd;
           recordScan({ ca: t.ca, symbol: t.symbol, verdict: 'KILL', reason: fail, at: Date.now() });
           console.log(`[gate] KILL  $${t.symbol} — ${fail}`);
           await upsertToken(t);

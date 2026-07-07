@@ -3,6 +3,7 @@ import path from 'path';
 import { env } from '../config';
 import { activeTokens, allTokens, recentScans } from '../store';
 import { pool } from '../db';
+import { buildReport } from './report';
 import { fetchHistory, addSmartWallet, removeSmartWallet, listSmartWallets } from '../db';
 import { latestSuggestion } from '../tuning/autotune';
 import { TokenRecord } from '../types';
@@ -65,6 +66,12 @@ export function startServer() {
       const c = await pool.query(`SELECT COUNT(*)::int AS n FROM tokens`);
       res.json({ total: c.rows[0].n, offset, rows: r.rows });
     } catch (e) { res.status(500).json({ error: (e as Error).message }); }
+  });
+
+  // weekly feedback report — JSON you paste back for tuning
+  app.get('/api/report', async (_req, res) => {
+    try { res.json(await buildReport()); }
+    catch (e) { res.status(500).json({ error: (e as Error).message }); }
   });
 
   app.get('/api/stats', (_req, res) => {

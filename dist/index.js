@@ -15,7 +15,9 @@ const server_1 = require("./api/server");
 const store_1 = require("./store");
 // gate retry policy: new mints have no liquidity yet — re-check every 30s for up to 30min
 const gateAttempts = new Map();
+const lastGateAt = new Map();
 const MAX_GATE_ATTEMPTS = 60;
+const GATE_COOLDOWN_MS = 45_000; // efficiency: don't re-hit RugCheck/Helius every 10s poll
 async function main() {
     await (0, db_1.initDb)();
     (0, server_1.startServer)();
@@ -27,6 +29,10 @@ async function main() {
         if (t.gated === null) {
             // only attempt gates once the token has any liquidity showing
             if (t.liquidityUsd > 0) {
+                const last = lastGateAt.get(t.ca) || 0;
+                if (Date.now() - last < GATE_COOLDOWN_MS)
+                    return;
+                lastGateAt.set(t.ca, Date.now());
                 const attempts = (gateAttempts.get(t.ca) || 0) + 1;
                 gateAttempts.set(t.ca, attempts);
                 const fail = await (0, gates_1.runGates)(t);
@@ -40,6 +46,9 @@ async function main() {
                 else if (isTerminalFail(fail) || attempts >= MAX_GATE_ATTEMPTS) {
                     t.gated = false;
                     t.gateFailReason = fail;
+                    // reference price at kill so the outcome logger can measure false kills
+                    if (t.firstScorePrice === null && t.priceUsd > 0)
+                        t.firstScorePrice = t.priceUsd;
                     (0, store_1.recordScan)({ ca: t.ca, symbol: t.symbol, verdict: 'KILL', reason: fail, at: Date.now() });
                     console.log(`[gate] KILL  $${t.symbol} — ${fail}`);
                     await (0, db_1.upsertToken)(t);

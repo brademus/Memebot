@@ -94,3 +94,11 @@ export async function listSmartWallets() {
   const r = await pool.query(`SELECT wallet, type, active, last_validated FROM smart_wallets ORDER BY last_validated DESC`).catch(() => null);
   return r ? r.rows : [];
 }
+
+export async function markTrigger(ca: string, price: number) {
+  if (!pool) return;
+  await pool.query(
+    `UPDATE tokens SET triggered_at = COALESCE(triggered_at, now()), trigger_price = COALESCE(trigger_price, $2) WHERE ca = $1`,
+    [ca, price]
+  ).catch(() => {});
+}

@@ -10,6 +10,7 @@ const path_1 = __importDefault(require("path"));
 const config_1 = require("../config");
 const store_1 = require("../store");
 const db_1 = require("../db");
+const report_1 = require("./report");
 const db_2 = require("../db");
 const autotune_1 = require("../tuning/autotune");
 const clients = new Set();
@@ -74,6 +75,15 @@ function startServer() {
          FROM tokens ORDER BY first_seen DESC LIMIT 500 OFFSET $1`, [offset]);
             const c = await db_1.pool.query(`SELECT COUNT(*)::int AS n FROM tokens`);
             res.json({ total: c.rows[0].n, offset, rows: r.rows });
+        }
+        catch (e) {
+            res.status(500).json({ error: e.message });
+        }
+    });
+    // weekly feedback report — JSON you paste back for tuning
+    app.get('/api/report', async (_req, res) => {
+        try {
+            res.json(await (0, report_1.buildReport)());
         }
         catch (e) {
             res.status(500).json({ error: e.message });
