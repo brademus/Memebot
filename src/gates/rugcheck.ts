@@ -8,7 +8,6 @@ export interface RugReport {
   topHolderPct: number;
   lpLockedOrBurned: boolean;
   riskScore: number;          // rugcheck score, lower = safer
-  preGraduation: boolean;     // no DEX market yet -> still on the bonding curve
   ok: boolean;                // fetch succeeded
 }
 
@@ -16,7 +15,7 @@ export async function fetchRugReport(ca: string, onCurve = false): Promise<RugRe
   const fail: RugReport = {
     mintAuthorityRevoked: false, freezeAuthorityInactive: false,
     top3HolderPct: 100, topHolderPct: 100, lpLockedOrBurned: false, riskScore: 99999,
-    preGraduation: false, ok: false,
+    ok: false,
   };
   try {
     const res = await fetch(`https://api.rugcheck.xyz/v1/tokens/${ca}/report`, {
@@ -51,7 +50,7 @@ export async function fetchRugReport(ca: string, onCurve = false): Promise<RugRe
 
     return {
       mintAuthorityRevoked, freezeAuthorityInactive,
-      top3HolderPct, topHolderPct, lpLockedOrBurned, preGraduation,
+      top3HolderPct, topHolderPct, lpLockedOrBurned,
       riskScore: r.score ?? r.score_normalised ?? 0,
       ok: true,
     };
