@@ -13,6 +13,27 @@ interface Slot { ca: string; enteredAt: number; peakScore: number }
 const slots: Slot[] = [];
 const droppedAt = new Map<string, number>();   // ca -> when dropped (re-entry cooldown)
 
+// PERSISTENCE GAUNTLET — the burst-vs-real discriminator. A launch-minute spike
+// satisfies score/velocity/buyers; it does NOT satisfy: being old enough for the
+// snipe cohort to have shown its hand, that cohort still holding, and SOL still
+// net-flowing IN. Winners pass all three; sniper pump-and-exits fail by minute 4.
+function passesPersistence(t: any, bb: ReturnType<typeof cfg>['bestbuys'], now: number): boolean {
+  const ageMin = (now - t.firstSeen) / 60000;
+  if (ageMin < bb.min_age_minutes) return false;
+  if (t.dex !== 'pumpfun') return true;   // post-graduation plays judged by their own signals
+  // retention of the first-buyer cohort (FULL stream only; without it, age gate carries)
+  if (t.earlyBuyers.length >= 5) {
+    const retention = 1 - t.earlyExited.length / t.earlyBuyers.length;
+    if (retention < bb.min_retention) return false;
+  }
+  // net inflow: curve SOL now vs N minutes ago
+  const ref = t.curveSamples.filter((x: any) => x.at <= now - bb.net_inflow_window_min * 60_000).pop();
+  if (ref && t.curveSol < ref.sol) return false;
+  // and not bleeding off the peak
+  if (t.peakCurveSol > 34 && t.curveSol < t.peakCurveSol * 0.9) return false;
+  return true;
+}
+
 export function currentBestBuys() {
   const bb = cfg().bestbuys;
   const now = Date.now();
@@ -35,6 +56,11 @@ export function currentBestBuys() {
       // hard fails: drop immediately regardless of hold time
       if (t.bundle && t.bundle.fundedSnipers > 0) dropReason = 'insider detected';
       else if (t.state === 'DYING') dropReason = 'momentum died';
+      else if (t.dex === 'pumpfun' && t.earlyBuyers.length >= 5
+               && (1 - t.earlyExited.length / t.earlyBuyers.length) < bb.min_retention)
+        dropReason = 'early buyers dumping';
+      else if (t.dex === 'pumpfun' && t.peakCurveSol > 34 && t.curveSol < t.peakCurveSol * 0.85)
+        dropReason = 'curve outflow';
       else if (heldSec >= bb.min_hold_seconds) {
         // soft fails: only after minimum hold
         if (t.score < bb.exit_score) dropReason = `score fell to ${t.score}`;
@@ -54,6 +80,7 @@ export function currentBestBuys() {
   const candidates = activeTokens()
     .filter(t => !inSlots.has(t.ca))
     .filter(t => (droppedAt.get(t.ca) || 0) < now - cooldownMs)
+    .filter(t => passesPersistence(t, bb, now))          // survived the snipe window
     .map(t => ({ t, r: rankToken(t) }))
     .filter(({ t, r }) =>
       ['A+', 'A'].includes(r.grade)

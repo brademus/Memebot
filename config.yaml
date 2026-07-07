@@ -70,6 +70,9 @@ bestbuys:                             # BEST BUYS panel — deliberately brutal 
   min_hold_seconds: 120               # can't be dropped in its first 2 min except on hard fails (insider/dying)
   reentry_cooldown_min: 15            # once dropped, can't re-enter for this long (anti-flap)
   supersede_margin: 12                # a new coin only bumps the weakest incumbent if it beats it by this many points
+  min_age_minutes: 4                  # PERSISTENCE: no admission during the snipe burst — research: 85% of snipers exit by 5min
+  min_retention: 0.65                 # PERSISTENCE: ≥65% of the first-15 buyer cohort still holding
+  net_inflow_window_min: 3            # PERSISTENCE: curve SOL now must be ≥ its level 3 minutes ago
 
 alerts:
   telegram_on_trigger: true

@@ -22,6 +22,9 @@ export interface TokenRecord {
   totalBuys: number;                 // cumulative buy count (liquidity-velocity denominator)
   totalSells: number;
   recentTrades: { at: number; buy: boolean }[];   // rolling window -> real 5m counters
+  earlyBuyers: string[];             // first N buyer wallets (the snipe cohort)
+  earlyExited: string[];             // which of them have since SOLD
+  peakCurveSol: number;              // high-water mark of SOL in curve (outflow detection)
   socials: { x: boolean; tg: boolean; web: boolean; fetched: boolean };  // 17x graduation lift signal
   playType: 'MOMENTUM' | 'GRADUATION' | 'DIP' | null;
   laddersFired: number[];            // exit-ladder levels already alerted (2, 5, ...)
@@ -107,6 +110,9 @@ export interface AppConfig {
     min_hold_seconds: number;
     reentry_cooldown_min: number;
     supersede_margin: number;
+    min_age_minutes: number;
+    min_retention: number;
+    net_inflow_window_min: number;
   };
   alerts: { telegram_on_trigger: boolean; realert_score_jump: number };
   polling: { dexscreener_interval_ms: number; outcome_snapshot_minutes: number[] };

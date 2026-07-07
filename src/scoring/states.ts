@@ -28,7 +28,10 @@ export function updateState(t: TokenRecord): TokenRecord['state'] | null {
              ((t.priceUsd / t.firstScorePrice) - 1) * 100 >= s.extended_pct) {
     next = 'EXTENDED';                                 // already ran — you'd be exit liquidity
   } else if ((t.peakScore - t.score >= s.dying_score_drop && t.peakScore >= s.heating_score_min) ||
-             (buyRatio <= s.dying_buy_ratio_max && ageMin > 10)) {
+             (buyRatio <= s.dying_buy_ratio_max && ageMin > 10) ||
+             // curve outflow: SOL leaving the curve = holders cashing out = distribution.
+             // >15% off the high-water mark (once meaningfully filled) is a death signal.
+             (t.dex === 'pumpfun' && t.peakCurveSol > 34 && t.curveSol < t.peakCurveSol * 0.85)) {
     next = 'DYING';                                    // rollover — rotate attention away
   } else if (t.score >= s.trigger_score_min && buyRatio >= s.trigger_buy_ratio_min
              && evidenceFloor(t, s)) {

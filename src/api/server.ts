@@ -231,6 +231,7 @@ function pick(t: TokenRecord) {
     pair: t.pairAddress,
     rank: rankToken(t),
     play: t.playType,
+    retention: t.earlyBuyers.length >= 5 ? +((1 - t.earlyExited.length / t.earlyBuyers.length)).toFixed(2) : null,
     socials: t.socials,
     devPct: +t.devBuyPct.toFixed(1),
   };

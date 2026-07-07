@@ -28,7 +28,11 @@ function applyCurveTrade(msg: any) {
   const t = getToken(msg.mint);
   if (!t) return;
   // keep curve reserves fresh so liquidity/mcap track reality pre-graduation
-  if (msg.vSolInBondingCurve) { t.curveSol = msg.vSolInBondingCurve; t.liquidityUsd = msg.vSolInBondingCurve * SOL_USD; }
+  if (msg.vSolInBondingCurve) {
+    t.curveSol = msg.vSolInBondingCurve;
+    t.peakCurveSol = Math.max(t.peakCurveSol, t.curveSol);
+    t.liquidityUsd = msg.vSolInBondingCurve * SOL_USD;
+  }
   if (msg.marketCapSol) t.mcapUsd = msg.marketCapSol * SOL_USD;
   if (msg.txType === 'buy') {
     t.totalBuys++;
@@ -36,7 +40,15 @@ function applyCurveTrade(msg: any) {
     // distinct buyer wallets — the real organic-demand signal (capped to bound memory)
     const buyer = msg.traderPublicKey;
     if (buyer && !t.uniqueBuyers.includes(buyer) && t.uniqueBuyers.length < 500) t.uniqueBuyers.push(buyer);
-  } else if (msg.txType === 'sell') { t.totalSells++; t.recentTrades.push({ at: Date.now(), buy: false }); }
+    // the snipe cohort: first 15 distinct buyers — research: 85% of snipers exit within 5 min,
+    // so whether THESE wallets hold or dump is the burst-vs-real discriminator
+    if (buyer && t.earlyBuyers.length < 15 && !t.earlyBuyers.includes(buyer)) t.earlyBuyers.push(buyer);
+  } else if (msg.txType === 'sell') {
+    t.totalSells++;
+    t.recentTrades.push({ at: Date.now(), buy: false });
+    const seller = msg.traderPublicKey;
+    if (seller && t.earlyBuyers.includes(seller) && !t.earlyExited.includes(seller)) t.earlyExited.push(seller);
+  }
   // maintain REAL 5-minute counters from the rolling window (curve tokens only —
   // Dexscreener overwrites these with its own 5m data once an AMM pair exists)
   const cutoff = Date.now() - 5 * 60_000;

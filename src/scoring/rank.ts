@@ -53,6 +53,13 @@ export function rankToken(t: TokenRecord): Rank {
   if (t.dex === 'pumpswap') cautions.push('post-graduation: most graduates retrace hard');
   const spread = t.totalBuys > 5 ? t.uniqueBuyers.length / t.totalBuys : 1;
   if (t.totalBuys > 10 && spread < 0.3) cautions.push('bot-churn pattern (few wallets, many trades)');
+  if (t.earlyBuyers.length >= 5) {
+    const exited = t.earlyExited.length;
+    if (exited / t.earlyBuyers.length > 0.35)
+      cautions.push(`snipers exiting (${exited}/${t.earlyBuyers.length} early buyers sold)`);
+  }
+  if (t.dex === 'pumpfun' && t.peakCurveSol > 34 && t.curveSol < t.peakCurveSol * 0.9)
+    cautions.push('SOL leaving the curve');
 
   // ---- confidence: how much do we actually KNOW about this token ----
   // high only when bundle data exists AND smart money confirms AND it's had time to develop
