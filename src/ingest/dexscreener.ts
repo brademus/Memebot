@@ -31,9 +31,15 @@ async function enrich(batch: TokenRecord[], onUpdated: (t: TokenRecord) => void)
         .filter(p => p.baseToken?.address === t.ca && p.chainId === 'solana')
         .sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
       if (!p) continue;
-      t.priceUsd = parseFloat(p.priceUsd || '0');
-      t.liquidityUsd = p.liquidity?.usd || 0;
-      t.mcapUsd = p.fdv || p.marketCap || 0;
+      // only overwrite if Dexscreener has real numbers; else keep curve-seeded values
+      const dexLiq = p.liquidity?.usd || 0;
+      if (dexLiq > 0) t.liquidityUsd = dexLiq;
+      const dexPrice = parseFloat(p.priceUsd || '0');
+      if (dexPrice > 0) t.priceUsd = dexPrice;
+      const dexMcap = p.fdv || p.marketCap || 0;
+      if (dexMcap > 0) t.mcapUsd = dexMcap;
+      // mark graduation: if it now has an AMM pair, it's off the curve
+      if (p.dexId && p.dexId !== 'pumpfun') { t.dex = p.dexId; t.dexId = p.dexId; }
       t.vol5m = p.volume?.m5 || 0;
       t.buys5m = p.txns?.m5?.buys || 0;
       t.sells5m = p.txns?.m5?.sells || 0;

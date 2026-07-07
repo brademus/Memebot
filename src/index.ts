@@ -1,5 +1,5 @@
 import { initDb, upsertToken, markTrigger } from './db';
-import { startPumpfunMonitor } from './ingest/pumpfun';
+import { startPumpfunMonitor, setSolPrice } from './ingest/pumpfun';
 import { startDexscreenerPoller } from './ingest/dexscreener';
 import { runGates } from './gates';
 import { scoreToken } from './scoring/score';
@@ -24,6 +24,17 @@ const GATE_COOLDOWN_MS = 45_000;   // efficiency: don't re-hit RugCheck/Helius e
 async function main() {
   await initDb();
   startServer();
+
+  // keep a live SOL/USD price so curve SOL amounts convert to real USD for gating
+  const refreshSol = async () => {
+    try {
+      const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
+      const d: any = await r.json();
+      if (d?.solana?.usd > 0) setSolPrice(d.solana.usd);
+    } catch {}
+  };
+  await refreshSol();
+  setInterval(refreshSol, 5 * 60_000);
   startOutcomeLogger();
 
   // wallet subsystems: discovery mines winners for smart wallets; tracker watches them live
@@ -35,35 +46,36 @@ async function main() {
   });
   startAutotune();
 
+  // shared gate runner — called from BOTH the create event (curve-seeded liquidity)
+  // and the Dexscreener poller (AMM liquidity). Handles cooldown + retry + verdict.
+  const tryGate = async (t: TokenRecord) => {
+    if (t.gated !== null) return;
+    if (t.liquidityUsd <= 0) return;
+    const last = lastGateAt.get(t.ca) || 0;
+    if (Date.now() - last < GATE_COOLDOWN_MS) return;
+    lastGateAt.set(t.ca, Date.now());
+    const attempts = (gateAttempts.get(t.ca) || 0) + 1;
+    gateAttempts.set(t.ca, attempts);
+    const fail = await runGates(t);
+    if (fail === null) {
+      t.gated = true; t.state = 'WATCHING'; gateAttempts.delete(t.ca);
+      recordScan({ ca: t.ca, symbol: t.symbol, verdict: 'PASS', reason: null, at: Date.now() });
+      console.log(`[gate] PASS  $${t.symbol} ${t.ca}`);
+    } else if (isTerminalFail(fail) || attempts >= MAX_GATE_ATTEMPTS) {
+      t.gated = false; t.gateFailReason = fail;
+      if (t.firstScorePrice === null && t.priceUsd > 0) t.firstScorePrice = t.priceUsd;
+      recordScan({ ca: t.ca, symbol: t.symbol, verdict: 'KILL', reason: fail, at: Date.now() });
+      console.log(`[gate] KILL  $${t.symbol} — ${fail}`);
+      await upsertToken(t);
+    }
+  };
+
   // Pipeline: enrichment update → (gate if pending) → score → state → alert → broadcast
   startDexscreenerPoller(async (t: TokenRecord) => {
-    if (t.gated === null) {
-      // only attempt gates once the token has any liquidity showing
-      if (t.liquidityUsd > 0) {
-        const last = lastGateAt.get(t.ca) || 0;
-        if (Date.now() - last < GATE_COOLDOWN_MS) return;
-        lastGateAt.set(t.ca, Date.now());
-        const attempts = (gateAttempts.get(t.ca) || 0) + 1;
-        gateAttempts.set(t.ca, attempts);
+    await tryGate(t);
+    if (false) {
+      {
         const fail = await runGates(t);
-        if (fail === null) {
-          t.gated = true;
-          t.state = 'WATCHING';
-          gateAttempts.delete(t.ca);
-          recordScan({ ca: t.ca, symbol: t.symbol, verdict: 'PASS', reason: null, at: Date.now() });
-          console.log(`[gate] PASS  $${t.symbol} ${t.ca}`);
-        } else if (isTerminalFail(fail) || attempts >= MAX_GATE_ATTEMPTS) {
-          t.gated = false;
-          t.gateFailReason = fail;
-          // reference price at kill so the outcome logger can measure false kills
-          if (t.firstScorePrice === null && t.priceUsd > 0) t.firstScorePrice = t.priceUsd;
-          recordScan({ ca: t.ca, symbol: t.symbol, verdict: 'KILL', reason: fail, at: Date.now() });
-          console.log(`[gate] KILL  $${t.symbol} — ${fail}`);
-          await upsertToken(t);
-          // keep in store briefly so it shows in the seen feed; janitor removes it after a grace window
-          return;
-        }
-        // non-terminal fail (thin liq early on): stay pending, retry next poll
       }
     }
 
@@ -79,9 +91,13 @@ async function main() {
     }
   });
 
-  startPumpfunMonitor((ca) => {
+  startPumpfunMonitor(async (ca) => {
     const t = getToken(ca);
-    if (t) console.log(`[pumpfun] new mint $${t.symbol} ${ca}`);
+    if (t) {
+      console.log(`[pumpfun] new mint $${t.symbol} ${ca}`);
+      // gate immediately using curve-seeded liquidity — no wait for Dexscreener
+      await tryGate(t);
+    }
   });
 
   // SSE push every 2s — dashboard stays live without hammering per-token

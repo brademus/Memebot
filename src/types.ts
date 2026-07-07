@@ -15,6 +15,7 @@ export interface TokenRecord {
   priceChange5m: number;
   pairAddress: string | null;
   dex: string | null;                // 'pumpfun' (bonding curve) | 'pumpswap' | 'raydium' | ...
+  curveSol: number;                  // native SOL in bonding curve (price-independent gating)
   dexId: string | null;              // 'pumpfun' = still on bonding curve; 'pumpswap'/'raydium' = graduated
   // gate
   gated: boolean | null;             // null = pending
@@ -46,7 +47,7 @@ export interface AppConfig {
     lp_locked_or_burned: boolean;
     liq_to_mcap_ratio_min: number;
     min_liquidity_usd: number;
-    min_liquidity_usd_curve: number;
+    min_liquidity_sol_curve: number;
     curve_min_liquidity_usd: number;
     rugcheck_score_max: number;
   };
