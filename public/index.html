@@ -157,6 +157,32 @@
   .scan .v.PASS{color:var(--trigger)} .scan .v.KILL{color:var(--dying)}
   .scan .s{color:var(--txt);min-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .scan .r{color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  /* ---- tab navigation (restored: lost in the </style> bug) ---- */
+  nav.tabs{display:flex;gap:2px;padding:0 20px;border-bottom:1px solid var(--line);background:var(--ink);position:sticky;top:53px;z-index:2}
+  .tab{font-family:'Barlow Condensed';font-weight:600;font-size:14px;letter-spacing:.1em;padding:11px 18px;color:var(--dim);cursor:pointer;border-bottom:2px solid transparent;user-select:none}
+  .tab:hover{color:var(--txt)}
+  .tab.active{color:var(--trigger);border-bottom-color:var(--trigger)}
+  .tabpanel{display:none}
+  /* ---- wins ---- */
+  #winssummary{display:flex;gap:28px;padding:14px 20px;border-bottom:1px solid var(--line)}
+  .winstat{font-family:'Barlow Condensed';font-size:13px;letter-spacing:.06em;color:var(--dim)}
+  .winstat b{font-size:24px;color:var(--txt);display:block;font-weight:600}
+  .winstat span{color:var(--trigger)}
+  #winslist{padding:8px 20px 40px}
+  .win{display:flex;gap:14px;align-items:baseline;padding:7px 0;border-bottom:1px solid var(--line);font-size:12px}
+  .win .wm{font-family:'Barlow Condensed';font-weight:600;font-size:16px;min-width:56px;color:var(--dim)}
+  .win .wm.mid{color:var(--heating)} .win .wm.big{color:var(--trigger)}
+  .win .ws{font-weight:600;min-width:90px}
+  .win .wsc{color:var(--dim);min-width:150px}
+  .win .wt{color:var(--ext);flex:1}
+  .win a{color:var(--dim)}
+  /* ---- best buys vs watchlist separation ---- */
+  #bestbuys{border:1px solid var(--trigger);margin:14px 20px;padding:14px 16px;background:rgba(53,224,161,.04)}
+  #watchhead{padding:18px 20px 6px}
+  #watchhead h2{font-family:'Barlow Condensed';font-weight:600;font-size:15px;letter-spacing:.12em;color:var(--dim)}
+  #watchhead p{color:var(--ext);font-size:11px;margin-top:2px}
+
 </style>
 </head>
 <body>
@@ -184,6 +210,10 @@
     <h2>BEST BUYS RIGHT NOW <span id="bbnote"></span></h2>
     <div id="bblist"></div>
   </section>
+  <div id="watchhead">
+    <h2>FULL WATCHLIST</h2>
+    <p>Every coin currently past the gates, ranked. This is the raw feed — NOT buy recommendations. Graduation candidates that survive the snipe window and keep accumulating SOL get promoted into the green BEST BUYS box above.</p>
+  </div>
   <table>
     <thead><tr>
       <th>Grade</th><th>State</th><th>Token</th><th>Age</th><th>Score</th><th>Liq</th><th>Liq:MC</th>
