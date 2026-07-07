@@ -17,6 +17,18 @@
   a{color:var(--txt)}
   a:focus-visible,button:focus-visible{outline:2px solid var(--heating);outline-offset:2px}
 
+  #bestbuys{padding:14px 20px;border-bottom:1px solid var(--line);background:rgba(53,224,161,.03)}
+  #bestbuys h2{font-family:'Barlow Condensed';font-weight:600;font-size:15px;letter-spacing:.12em;color:var(--trigger);margin-bottom:10px}
+  #bestbuys h2 span{font-weight:500;color:var(--ext);font-size:12px}
+  #bblist{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px}
+  .bb{border:1px solid var(--trigger);padding:10px 12px;background:var(--ink)}
+  .bb .top{display:flex;align-items:baseline;gap:10px;margin-bottom:4px}
+  .bb .bbg{font-family:'Barlow Condensed';font-weight:600;font-size:18px;color:var(--trigger)}
+  .bb .bbs{font-weight:600;font-size:14px;flex:1}
+  .bb .bbsc{color:var(--dim);font-size:12px}
+  .bb .bblabel{color:var(--txt);font-size:12px;margin-bottom:5px}
+  .bb .bbcaut{color:var(--dying);font-size:11px}
+  .bb .bblinks a{color:var(--dim);font-size:11px;margin-right:10px;border-bottom:1px dotted var(--dim);text-decoration:none}
   header{display:flex;align-items:baseline;gap:24px;padding:14px 20px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--ink);z-index:2}
   .wordmark{font-family:'Barlow Condensed';font-size:26px;font-weight:600;letter-spacing:.12em;color:var(--txt)}
   .wordmark span{color:var(--trigger)}
@@ -44,6 +56,14 @@
   @keyframes flash{0%{background:rgba(53,224,161,.35)}100%{background:rgba(53,224,161,.05)}}
   @media (prefers-reduced-motion: reduce){tr.flash{animation:none}}
 
+  .grade{font-family:'Barlow Condensed';font-weight:600;font-size:16px;letter-spacing:.04em;padding:1px 8px;border:1px solid;display:inline-block}
+  .grade-Aplus{color:#0B0F14;background:var(--trigger);border-color:var(--trigger)}
+  .grade-A{color:var(--trigger);border-color:var(--trigger)}
+  .grade-B{color:var(--heating);border-color:var(--heating)}
+  .grade-C{color:var(--dim);border-color:var(--line)}
+  .grade-D{color:var(--ext);border-color:var(--line)}
+  .timing{font-family:'Barlow Condensed';font-size:9px;letter-spacing:.1em;margin-top:2px;color:var(--ext)}
+  .t-EARLY{color:var(--trigger)} .t-LATE,.t-STALE{color:var(--dying)}
   .chip{font-family:'Barlow Condensed';font-size:12px;font-weight:600;letter-spacing:.08em;padding:2px 8px;border:1px solid}
   .chip.TRIGGER{color:var(--trigger);border-color:var(--trigger)}
   .chip.HEATING{color:var(--heating);border-color:var(--heating)}
@@ -152,9 +172,14 @@
 </nav>
 
 <div id="liveview">
+<section id="bestbuys">
+  <h2>BEST BUYS RIGHT NOW <span id="bbnote"></span></h2>
+  <div id="bblist"></div>
+</section>
+
 <table>
   <thead><tr>
-    <th>State</th><th>Token</th><th>Age</th><th>Score</th><th>Liq</th><th>Liq:MC</th>
+    <th>Grade</th><th>State</th><th>Token</th><th>Age</th><th>Score</th><th>Liq</th><th>Liq:MC</th>
     <th>B:S 5m</th><th>Δ5m</th><th>Moved</th><th>Insider</th><th>Smart</th><th>Open</th>
   </tr></thead>
   <tbody id="rows"></tbody>
@@ -250,7 +275,9 @@ function render(data){
     tr.className = 'row ' + t.state + (newTriggers.includes(t.ca) ? ' flash' : '');
     const fusePct = Math.max(0, 100 - (t.ageMin / MAX_AGE) * 100);
     const movedCls = t.movedPct >= 40 ? 'moved-hot' : t.movedPct > 0 ? 'pos' : 'mut';
+    const g = t.rank || {grade:'—',timing:'',confidence:''};
     tr.innerHTML = `
+      <td><span class="grade grade-${g.grade.replace('+','plus')}" title="${esc(g.label||'')} · confidence: ${g.confidence}">${g.grade}</span><div class="timing t-${g.timing}">${g.timing}</div></td>
       <td><span class="chip ${t.state}">${t.state}</span></td>
       <td><span class="sym">$${esc(t.symbol)}</span> <span class="name">${esc(t.name).slice(0,20)}</span>
           <div class="fuse" title="${MAX_AGE - t.ageMin}m left in window"><i style="width:${fusePct}%"></i></div></td>

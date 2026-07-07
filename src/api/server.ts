@@ -6,6 +6,7 @@ import { pool } from '../db';
 import { buildReport } from './report';
 import { runAiReview } from '../ai/reviewer';
 import { buildAnalytics } from './analytics';
+import { rankToken } from '../scoring/rank';
 import { fetchHistory, addSmartWallet, removeSmartWallet, listSmartWallets } from '../db';
 import { latestSuggestion } from '../tuning/autotune';
 import { TokenRecord } from '../types';
@@ -97,6 +98,22 @@ export function startServer() {
     } catch (e) { res.status(500).json({ error: (e as Error).message }); }
   });
 
+  app.get('/api/bestbuys', (_req, res) => {
+    const buys = activeTokens()
+      .map(t => ({ t, r: rankToken(t) }))
+      .filter(x => ['A+', 'A'].includes(x.r.grade) && ['EARLY', 'FAIR'].includes(x.r.timing))
+      .sort((a, b) => b.t.score - a.t.score)
+      .slice(0, 8)
+      .map(({ t, r }) => ({
+        ca: t.ca, symbol: t.symbol, grade: r.grade, label: r.label, timing: r.timing,
+        confidence: r.confidence, score: t.score, cautions: r.cautions,
+        liq: Math.round(t.liquidityUsd), buys: t.buys5m, sells: t.sells5m,
+        smart: new Set(t.smartHits.map(h => h.wallet)).size,
+        pair: t.pairAddress,
+      }));
+    res.json({ buys, note: buys.length ? null : 'no A-grade early setups right now — this is normal most of the time' });
+  });
+
   app.get('/api/analytics', async (_req, res) => {
     try { res.json(await buildAnalytics()); }
     catch (e) { res.status(500).json({ error: (e as Error).message }); }
@@ -169,5 +186,6 @@ function pick(t: TokenRecord) {
     smart: new Set(t.smartHits.map(h => h.wallet)).size,
     aiNote: t.aiNote,
     pair: t.pairAddress,
+    rank: rankToken(t),
   };
 }
