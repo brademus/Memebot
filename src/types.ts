@@ -102,6 +102,10 @@ export interface AppConfig {
     min_trades: number;
     min_curve_sol: number;
     max_dev_pct: number;
+    exit_score: number;
+    min_hold_seconds: number;
+    reentry_cooldown_min: number;
+    supersede_margin: number;
   };
   alerts: { telegram_on_trigger: boolean; realert_score_jump: number };
   polling: { dexscreener_interval_ms: number; outcome_snapshot_minutes: number[] };

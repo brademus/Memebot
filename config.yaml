@@ -66,6 +66,10 @@ bestbuys:                             # BEST BUYS panel — deliberately brutal 
   min_trades: 25
   min_curve_sol: 40                   # ≥10 SOL genuinely bonded beyond the 30 start
   max_dev_pct: 7
+  exit_score: 60                      # holds its slot until score drops below this (enter at 72 = hysteresis, no flicker)
+  min_hold_seconds: 120               # can't be dropped in its first 2 min except on hard fails (insider/dying)
+  reentry_cooldown_min: 15            # once dropped, can't re-enter for this long (anti-flap)
+  supersede_margin: 12                # a new coin only bumps the weakest incumbent if it beats it by this many points
 
 alerts:
   telegram_on_trigger: true

@@ -7,6 +7,7 @@ import { buildReport } from './report';
 import { runAiReview } from '../ai/reviewer';
 import { buildAnalytics } from './analytics';
 import { rankToken } from '../scoring/rank';
+import { currentBestBuys } from './bestbuys';
 import { fetchHistory, addSmartWallet, removeSmartWallet, listSmartWallets } from '../db';
 import { latestSuggestion } from '../tuning/autotune';
 import { TokenRecord } from '../types';
@@ -122,34 +123,12 @@ export function startServer() {
   });
 
   app.get('/api/bestbuys', (_req, res) => {
-    const bb = cfg().bestbuys;
-    const all = activeTokens();
-    const candidates = all
-      .map(t => ({ t, r: rankToken(t) }))
-      .filter(({ t, r }) =>
-        ['A+', 'A'].includes(r.grade)
-        && r.timing === 'EARLY'                                       // FAIR is not a best buy
-        && t.score >= bb.min_score
-        && (t.totalBuys + t.totalSells) >= bb.min_trades              // evidence floor
-        && t.uniqueBuyers.length >= bb.min_unique_buyers              // organic floor
-        && t.curveSol >= bb.min_curve_sol                             // real SOL bonded
-        && t.devBuyPct <= bb.max_dev_pct                              // no big dev bags
-        && (!bb.require_social || t.socials.tg || t.socials.x)        // 17x signal
-        && (!t.bundle || t.bundle.fundedSnipers === 0))               // insider-clean if known
-      .sort((a, b) => b.t.score - a.t.score)
-      .slice(0, bb.max_shown)
-      .map(({ t, r }) => ({
-        ca: t.ca, symbol: t.symbol, grade: r.grade, label: r.label, timing: r.timing,
-        confidence: r.confidence, score: t.score, cautions: r.cautions,
-        liq: Math.round(t.liquidityUsd), buys: t.buys5m, sells: t.sells5m,
-        smart: new Set(t.smartHits.map(h => h.wallet)).size,
-        pair: t.pairAddress,
-      }));
+    const buys = currentBestBuys();
+    const watching = activeTokens().length;
     res.json({
-      buys: candidates,
-      watching: all.length,
-      note: candidates.length ? null
-        : `0 of ${all.length} watched tokens clear the best-buy bar right now. Empty is the normal state — the research base rate for real winners is ~0.2%.`,
+      buys, watching,
+      note: buys.length ? null
+        : `0 of ${watching} watched clear the bar. Empty is normal — a coin that appears here has EARNED it and will hold its slot until it stops looking good.`,
     });
   });
 
