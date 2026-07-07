@@ -27,7 +27,6 @@ export interface TokenRecord {
   // holder proxy tracking
   uniqueBuyerSamples: number[];      // rolling buys5m samples for growth calc
   bundle: { insiderPct: number; slot0Buyers: number; fundedSnipers: number } | null;
-  why: string | null;          // AI rationale, generated at TRIGGER
   aiNote: string | null;             // analyst thesis, generated once on TRIGGER
   smartHits: { wallet: string; at: number }[];
   ai: { verdict: string; confidence: number; thesis: string; risks: string } | null;
@@ -67,7 +66,14 @@ export interface AppConfig {
   age: { max_token_age_minutes: number; freshness_half_life_minutes: number };
   weights: { freshness: number; liquidity_health: number; buy_pressure: number; holder_growth: number; smart_money: number };
   ai: { enabled: boolean; model: string };
-  wallets: { poll_interval_ms: number; hit_window_minutes: number };
+  wallets: {
+    enabled: boolean;
+    discovery_min_multiple: number;
+    wallet_min_winners: number;
+    early_buyer_slot_window: number;
+    max_tracked_wallets: number;
+    hit_recency_hours: number;
+  };
   states: {
     heating_score_min: number;
     trigger_score_min: number;

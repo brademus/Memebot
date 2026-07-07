@@ -91,6 +91,18 @@
   .mult-loss{color:var(--dim)}
   #loadmore{margin:20px;background:none;border:1px solid var(--line);color:var(--txt);padding:8px 18px;font:13px 'IBM Plex Mono';cursor:pointer}
   #loadmore:hover{border-color:var(--trigger)}
+  #walletpanel{border-top:1px solid var(--line);margin-top:24px;padding:14px 20px}
+  #walletpanel h2{font-family:'Barlow Condensed';font-weight:600;font-size:15px;letter-spacing:.12em;color:var(--dim);margin-bottom:4px}
+  #walletpanel h2 span{font-weight:500;color:var(--ext)}
+  #wallethint{color:var(--ext);font-size:11px;margin-bottom:10px;max-width:640px}
+  .wal{display:flex;gap:12px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line);font-size:12px}
+  .wal .ad{font-family:'IBM Plex Mono';color:var(--txt)}
+  .wal .wn{color:var(--trigger);font-weight:600;min-width:70px}
+  .wal .ty{color:var(--dim);min-width:80px}
+  .wal .st{margin-left:auto;font-family:'Barlow Condensed';font-weight:600;letter-spacing:.06em}
+  .wal .st.on{color:var(--trigger)} .wal .st.off{color:var(--ext)}
+  .wal a{color:var(--dim)}
+
   #histpanel{border-top:1px solid var(--line);margin-top:24px;padding:14px 20px}
   #histpanel h2{font-family:'Barlow Condensed';font-weight:600;font-size:15px;letter-spacing:.12em;color:var(--dim);margin-bottom:10px}
   #histpanel h2 span{font-weight:500;color:var(--ext)}
@@ -152,6 +164,12 @@
   <h2>FULL HISTORY <span id="histcount"></span></h2>
   <button id="loadhist">LOAD FROM DATABASE</button>
   <div id="histlist"></div>
+</section>
+
+<section id="walletpanel">
+  <h2>TRACKED WALLETS <span id="walletcount"></span></h2>
+  <div id="wallethint">Wallets discovered by mining early buyers of tokens that already 3x'd. A wallet earns a slot after appearing early on 2+ separate winners — this list is built from winners the bot found, not public leaderboards. Populates once outcomes accumulate.</div>
+  <div id="walletlist"></div>
 </section>
 
 <section id="scanpanel">

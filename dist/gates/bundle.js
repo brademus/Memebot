@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.checkBundle = checkBundle;
 const config_1 = require("../config");
+const helius_1 = require("../helius");
 const NEUTRAL = { pass: true, reason: null, stats: null };
 async function checkBundle(t) {
     const c = (0, config_1.cfg)().bundle;
@@ -9,7 +10,7 @@ async function checkBundle(t) {
         return NEUTRAL;
     try {
         // 1. earliest txs on the mint (fresh tokens: 100 covers back to creation)
-        const mintTxs = await heliusTxs(t.ca);
+        const mintTxs = await (0, helius_1.heliusTxs)(t.ca);
         if (!mintTxs.length)
             return NEUTRAL;
         const minSlot = Math.min(...mintTxs.map((x) => x.slot));
@@ -35,7 +36,7 @@ async function checkBundle(t) {
         // 2. deployer's SOL-transfer counterparties (one hop)
         let linked = new Set();
         if (deployer) {
-            const depTxs = await heliusTxs(deployer);
+            const depTxs = await (0, helius_1.heliusTxs)(deployer);
             for (const tx of depTxs) {
                 for (const nt of tx.nativeTransfers || []) {
                     if (nt.fromUserAccount === deployer && nt.toUserAccount)
@@ -70,11 +71,4 @@ async function checkBundle(t) {
     catch {
         return NEUTRAL;
     }
-}
-async function heliusTxs(address) {
-    const res = await fetch(`https://api.helius.xyz/v0/addresses/${address}/transactions?api-key=${config_1.env.HELIUS_API_KEY}&limit=100`);
-    if (!res.ok)
-        return [];
-    const data = await res.json();
-    return Array.isArray(data) ? data : [];
 }

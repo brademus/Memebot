@@ -8,11 +8,13 @@ const score_1 = require("./scoring/score");
 const states_1 = require("./scoring/states");
 const telegram_1 = require("./alerts/telegram");
 const logger_1 = require("./outcomes/logger");
-const wallets_1 = require("./ingest/wallets");
 const autotune_1 = require("./tuning/autotune");
 const analyst_1 = require("./ai/analyst");
 const server_1 = require("./api/server");
+const discovery_1 = require("./wallets/discovery");
+const tracker_1 = require("./wallets/tracker");
 const store_1 = require("./store");
+const store_2 = require("./store");
 // gate retry policy: new mints have no liquidity yet — re-check every 30s for up to 30min
 const gateAttempts = new Map();
 const lastGateAt = new Map();
@@ -22,7 +24,14 @@ async function main() {
     await (0, db_1.initDb)();
     (0, server_1.startServer)();
     (0, logger_1.startOutcomeLogger)();
-    (0, wallets_1.startWalletTracker)();
+    // wallet subsystems: discovery mines winners for smart wallets; tracker watches them live
+    (0, discovery_1.startWalletDiscovery)();
+    (0, tracker_1.startWalletTracker)((ca) => {
+        // a tracked wallet bought a token we're not watching — pull it in for gating
+        const t = (0, store_1.addToken)({ ca, symbol: '?', name: '(wallet-surfaced)', creator: null, source: 'dexscreener' });
+        if (t)
+            console.log(`[wallets] smart wallet surfaced new token ${ca}`);
+    });
     (0, autotune_1.startAutotune)();
     // Pipeline: enrichment update → (gate if pending) → score → state → alert → broadcast
     (0, dexscreener_1.startDexscreenerPoller)(async (t) => {
@@ -40,7 +49,7 @@ async function main() {
                     t.gated = true;
                     t.state = 'WATCHING';
                     gateAttempts.delete(t.ca);
-                    (0, store_1.recordScan)({ ca: t.ca, symbol: t.symbol, verdict: 'PASS', reason: null, at: Date.now() });
+                    (0, store_2.recordScan)({ ca: t.ca, symbol: t.symbol, verdict: 'PASS', reason: null, at: Date.now() });
                     console.log(`[gate] PASS  $${t.symbol} ${t.ca}`);
                 }
                 else if (isTerminalFail(fail) || attempts >= MAX_GATE_ATTEMPTS) {
@@ -49,7 +58,7 @@ async function main() {
                     // reference price at kill so the outcome logger can measure false kills
                     if (t.firstScorePrice === null && t.priceUsd > 0)
                         t.firstScorePrice = t.priceUsd;
-                    (0, store_1.recordScan)({ ca: t.ca, symbol: t.symbol, verdict: 'KILL', reason: fail, at: Date.now() });
+                    (0, store_2.recordScan)({ ca: t.ca, symbol: t.symbol, verdict: 'KILL', reason: fail, at: Date.now() });
                     console.log(`[gate] KILL  $${t.symbol} — ${fail}`);
                     await (0, db_1.upsertToken)(t);
                     // keep in store briefly so it shows in the seen feed; janitor removes it after a grace window
@@ -71,7 +80,7 @@ async function main() {
         }
     });
     (0, pumpfun_1.startPumpfunMonitor)((ca) => {
-        const t = (0, store_1.getToken)(ca);
+        const t = (0, store_2.getToken)(ca);
         if (t)
             console.log(`[pumpfun] new mint $${t.symbol} ${ca}`);
     });
@@ -83,14 +92,14 @@ async function main() {
         const pendingCutoff = Date.now() - 45 * 60_000; // pending-but-no-liquidity: dead on curve
         const killedCutoff = Date.now() - 30 * 60_000; // killed: keep 30min so they show in seen feed
         let purged = 0;
-        for (const t of (0, store_1.allTokens)()) {
+        for (const t of (0, store_2.allTokens)()) {
             if (t.gated === null && t.firstSeen < pendingCutoff) {
-                (0, store_1.removeToken)(t.ca);
+                (0, store_2.removeToken)(t.ca);
                 gateAttempts.delete(t.ca);
                 purged++;
             }
             else if (t.gated === false && t.firstSeen < killedCutoff) {
-                (0, store_1.removeToken)(t.ca);
+                (0, store_2.removeToken)(t.ca);
                 purged++;
             }
         }

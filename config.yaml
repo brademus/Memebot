@@ -51,10 +51,6 @@ ai:                                   # analyst note on TRIGGER (needs ANTHROPIC
   enabled: true
   model: claude-haiku-4-5
 
-wallets:                              # smart-money tracker (needs HELIUS_API_KEY + wallets added via API)
-  poll_interval_ms: 45000
-  hit_window_minutes: 30
-
 alerts:
   telegram_on_trigger: true
   realert_score_jump: 15              # re-alert same token only on +15 score move
@@ -62,6 +58,14 @@ alerts:
 polling:
   dexscreener_interval_ms: 10000      # enrichment poll for tracked tokens
   outcome_snapshot_minutes: [60, 240, 1440]   # 1h / 4h / 24h outcome logging
+
+wallets:                              # smart-money discovery + tracking (needs HELIUS_API_KEY)
+  enabled: true
+  discovery_min_multiple: 3           # a token must have ≥3x'd for us to mine its early buyers
+  wallet_min_winners: 2               # a wallet must appear early on ≥2 winners to earn a slot
+  early_buyer_slot_window: 3          # "early" = bought within this many slots of creation
+  max_tracked_wallets: 300
+  hit_recency_hours: 6                # a wallet hit counts toward score for this long
 
 limits:
   max_tracked_tokens: 400             # in-memory watchlist cap

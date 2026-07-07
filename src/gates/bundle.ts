@@ -1,5 +1,6 @@
 import { cfg, env } from '../config';
 import { TokenRecord } from '../types';
+import { heliusTxs } from '../helius';
 
 // Bundle / insider detection.
 // Research basis: >50% of pump.fun launches are sniped in the creation block, and
@@ -78,12 +79,4 @@ export async function checkBundle(t: TokenRecord): Promise<BundleCheck> {
       return { pass: false, reason: `bundle_insider_${insiderPct.toFixed(0)}pct`, stats: t.bundle };
     return { pass: true, reason: null, stats: t.bundle };
   } catch { return NEUTRAL; }
-}
-
-async function heliusTxs(address: string): Promise<any[]> {
-  const res = await fetch(
-    `https://api.helius.xyz/v0/addresses/${address}/transactions?api-key=${env.HELIUS_API_KEY}&limit=100`);
-  if (!res.ok) return [];
-  const data = await res.json();
-  return Array.isArray(data) ? data : [];
 }

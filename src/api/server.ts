@@ -74,6 +74,19 @@ export function startServer() {
     catch (e) { res.status(500).json({ error: (e as Error).message }); }
   });
 
+  // tracked smart wallets, ranked by how many winners they hit
+  app.get('/api/wallets', async (_req, res) => {
+    if (!pool) { res.json({ rows: [] }); return; }
+    try {
+      const r = await pool.query(
+        `SELECT wallet, type, winners_hit, active, discovered_from, last_validated
+         FROM smart_wallets WHERE winners_hit > 0
+         ORDER BY active DESC, winners_hit DESC LIMIT 100`);
+      const c = await pool.query(`SELECT COUNT(*)::int n FROM smart_wallets WHERE active`);
+      res.json({ active: c.rows[0].n, rows: r.rows });
+    } catch (e) { res.status(500).json({ error: (e as Error).message }); }
+  });
+
   app.get('/api/stats', (_req, res) => {
     const all = allTokens();
     res.json({
@@ -137,7 +150,6 @@ function pick(t: TokenRecord) {
     buys: t.buys5m, sells: t.sells5m, chg5m: t.priceChange5m,
     movedPct: t.firstScorePrice && t.priceUsd ? +(((t.priceUsd / t.firstScorePrice) - 1) * 100).toFixed(1) : 0,
     insider: t.bundle ? t.bundle.insiderPct : null,
-    why: t.why,
     funded: t.bundle ? t.bundle.fundedSnipers : 0,
     smart: new Set(t.smartHits.map(h => h.wallet)).size,
     aiNote: t.aiNote,

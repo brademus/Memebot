@@ -52,3 +52,12 @@ CREATE INDEX IF NOT EXISTS idx_outcomes_multiple ON outcomes(multiple_from_first
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS triggered_at TIMESTAMPTZ;
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS trigger_price NUMERIC;
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS insider_pct NUMERIC;
+
+-- wallet tracking additions (idempotent)
+ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS winners_hit INT DEFAULT 0;
+ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS discovered_from TEXT;
+ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS first_discovered TIMESTAMPTZ DEFAULT now();
+CREATE TABLE IF NOT EXISTS wallet_hits (      -- live: a tracked wallet bought a token we're watching
+  ca TEXT, wallet TEXT, at TIMESTAMPTZ DEFAULT now(),
+  PRIMARY KEY (ca, wallet)
+);

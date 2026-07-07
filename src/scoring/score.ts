@@ -1,6 +1,7 @@
 import { cfg } from '../config';
 import { TokenRecord } from '../types';
-import { activeWalletCount } from '../ingest/wallets';
+import { walletsTracked } from '../wallets/tracker';
+import { cfg as _cfg } from '../config';
 
 // Weighted sum → 0–100. Each sub-score is 0–1 before weighting.
 export function scoreToken(t: TokenRecord): number {
@@ -29,20 +30,22 @@ export function scoreToken(t: TokenRecord): number {
     holderGrowth = Math.min(1, Math.max(0, slope / 10));   // +10 buys/sample = max
   }
 
-  // smart money: distinct vetted wallets buying inside the hit window, capped at 2 for max
-  const windowMs = cfg().wallets.hit_window_minutes * 60_000;
-  const recentHits = new Set(t.smartHits.filter(h => Date.now() - h.at < windowMs).map(h => h.wallet)).size;
-  const smartMoney = Math.min(1, recentHits / 2);
+  // smart money: distinct tracked-wallet hits inside the recency window, saturating at 3
+  const winMs = cfg().wallets.hit_recency_hours * 3600_000;
+  const hits = new Set(t.smartHits.filter(h => Date.now() - h.at < winMs).map(h => h.wallet)).size;
+  const smartMoney = Math.min(1, hits / 3);
 
-  // if no wallets are being tracked yet, redistribute that weight so max stays 100
-  const scale = activeWalletCount() > 0 ? 1 : 100 / (100 - w.smart_money);
+  // until the discovery engine has surfaced wallets, redistribute smart_money weight
+  // across the other signals so a clean token can still reach ~100 instead of being capped
+  const walletsLive = walletsTracked();
+  const scale = walletsLive ? 1 : 100 / (100 - w.smart_money);
 
   t.subs = {
     freshness: round1(freshness * w.freshness * scale),
     liquidity: round1(liquidity * w.liquidity_health * scale),
     buyPressure: round1(buyPressure * w.buy_pressure * scale),
     holderGrowth: round1(holderGrowth * w.holder_growth * scale),
-    smartMoney: round1(smartMoney * w.smart_money * (activeWalletCount() > 0 ? 1 : 0)),
+    smartMoney: round1(smartMoney * w.smart_money * (walletsLive ? 1 : 0)),
   };
   const total = t.subs.freshness + t.subs.liquidity + t.subs.buyPressure + t.subs.holderGrowth + t.subs.smartMoney;
   t.score = round1(total);
