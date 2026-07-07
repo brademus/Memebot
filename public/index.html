@@ -151,7 +151,7 @@
   .scan .v.PASS{color:var(--trigger)} .scan .v.KILL{color:var(--dying)}
   .scan .s{color:var(--txt);min-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .scan .r{color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-</style>
+
 </head>
 <body>
 <header>
@@ -166,73 +166,72 @@
   <button id="mute" aria-pressed="false">SOUND OFF</button>
 </header>
 
-<nav id="tabs">
-  <button class="tab on" data-view="live">LIVE</button>
-  <button class="tab" data-view="history">FULL HISTORY</button>
+<nav class="tabs">
+  <div class="tab" data-tab="live">LIVE PICKS</div>
+  <div class="tab" data-tab="wins">WINS</div>
+  <div class="tab" data-tab="wallets">WALLETS &amp; STATS</div>
+  <div class="tab" data-tab="scanned">ALL SCANNED</div>
 </nav>
 
-<div id="liveview">
-<section id="bestbuys">
-  <h2>BEST BUYS RIGHT NOW <span id="bbnote"></span></h2>
-  <div id="bblist"></div>
-</section>
-
-<table>
-  <thead><tr>
-    <th>Grade</th><th>State</th><th>Token</th><th>Age</th><th>Score</th><th>Liq</th><th>Liq:MC</th>
-    <th>B:S 5m</th><th>Δ5m</th><th>Moved</th><th>Insider</th><th>Smart</th><th>Open</th>
-  </tr></thead>
-  <tbody id="rows"></tbody>
-</table>
-<div id="empty"><b>SCANNING</b>New launches appear here once they pass the rug gates. Killed tokens show below in the scan feed.</div>
-
-<section id="seenpanel">
-  <h2>ALL SCANNED <span id="seencount"></span></h2>
-  <div id="seenhint">Every token detected, newest first. PENDING = seen, waiting for liquidity before gates run (most die here). Live view holds the recent ~150; full history is in the database.</div>
-  <div id="seenlist"></div>
-</section>
-
-<section id="histpanel">
-  <h2>FULL HISTORY <span id="histcount"></span></h2>
-  <button id="loadhist">LOAD FROM DATABASE</button>
-  <div id="histlist"></div>
-</section>
-
-<div id="reviewout"></div>
-
-<section id="analyticspanel">
-  <h2>ANALYTICS <span id="todaystats"></span></h2>
-  <div class="anagrid">
-    <div class="anablock">
-      <h3>TOP WALLETS <span id="walletcount"></span></h3>
-      <div class="anahint">Discovered by mining early buyers of our own 3x+ winners, ranked by measured hit rate on tokens they bought since.</div>
-      <div id="walletlist"></div>
-    </div>
-    <div class="anablock">
-      <h3>TOP COINS TODAY</h3>
-      <div class="anahint">Best realized multiple (from first score / kill price) among everything scanned in the last 24h — including ones the gates killed.</div>
-      <div id="topcoins"></div>
-    </div>
-    <div class="anablock">
-      <h3>MOST ACTIVE NOW</h3>
-      <div class="anahint">Live watchlist ranked by 5-minute volume.</div>
-      <div id="activenow"></div>
-    </div>
-  </div>
-</section>
-
-<section id="scanpanel">
-  <h2>SCAN FEED <span id="scancount"></span></h2>
-  <div id="scanlist"></div>
-</section>
+<div id="tab-live" class="tabpanel">
+  <section id="bestbuys">
+    <h2>BEST BUYS RIGHT NOW <span id="bbnote"></span></h2>
+    <div id="bblist"></div>
+  </section>
+  <table>
+    <thead><tr>
+      <th>Grade</th><th>State</th><th>Token</th><th>Age</th><th>Score</th><th>Liq</th><th>Liq:MC</th>
+      <th>B:S 5m</th><th>&Delta;5m</th><th>Moved</th><th>Insider</th><th>Smart</th><th>Open</th>
+    </tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div id="empty"><b>SCANNING</b>Coins appear here once they pass the rug gates. Killed tokens are in ALL SCANNED.</div>
+  <div id="reviewout"></div>
 </div>
 
-<div id="historyview" hidden>
-  <table>
-    <thead><tr><th>Seen</th><th>Token</th><th>Source</th><th>Result</th><th>State</th><th>Score</th><th>4h Result</th></tr></thead>
-    <tbody id="histrows"></tbody>
-  </table>
-  <button id="loadmore">Load older →</button>
+<div id="tab-wins" class="tabpanel">
+  <div id="winssummary"></div>
+  <div id="winslist"></div>
+</div>
+
+<div id="tab-wallets" class="tabpanel">
+  <section id="analyticspanel">
+    <h2>ANALYTICS <span id="todaystats"></span></h2>
+    <div class="anagrid">
+      <div class="anablock">
+        <h3>TOP WALLETS <span id="walletcount"></span></h3>
+        <div class="anahint">Discovered by mining early buyers of our own 3x+ winners, ranked by measured hit rate on tokens they bought since.</div>
+        <div id="walletlist"></div>
+      </div>
+      <div class="anablock">
+        <h3>TOP COINS TODAY</h3>
+        <div class="anahint">Best realized multiple among everything scanned in the last 24h, including gate-killed tokens.</div>
+        <div id="topcoins"></div>
+      </div>
+      <div class="anablock">
+        <h3>MOST ACTIVE NOW</h3>
+        <div class="anahint">Live watchlist ranked by 5-minute volume.</div>
+        <div id="activenow"></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div id="tab-scanned" class="tabpanel">
+  <section id="seenpanel">
+    <h2>ALL SCANNED <span id="seencount"></span></h2>
+    <div id="seenhint">Every token detected, newest first. PENDING = seen, waiting for liquidity before gates run.</div>
+    <div id="seenlist"></div>
+  </section>
+  <section id="scanpanel">
+    <h2>SCAN FEED <span id="scancount"></span></h2>
+    <div id="scanlist"></div>
+  </section>
+  <section id="histpanel">
+    <h2>FULL HISTORY <span id="histcount"></span></h2>
+    <button id="loadhist">LOAD FROM DATABASE</button>
+    <div id="histlist"></div>
+  </section>
 </div>
 
 <script>
@@ -426,6 +425,43 @@ $('loadhist').onclick = async () => {
 };
 
 const esc = s => (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+// ---- tab navigation ----
+function showTab(name){
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('.tabpanel').forEach(p => p.style.display = p.id === 'tab-'+name ? 'block' : 'none');
+  if (name === 'wins') loadWins();
+  if (name === 'wallets') loadAnalytics();
+}
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => showTab(t.dataset.tab));
+
+// ---- wins: the bot's real track record ----
+async function loadWins(){
+  try {
+    const d = await (await fetch('/api/wins')).json();
+    if (d.note) { document.getElementById('winslist').innerHTML = '<div class="wal"><span class="ty">'+esc(d.note)+'</span></div>'; return; }
+    if (d.summary) {
+      const s = d.summary;
+      const rate = s.triggered > 0 ? Math.round((s.won_2x / s.triggered) * 100) : 0;
+      document.getElementById('winssummary').innerHTML =
+        `<div class="winstat"><b>${s.triggered||0}</b> triggered</div><div class="winstat"><b>${s.won_2x||0}</b> hit 2x+ <span>(${rate}%)</span></div><div class="winstat"><b>${s.won_5x||0}</b> hit 5x+</div>`;
+    }
+    const el = document.getElementById('winslist');
+    el.innerHTML = (d.wins && d.wins.length)
+      ? d.wins.map(w => {
+          const when = new Date(w.triggered_at).toLocaleString();
+          const mult = parseFloat(w.best_multiple);
+          const cls = mult >= 5 ? 'big' : mult >= 2 ? 'mid' : '';
+          return `<div class="win"><span class="wm ${cls}">${w.best_multiple}x</span><span class="ws">$${esc(w.symbol||'?')}</span><span class="wsc">triggered @ score ${w.last_score||'?'}</span><span class="wt">${when}</span><a href="https://dexscreener.com/solana/${w.ca}" target="_blank" rel="noopener">chart</a></div>`;
+        }).join('')
+      : '<div class="win"><span class="ty">No wins logged yet. Triggered coins that go 1.5x+ appear here once outcomes are measured (needs Postgres + run time).</span></div>';
+  } catch { document.getElementById('winslist').innerHTML = '<div class="win"><span class="ty">wins fetch failed</span></div>'; }
+}
+loadWins();
+setInterval(() => { if (document.querySelector('.tab.active')?.dataset.tab === 'wins') loadWins(); }, 30000);
+
+showTab('live');
+
 </script>
 </body>
 </html>

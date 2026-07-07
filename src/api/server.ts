@@ -98,6 +98,29 @@ export function startServer() {
     } catch (e) { res.status(500).json({ error: (e as Error).message }); }
   });
 
+  app.get('/api/wins', async (_req, res) => {
+    if (!pool) { res.json({ wins: [], note: 'attach Postgres to track wins' }); return; }
+    try {
+      const r = await pool.query(
+        `SELECT t.ca, t.symbol, t.last_score, t.triggered_at, t.trigger_price,
+                ROUND(MAX(o.multiple_from_first)::numeric, 2) AS best_multiple
+         FROM tokens t JOIN outcomes o ON o.ca = t.ca
+         WHERE t.triggered_at IS NOT NULL AND t.trigger_price > 0
+         GROUP BY t.ca, t.symbol, t.last_score, t.triggered_at, t.trigger_price
+         HAVING MAX(o.multiple_from_first) >= 1.5
+         ORDER BY best_multiple DESC LIMIT 50`);
+      // summary: hit rate of everything we triggered
+      const summary = (await pool.query(
+        `SELECT COUNT(DISTINCT t.ca) AS triggered,
+                COUNT(DISTINCT t.ca) FILTER (WHERE m.best >= 2) AS won_2x,
+                COUNT(DISTINCT t.ca) FILTER (WHERE m.best >= 5) AS won_5x
+         FROM tokens t
+         JOIN (SELECT ca, MAX(multiple_from_first) best FROM outcomes GROUP BY ca) m ON m.ca = t.ca
+         WHERE t.triggered_at IS NOT NULL`)).rows[0];
+      res.json({ wins: r.rows, summary });
+    } catch (e) { res.status(500).json({ error: (e as Error).message }); }
+  });
+
   app.get('/api/bestbuys', (_req, res) => {
     const buys = activeTokens()
       .map(t => ({ t, r: rankToken(t) }))
