@@ -151,7 +151,7 @@
   .scan .v.PASS{color:var(--trigger)} .scan .v.KILL{color:var(--dying)}
   .scan .s{color:var(--txt);min-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .scan .r{color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-
+</style>
 </head>
 <body>
 <header>
@@ -314,46 +314,7 @@ function connect(){
     es.close(); setTimeout(connect, 3000);
   };
 }
-// ---- tab switching + history ----
-let histCursor = null, histLoading = false;
-document.querySelectorAll('.tab').forEach(btn => btn.onclick = () => {
-  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b === btn));
-  const isHist = btn.dataset.view === 'history';
-  $('liveview').hidden = isHist;
-  $('historyview').hidden = !isHist;
-  if (isHist && !$('histrows').children.length) loadHistory(true);
-});
-$('loadmore').onclick = () => loadHistory(false);
-
-async function loadHistory(reset){
-  if (histLoading) return; histLoading = true;
-  if (reset) { $('histrows').innerHTML = ''; histCursor = null; }
-  try {
-    const url = '/api/history?limit=100' + (histCursor ? '&before=' + encodeURIComponent(histCursor) : '');
-    const rows = await (await fetch(url)).json();
-    const tb = $('histrows');
-    for (const r of rows){
-      const tr = document.createElement('tr');
-      tr.className = 'row';
-      const when = new Date(r.first_seen);
-      const mult = r.multiple_4h != null ? Number(r.multiple_4h) : null;
-      const multCell = mult != null
-        ? `<span class="${mult >= 2 ? 'mult-win':'mult-loss'}">${mult.toFixed(2)}x</span>` : '—';
-      const resultCls = r.gate_result === 'passed' ? 'pos' : r.gate_result === 'failed' ? 'neg' : 'mut';
-      tr.innerHTML = `<td class="mut">${when.toLocaleString()}</td>
-        <td><span class="sym">$${esc(r.symbol)}</span></td>
-        <td class="mut">${esc(r.source)}</td>
-        <td class="${resultCls}">${r.gate_result || 'pending'}${r.gate_fail_reason ? ' ('+esc(r.gate_fail_reason)+')' : ''}</td>
-        <td>${r.last_state || '—'}</td>
-        <td>${r.last_score ?? '—'}</td>
-        <td>${multCell}</td>`;
-      tb.appendChild(tr);
-      histCursor = r.first_seen;
-    }
-    $('loadmore').style.display = rows.length < 100 ? 'none' : 'block';
-  } catch { $('histrows').innerHTML = '<tr><td colspan="7" class="mut" style="padding:20px">History needs the Postgres database. Add the plugin on Railway.</td></tr>'; }
-  histLoading = false;
-}
+// ---- (legacy dual-view history removed; history now lives in the SCANNED tab via loadhist) ----
 
 connect();
 setInterval(async () => {
