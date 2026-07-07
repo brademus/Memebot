@@ -4,8 +4,17 @@ import path from 'path';
 import { env } from './config';
 import { TokenRecord } from './types';
 
+// SSL: Railway's internal hostnames (*.railway.internal) speak plain TCP — forcing SSL
+// there breaks the connection. Public proxy URLs accept TLS. Detect by hostname.
+function sslFor(url: string) {
+  try {
+    const host = new URL(url).hostname;
+    if (host.endsWith('.railway.internal') || host === 'localhost') return undefined;
+    return { rejectUnauthorized: false };
+  } catch { return undefined; }
+}
 export const pool = env.DATABASE_URL
-  ? new Pool({ connectionString: env.DATABASE_URL, ssl: env.DATABASE_URL.includes('railway') ? { rejectUnauthorized: false } : undefined })
+  ? new Pool({ connectionString: env.DATABASE_URL, ssl: sslFor(env.DATABASE_URL) })
   : null;
 
 export async function initDb() {

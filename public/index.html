@@ -346,26 +346,38 @@ function renderScans(scans){
 }
 
 $('report').onclick = async () => {
+  const out = $('reviewout');
+  out.style.display = 'block';
+  out.textContent = 'Building report…';
+  out.scrollIntoView({ behavior: 'smooth', block: 'start' });
   try {
-    const d = await (await fetch('/api/report')).json();
+    const r = await fetch('/api/report');
+    const d = await r.json();
     const txt = JSON.stringify(d, null, 2);
-    await navigator.clipboard.writeText(txt);
-    $('report').textContent = 'COPIED ✓';
-    setTimeout(() => $('report').textContent = 'WEEKLY REPORT', 2000);
-  } catch {
-    $('report').textContent = 'FETCH FAILED';
-    setTimeout(() => $('report').textContent = 'WEEKLY REPORT', 2000);
+    out.textContent = txt;
+    // clipboard is best-effort (iPad Safari often blocks it) — never fail the flow on it
+    try { await navigator.clipboard.writeText(txt); $('report').textContent = 'SHOWN + COPIED ✓'; }
+    catch { $('report').textContent = 'SHOWN BELOW ✓'; }
+  } catch (e) {
+    out.textContent = 'Report failed: ' + (e && e.message ? e.message : 'network error');
+    $('report').textContent = 'WEEKLY REPORT';
+    return;
   }
+  setTimeout(() => $('report').textContent = 'WEEKLY REPORT', 2500);
 };
 
 $('aireview').onclick = async () => {
+  const out = $('reviewout');
+  out.style.display = 'block';
+  out.textContent = 'AI review running — reads the full outcomes DB + config, usually 15-60 seconds…';
+  out.scrollIntoView({ behavior: 'smooth', block: 'start' });
   $('aireview').textContent = 'ANALYZING…';
   try {
     const d = await (await fetch('/api/ai-review')).json();
-    const out = $('reviewout');
-    out.style.display = 'block';
-    out.textContent = d.review || d.note || d.error || 'no output';
-  } catch { $('reviewout').style.display = 'block'; $('reviewout').textContent = 'review failed'; }
+    out.textContent = d.review || d.note || d.error || 'No output returned — check GEMINI_API_KEY and model names in config.yaml (see Railway logs for [gemini] errors).';
+  } catch (e) {
+    out.textContent = 'Review failed: ' + (e && e.message ? e.message : 'network error') + ' — check Railway logs for [gemini] lines.';
+  }
   $('aireview').textContent = 'AI REVIEW';
 };
 

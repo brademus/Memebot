@@ -16,8 +16,10 @@ function seedCurve(t: any, msg: any) {
   t.mcapUsd = mcapSol * SOL_USD;
   t.dex = 'pumpfun';
   t.dexId = 'pumpfun';
-  // dev's initial buy counts as first buy pressure
+  // dev's initial buy counts as first buy pressure + record its size (big dev bag = risk)
   if (msg.initialBuy || msg.solAmount) t.buys5m = 1;
+  if (msg.initialBuy) t.devBuyPct = Math.min(100, (msg.initialBuy / 1e9) * 100);   // pump.fun supply = 1B
+  t.curveSamples = [{ sol: solInCurve, at: Date.now() }];
 }
 
 function applyCurveTrade(msg: any) {
@@ -26,8 +28,17 @@ function applyCurveTrade(msg: any) {
   // keep curve reserves fresh so liquidity/mcap track reality pre-graduation
   if (msg.vSolInBondingCurve) { t.curveSol = msg.vSolInBondingCurve; t.liquidityUsd = msg.vSolInBondingCurve * SOL_USD; }
   if (msg.marketCapSol) t.mcapUsd = msg.marketCapSol * SOL_USD;
-  if (msg.txType === 'buy') { t.buys5m++; t.uniqueBuyerSamples.push(t.buys5m); if (t.uniqueBuyerSamples.length > 6) t.uniqueBuyerSamples.shift(); }
-  else if (msg.txType === 'sell') t.sells5m++;
+  if (msg.txType === 'buy') {
+    t.buys5m++;
+    t.uniqueBuyerSamples.push(t.buys5m);
+    if (t.uniqueBuyerSamples.length > 6) t.uniqueBuyerSamples.shift();
+    // distinct buyer wallets — the real organic-demand signal (capped to bound memory)
+    const buyer = msg.traderPublicKey;
+    if (buyer && !t.uniqueBuyers.includes(buyer) && t.uniqueBuyers.length < 500) t.uniqueBuyers.push(buyer);
+  } else if (msg.txType === 'sell') t.sells5m++;
+  // rolling curve-SOL history for demand velocity (keep ~3 min of samples)
+  t.curveSamples.push({ sol: t.curveSol, at: Date.now() });
+  if (t.curveSamples.length > 60) t.curveSamples.shift();
   // update price from curve: price per token ≈ (SOL reserve / token reserve) * SOL_USD
   if (msg.vSolInBondingCurve && msg.vTokensInBondingCurve)
     t.priceUsd = (msg.vSolInBondingCurve / msg.vTokensInBondingCurve) * SOL_USD;

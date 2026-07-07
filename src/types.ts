@@ -16,6 +16,9 @@ export interface TokenRecord {
   pairAddress: string | null;
   dex: string | null;                // 'pumpfun' (bonding curve) | 'pumpswap' | 'raydium' | ...
   curveSol: number;                  // native SOL in bonding curve (price-independent gating)
+  curveSamples: { sol: number; at: number }[];   // rolling curve-SOL history -> demand velocity
+  uniqueBuyers: string[];            // distinct buyer wallets seen on curve trades (capped)
+  devBuyPct: number;                 // % of supply the deployer bought at creation
   dexId: string | null;              // 'pumpfun' = still on bonding curve; 'pumpswap'/'raydium' = graduated
   // gate
   gated: boolean | null;             // null = pending
