@@ -6,6 +6,7 @@ import { scoreToken } from './scoring/score';
 import { updateState } from './scoring/states';
 import { alertTrigger } from './alerts/telegram';
 import { startOutcomeLogger } from './outcomes/logger';
+import { startLadderMonitor } from './alerts/ladder';
 import { startAutotune } from './tuning/autotune';
 import { generateNote } from './ai/analyst';
 import { startServer, broadcast } from './api/server';
@@ -36,6 +37,7 @@ async function main() {
   await refreshSol();
   setInterval(refreshSol, 5 * 60_000);
   startOutcomeLogger();
+  startLadderMonitor();
 
   // wallet subsystems: discovery mines winners for smart wallets; tracker watches them live
   startWalletDiscovery();

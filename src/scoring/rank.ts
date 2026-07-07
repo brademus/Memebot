@@ -19,6 +19,19 @@ export interface Rank {
 export function rankToken(t: TokenRecord): Rank {
   const cautions: string[] = [];
 
+  // ---- play-type classification (research strategy modes b/c/d) ----
+  const bonded = Math.max(0, t.curveSol - 30);
+  if (t.dex === 'pumpswap') {
+    t.playType = 'GRADUATION';
+    // research: most graduates retrace hard; buying the migration candle = late
+    const moved0 = t.firstScorePrice && t.priceUsd ? ((t.priceUsd / t.firstScorePrice) - 1) * 100 : 0;
+    if (moved0 < -30) t.playType = 'DIP';   // survived + retraced = dip-buy archetype
+  } else if (t.dex === 'pumpfun' && bonded / 55 > 0.85) {
+    t.playType = 'GRADUATION';              // curve >85% — migration imminent
+  } else if (t.dex === 'pumpfun') {
+    t.playType = 'MOMENTUM';
+  }
+
   // ---- timing from state + how far it's moved since we first scored it ----
   const moved = t.firstScorePrice && t.priceUsd
     ? ((t.priceUsd / t.firstScorePrice) - 1) * 100 : 0;
@@ -33,6 +46,13 @@ export function rankToken(t: TokenRecord): Rank {
   const buyRatio = t.sells5m > 0 ? t.buys5m / t.sells5m : (t.buys5m || 0);
   if (buyRatio < 1 && t.buys5m + t.sells5m > 5) cautions.push('sells outpacing buys');
   if (t.liquidityUsd > 0 && t.mcapUsd > 0 && t.liquidityUsd / t.mcapUsd < 0.05) cautions.push('thin liquidity vs mcap');
+  // research-backed cautions
+  if (t.socials.fetched && !t.socials.x && !t.socials.tg && !t.socials.web)
+    cautions.push('no socials (bare launches graduate 17x less)');
+  if (t.devBuyPct > 7) cautions.push(`dev holds ${t.devBuyPct.toFixed(1)}% (dump risk)`);
+  if (t.dex === 'pumpswap') cautions.push('post-graduation: most graduates retrace hard');
+  const spread = t.totalBuys > 5 ? t.uniqueBuyers.length / t.totalBuys : 1;
+  if (t.totalBuys > 10 && spread < 0.3) cautions.push('bot-churn pattern (few wallets, many trades)');
 
   // ---- confidence: how much do we actually KNOW about this token ----
   // high only when bundle data exists AND smart money confirms AND it's had time to develop

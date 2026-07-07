@@ -73,6 +73,7 @@
 
   .sym{font-weight:600}
   .name{color:var(--dim);font-size:11px}
+  .socials{color:var(--trigger);font-size:10px;letter-spacing:2px}
   /* the fuse: 4h window burning down under each ticker */
   .fuse{height:3px;background:var(--line);margin-top:4px;width:110px}
   .fuse i{display:block;height:100%;background:var(--heating)}
@@ -276,9 +277,9 @@ function render(data){
     const movedCls = t.movedPct >= 40 ? 'moved-hot' : t.movedPct > 0 ? 'pos' : 'mut';
     const g = t.rank || {grade:'—',timing:'',confidence:''};
     tr.innerHTML = `
-      <td><span class="grade grade-${g.grade.replace('+','plus')}" title="${esc(g.label||'')} · confidence: ${g.confidence}">${g.grade}</span><div class="timing t-${g.timing}">${g.timing}</div></td>
+      <td><span class="grade grade-${g.grade.replace('+','plus')}" title="${esc(g.label||'')} · confidence: ${g.confidence}">${g.grade}</span><div class="timing t-${g.timing}">${g.timing}${t.play ? ' · '+t.play : ''}</div></td>
       <td><span class="chip ${t.state}">${t.state}</span></td>
-      <td><span class="sym">$${esc(t.symbol)}</span> <span class="name">${esc(t.name).slice(0,20)}</span>
+      <td><span class="sym">$${esc(t.symbol)}</span> <span class="socials">${t.socials ? (t.socials.tg?'✆':'')+(t.socials.x?'𝕏':'')+(t.socials.web?'◍':'') : ''}</span> <span class="name">${esc(t.name).slice(0,20)}</span>
           <div class="fuse" title="${MAX_AGE - t.ageMin}m left in window"><i style="width:${fusePct}%"></i></div></td>
       <td>${t.ageMin}m</td>
       <td><span class="score" title="fresh ${t.subs.freshness} | liq ${t.subs.liquidity} | buy ${t.subs.buyPressure} | hold ${t.subs.holderGrowth}">${t.score}</span></td>

@@ -210,5 +210,8 @@ function pick(t: TokenRecord) {
     aiNote: t.aiNote,
     pair: t.pairAddress,
     rank: rankToken(t),
+    play: t.playType,
+    socials: t.socials,
+    devPct: +t.devBuyPct.toFixed(1),
   };
 }

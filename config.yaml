@@ -14,6 +14,7 @@ gates:
   min_liquidity_usd: 12000            # AMM-pool tokens
   min_liquidity_sol_curve: 8            # bonding-curve floor in SOL (price-independent). Fresh curve ~30 SOL; 8 filters dead sub-launches
   rugcheck_score_max: 5000            # RugCheck risk score ceiling (lower = safer)
+  require_social: false               # true = hard-kill tokens with no X/TG/website (17x differential; off by default since metadata fetch can lag)
 
 deployer:
   enabled: true                       # requires HELIUS_API_KEY; skipped if absent
@@ -32,12 +33,14 @@ age:
   max_token_age_minutes: 240          # drop from active feed after 4h
   freshness_half_life_minutes: 90     # decay curve for freshness score
 
-weights:                              # must sum to 100; auto-renormalized if wallet list is empty
-  freshness: 20
-  liquidity_health: 20
-  buy_pressure: 25
-  holder_growth: 15
-  smart_money: 20
+weights:                              # research-ranked (must sum to 100)
+  velocity: 25                        # liquidity velocity — strongest academic predictor of winners
+  organic: 20                         # unique-buyer spread + growth — non-bot participation proxy
+  social: 15                          # X/Telegram/website presence — 17x graduation lift (Telegram strongest)
+  buy_pressure: 15                    # volume-damped buys:sells
+  freshness: 10                       # age decay in the 0-4h window
+  smart_money: 15                     # tracked-wallet confluence (secondary per research — non-monotonic)
+
 
 states:
   heating_score_min: 45

@@ -19,6 +19,11 @@ export interface TokenRecord {
   curveSamples: { sol: number; at: number }[];   // rolling curve-SOL history -> demand velocity
   uniqueBuyers: string[];            // distinct buyer wallets seen on curve trades (capped)
   devBuyPct: number;                 // % of supply the deployer bought at creation
+  totalBuys: number;                 // cumulative buy count (liquidity-velocity denominator)
+  totalSells: number;
+  socials: { x: boolean; tg: boolean; web: boolean; fetched: boolean };  // 17x graduation lift signal
+  playType: 'MOMENTUM' | 'GRADUATION' | 'DIP' | null;
+  laddersFired: number[];            // exit-ladder levels already alerted (2, 5, ...)
   dexId: string | null;              // 'pumpfun' = still on bonding curve; 'pumpswap'/'raydium' = graduated
   // gate
   gated: boolean | null;             // null = pending
@@ -53,6 +58,7 @@ export interface AppConfig {
     min_liquidity_sol_curve: number;
     curve_min_liquidity_usd: number;
     rugcheck_score_max: number;
+    require_social: boolean;
   };
   deployer: {
     enabled: boolean;
@@ -68,7 +74,7 @@ export interface AppConfig {
     total_supply: number;
   };
   age: { max_token_age_minutes: number; freshness_half_life_minutes: number };
-  weights: { freshness: number; liquidity_health: number; buy_pressure: number; holder_growth: number; smart_money: number };
+  weights: { velocity: number; organic: number; social: number; buy_pressure: number; freshness: number; smart_money: number };
   ai: { enabled: boolean; note_model: string; review_model: string };
   wallets: {
     enabled: boolean;

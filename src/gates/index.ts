@@ -27,6 +27,11 @@ export async function runGates(t: TokenRecord): Promise<string | null> {
   const dep = await checkDeployer(t.creator);
   if (!dep.pass) return dep.reason;
 
+  // social presence gate (optional): bare launches graduate at 0.11% vs 1.9% with
+  // full socials — 17x differential. Off by default (metadata fetch can lag creates).
+  if (g.require_social && t.socials.fetched && !t.socials.x && !t.socials.tg && !t.socials.web)
+    return 'no_socials';
+
   // bundle / same-block insider detection — two Helius calls
   const b = await checkBundle(t);
   if (!b.pass) return b.reason;

@@ -1,6 +1,7 @@
 import WebSocket from 'ws';
 import { addToken, getToken } from '../store';
 import { bumpDeployer } from '../db';
+import { fetchSocials } from './metadata';
 
 // SOL price proxy for converting curve SOL -> USD. Refreshed opportunistically; a
 // rough constant is fine for gating thresholds (we care about magnitude, not cents).
@@ -30,12 +31,13 @@ function applyCurveTrade(msg: any) {
   if (msg.marketCapSol) t.mcapUsd = msg.marketCapSol * SOL_USD;
   if (msg.txType === 'buy') {
     t.buys5m++;
+    t.totalBuys++;
     t.uniqueBuyerSamples.push(t.buys5m);
     if (t.uniqueBuyerSamples.length > 6) t.uniqueBuyerSamples.shift();
     // distinct buyer wallets — the real organic-demand signal (capped to bound memory)
     const buyer = msg.traderPublicKey;
     if (buyer && !t.uniqueBuyers.includes(buyer) && t.uniqueBuyers.length < 500) t.uniqueBuyers.push(buyer);
-  } else if (msg.txType === 'sell') t.sells5m++;
+  } else if (msg.txType === 'sell') { t.sells5m++; t.totalSells++; }
   // rolling curve-SOL history for demand velocity (keep ~3 min of samples)
   t.curveSamples.push({ sol: t.curveSol, at: Date.now() });
   if (t.curveSamples.length > 60) t.curveSamples.shift();
@@ -60,7 +62,8 @@ function connect(onNew: (ca: string) => void) {
   ws.on('open', () => {
     backoff = 1000;
     ws!.send(JSON.stringify({ method: 'subscribeNewToken' }));
-    console.log('[pumpfun] connected, subscribed to new tokens');
+    ws!.send(JSON.stringify({ method: 'subscribeMigration' }));
+    console.log('[pumpfun] connected, subscribed to new tokens + migrations');
   });
 
   ws.on('message', (raw: WebSocket.RawData) => {
@@ -78,6 +81,7 @@ function connect(onNew: (ca: string) => void) {
           // seed curve liquidity/mcap from the create event so the gate can run
           // IMMEDIATELY, without waiting for Dexscreener to index the token
           seedCurve(t, msg);
+          fetchSocials(t, msg.uri);   // async — 17x-lift signal, resolves within seconds
           if (t.creator) bumpDeployer(t.creator);
           // subscribe to this token's trades to track real curve buy pressure
           ws!.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: [msg.mint] }));
@@ -86,6 +90,15 @@ function connect(onNew: (ca: string) => void) {
       } else if (msg.mint && (msg.txType === 'buy' || msg.txType === 'sell')) {
         // live curve trade — update buy/sell counts and curve reserves
         applyCurveTrade(msg);
+      } else if (msg.mint && (msg.txType === 'migrate' || msg.txType === 'migration')) {
+        // token graduated -> PumpSwap. This is a distinct play type: proven demand,
+        // but research warns most graduates retrace hard — flag, don't celebrate.
+        const t = getToken(msg.mint);
+        if (t) {
+          t.dex = 'pumpswap'; t.dexId = 'pumpswap';
+          t.playType = 'GRADUATION';
+          console.log(`[pumpfun] 🎓 GRADUATED $${t.symbol} -> PumpSwap`);
+        }
       }
     } catch { /* ignore malformed frames */ }
   });
