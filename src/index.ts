@@ -5,6 +5,7 @@ import { runGates } from './gates';
 import { scoreToken } from './scoring/score';
 import { updateState } from './scoring/states';
 import { alertTrigger } from './alerts/telegram';
+import { explainTrigger } from './alerts/explain';
 import { startOutcomeLogger } from './outcomes/logger';
 import { startWalletTracker } from './ingest/wallets';
 import { startAutotune } from './tuning/autotune';

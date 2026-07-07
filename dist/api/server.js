@@ -10,6 +10,7 @@ const path_1 = __importDefault(require("path"));
 const config_1 = require("../config");
 const store_1 = require("../store");
 const db_1 = require("../db");
+const db_2 = require("../db");
 const autotune_1 = require("../tuning/autotune");
 const clients = new Set();
 function startServer() {
@@ -19,13 +20,13 @@ function startServer() {
     // full history from Postgres (everything ever seen), cursor-paged
     app.get('/api/history', async (req, res) => {
         const before = req.query.before || null;
-        const rows = await (0, db_1.fetchHistory)(before, parseInt(req.query.limit || '100', 10));
+        const rows = await (0, db_2.fetchHistory)(before, parseInt(req.query.limit || '100', 10));
         res.json(rows);
     });
     // autotune's latest weight suggestion (apply manually in config.yaml)
     app.get('/api/tuning', (_req, res) => res.json((0, autotune_1.latestSuggestion)()));
     // smart-wallet admin — write ops require ADMIN_KEY header
-    app.get('/api/wallets', async (_req, res) => res.json(await (0, db_1.listSmartWallets)()));
+    app.get('/api/wallets', async (_req, res) => res.json(await (0, db_2.listSmartWallets)()));
     app.post('/api/wallets', async (req, res) => {
         if (!config_1.env.ADMIN_KEY || req.header('x-admin-key') !== config_1.env.ADMIN_KEY)
             return res.status(401).json({ error: 'set ADMIN_KEY env var and pass x-admin-key header' });
@@ -33,7 +34,7 @@ function startServer() {
         if (!wallet || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(wallet))
             return res.status(400).json({ error: 'invalid wallet address' });
         try {
-            await (0, db_1.addSmartWallet)(wallet, type || 'unspecified');
+            await (0, db_2.addSmartWallet)(wallet, type || 'unspecified');
             res.json({ ok: true, wallet });
         }
         catch (e) {
@@ -44,7 +45,7 @@ function startServer() {
         if (!config_1.env.ADMIN_KEY || req.header('x-admin-key') !== config_1.env.ADMIN_KEY)
             return res.status(401).json({ error: 'unauthorized' });
         try {
-            await (0, db_1.removeSmartWallet)(req.params.wallet);
+            await (0, db_2.removeSmartWallet)(req.params.wallet);
             res.json({ ok: true });
         }
         catch (e) {
@@ -60,6 +61,23 @@ function startServer() {
         res.write(`data: ${JSON.stringify(payload())}\n\n`);
         clients.add(res);
         req.on('close', () => clients.delete(res));
+    });
+    // full history straight from Postgres — everything ever logged, paged
+    app.get('/api/history', async (req, res) => {
+        if (!db_1.pool) {
+            res.json({ rows: [], note: 'no database attached' });
+            return;
+        }
+        const offset = parseInt(String(req.query.offset || '0'), 10) || 0;
+        try {
+            const r = await db_1.pool.query(`SELECT ca, symbol, name, source, first_seen, gate_result, gate_fail_reason, last_state, last_score
+         FROM tokens ORDER BY first_seen DESC LIMIT 500 OFFSET $1`, [offset]);
+            const c = await db_1.pool.query(`SELECT COUNT(*)::int AS n FROM tokens`);
+            res.json({ total: c.rows[0].n, offset, rows: r.rows });
+        }
+        catch (e) {
+            res.status(500).json({ error: e.message });
+        }
     });
     app.get('/api/stats', (_req, res) => {
         const all = (0, store_1.allTokens)();
@@ -122,6 +140,7 @@ function pick(t) {
         buys: t.buys5m, sells: t.sells5m, chg5m: t.priceChange5m,
         movedPct: t.firstScorePrice && t.priceUsd ? +(((t.priceUsd / t.firstScorePrice) - 1) * 100).toFixed(1) : 0,
         insider: t.bundle ? t.bundle.insiderPct : null,
+        why: t.why,
         funded: t.bundle ? t.bundle.fundedSnipers : 0,
         smart: new Set(t.smartHits.map(h => h.wallet)).size,
         aiNote: t.aiNote,

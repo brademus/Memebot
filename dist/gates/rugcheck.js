@@ -6,7 +6,8 @@ exports.fetchRugReport = fetchRugReport;
 async function fetchRugReport(ca) {
     const fail = {
         mintAuthorityRevoked: false, freezeAuthorityInactive: false,
-        top3HolderPct: 100, topHolderPct: 100, lpLockedOrBurned: false, riskScore: 99999, ok: false,
+        top3HolderPct: 100, topHolderPct: 100, lpLockedOrBurned: false, riskScore: 99999,
+        preGraduation: false, ok: false,
     };
     try {
         const res = await fetch(`https://api.rugcheck.xyz/v1/tokens/${ca}/report`, {
@@ -23,14 +24,19 @@ async function fetchRugReport(ca) {
             const owner = (h.owner || '').toLowerCase();
             return !(r.markets || []).some((m) => [m.liquidityA, m.liquidityB, m.lp?.lpMint].filter(Boolean).map((x) => x.toLowerCase()).includes(owner));
         });
-        const pcts = nonLp.map((h) => h.pct || 0).sort((a, b) => b - a);
+        const preGraduation = !(r.markets || []).length;
+        let pcts = nonLp.map((h) => h.pct || 0).sort((a, b) => b - a);
+        // pre-graduation: the bonding curve account is normally the largest "holder" —
+        // it's protocol-held supply, not a dumper. Exclude the single largest entry.
+        if (preGraduation && pcts.length)
+            pcts = pcts.slice(1);
         const topHolderPct = pcts[0] || 0;
         const top3HolderPct = pcts.slice(0, 3).reduce((s, x) => s + x, 0);
         // LP status: any market with lpLocked pct high, or LP tokens burned
         const lpLockedOrBurned = (r.markets || []).some((m) => (m.lp?.lpLockedPct || 0) >= 90 || (m.lp?.lpBurned === true));
         return {
             mintAuthorityRevoked, freezeAuthorityInactive,
-            top3HolderPct, topHolderPct, lpLockedOrBurned,
+            top3HolderPct, topHolderPct, lpLockedOrBurned, preGraduation,
             riskScore: r.score ?? r.score_normalised ?? 0,
             ok: true,
         };

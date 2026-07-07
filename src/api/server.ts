@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { env } from '../config';
 import { activeTokens, allTokens, recentScans } from '../store';
+import { pool } from '../db';
 import { fetchHistory, addSmartWallet, removeSmartWallet, listSmartWallets } from '../db';
 import { latestSuggestion } from '../tuning/autotune';
 import { TokenRecord } from '../types';
@@ -51,6 +52,19 @@ export function startServer() {
     res.write(`data: ${JSON.stringify(payload())}\n\n`);
     clients.add(res);
     req.on('close', () => clients.delete(res));
+  });
+
+  // full history straight from Postgres — everything ever logged, paged
+  app.get('/api/history', async (req, res) => {
+    if (!pool) { res.json({ rows: [], note: 'no database attached' }); return; }
+    const offset = parseInt(String(req.query.offset || '0'), 10) || 0;
+    try {
+      const r = await pool.query(
+        `SELECT ca, symbol, name, source, first_seen, gate_result, gate_fail_reason, last_state, last_score
+         FROM tokens ORDER BY first_seen DESC LIMIT 500 OFFSET $1`, [offset]);
+      const c = await pool.query(`SELECT COUNT(*)::int AS n FROM tokens`);
+      res.json({ total: c.rows[0].n, offset, rows: r.rows });
+    } catch (e) { res.status(500).json({ error: (e as Error).message }); }
   });
 
   app.get('/api/stats', (_req, res) => {
@@ -116,6 +130,7 @@ function pick(t: TokenRecord) {
     buys: t.buys5m, sells: t.sells5m, chg5m: t.priceChange5m,
     movedPct: t.firstScorePrice && t.priceUsd ? +(((t.priceUsd / t.firstScorePrice) - 1) * 100).toFixed(1) : 0,
     insider: t.bundle ? t.bundle.insiderPct : null,
+    why: t.why,
     funded: t.bundle ? t.bundle.fundedSnipers : 0,
     smart: new Set(t.smartHits.map(h => h.wallet)).size,
     aiNote: t.aiNote,

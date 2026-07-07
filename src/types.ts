@@ -27,6 +27,7 @@ export interface TokenRecord {
   // holder proxy tracking
   uniqueBuyerSamples: number[];      // rolling buys5m samples for growth calc
   bundle: { insiderPct: number; slot0Buyers: number; fundedSnipers: number } | null;
+  why: string | null;          // AI rationale, generated at TRIGGER
   aiNote: string | null;             // analyst thesis, generated once on TRIGGER
   smartHits: { wallet: string; at: number }[];
   ai: { verdict: string; confidence: number; thesis: string; risks: string } | null;

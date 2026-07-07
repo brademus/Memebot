@@ -12,7 +12,7 @@ export function addToken(partial: Pick<TokenRecord, 'ca' | 'symbol' | 'name' | '
     firstSeen: Date.now(),
     priceUsd: 0, liquidityUsd: 0, mcapUsd: 0, vol5m: 0, buys5m: 0, sells5m: 0, priceChange5m: 0,
     pairAddress: null, dex: null, dexId: null,
-    gated: null, gateFailReason: null, bundle: null, aiNote: null, smartHits: [], ai: null,
+    gated: null, gateFailReason: null, bundle: null, why: null, aiNote: null, smartHits: [], ai: null,
     score: 0, peakScore: 0, firstScorePrice: null,
     subs: { freshness: 0, liquidity: 0, buyPressure: 0, holderGrowth: 0, smartMoney: 0 },
     uniqueBuyerSamples: [],

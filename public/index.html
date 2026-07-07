@@ -89,6 +89,19 @@
   .mult-loss{color:var(--dim)}
   #loadmore{margin:20px;background:none;border:1px solid var(--line);color:var(--txt);padding:8px 18px;font:13px 'IBM Plex Mono';cursor:pointer}
   #loadmore:hover{border-color:var(--trigger)}
+  #histpanel{border-top:1px solid var(--line);margin-top:24px;padding:14px 20px}
+  #histpanel h2{font-family:'Barlow Condensed';font-weight:600;font-size:15px;letter-spacing:.12em;color:var(--dim);margin-bottom:10px}
+  #histpanel h2 span{font-weight:500;color:var(--ext)}
+  #loadhist{background:none;border:1px solid var(--line);color:var(--dim);padding:6px 14px;font:12px 'IBM Plex Mono';cursor:pointer;margin-bottom:10px}
+  #loadhist:hover{color:var(--txt);border-color:var(--dim)}
+  .hist{display:flex;gap:14px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line);font-size:12px}
+  .hist .d{color:var(--ext);min-width:120px}
+  .hist .v{font-family:'Barlow Condensed';font-weight:600;min-width:44px}
+  .hist .v.passed{color:var(--trigger)} .hist .v.failed{color:var(--dying)} .hist .v.none{color:var(--ext)}
+  .hist .s{color:var(--txt);min-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hist .r{color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+  .hist a{color:var(--dim)}
+
   #scanpanel{border-top:1px solid var(--line);margin-top:24px;padding:14px 20px 40px}
   #scanpanel h2{font-family:'Barlow Condensed';font-weight:600;font-size:15px;letter-spacing:.12em;color:var(--dim);margin-bottom:10px}
   #scanpanel h2 span{font-weight:500;color:var(--ext)}
@@ -130,6 +143,12 @@
   <h2>ALL SCANNED <span id="seencount"></span></h2>
   <div id="seenhint">Every token detected, newest first. PENDING = seen, waiting for liquidity before gates run (most die here). Live view holds the recent ~150; full history is in the database.</div>
   <div id="seenlist"></div>
+</section>
+
+<section id="histpanel">
+  <h2>FULL HISTORY <span id="histcount"></span></h2>
+  <button id="loadhist">LOAD FROM DATABASE</button>
+  <div id="histlist"></div>
 </section>
 
 <section id="scanpanel">
@@ -293,6 +312,22 @@ function renderScans(scans){
     return `<div class="scan"><span class="t">${ago}m ago</span><span class="v ${s.verdict}">${s.verdict}</span><span class="s">$${esc(s.symbol)}</span><span class="r">${esc(s.reason || 'passed all gates')}</span></div>`;
   }).join('') || '<div class="scan"><span class="r">Nothing gated yet — new mints need liquidity before gates run.</span></div>';
 }
+
+let histOffset = 0;
+$('loadhist').onclick = async () => {
+  try {
+    const d = await (await fetch('/api/history?offset=' + histOffset)).json();
+    if (d.note) { $('histlist').innerHTML = '<div class="hist"><span class="r">' + esc(d.note) + '</span></div>'; return; }
+    $('histcount').textContent = `— ${d.total} total`;
+    $('histlist').innerHTML += d.rows.map(r => {
+      const verdict = r.gate_result || 'none';
+      const when = new Date(r.first_seen).toLocaleString();
+      return `<div class="hist"><span class="d">${when}</span><span class="v ${verdict}">${verdict === 'passed' ? 'PASS' : verdict === 'failed' ? 'KILL' : '—'}</span><span class="s">$${esc(r.symbol || '?')}</span><span class="r">${esc(r.gate_fail_reason || r.last_state || '')}</span><a href="https://dexscreener.com/solana/${r.ca}" target="_blank" rel="noopener">chart</a></div>`;
+    }).join('');
+    histOffset += d.rows.length;
+    $('loadhist').textContent = d.rows.length < 500 ? 'ALL LOADED' : 'LOAD 500 MORE';
+  } catch { $('histlist').innerHTML = '<div class="hist"><span class="r">history fetch failed</span></div>'; }
+};
 
 const esc = s => (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 </script>
