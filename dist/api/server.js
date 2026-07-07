@@ -12,6 +12,7 @@ const store_1 = require("../store");
 const db_1 = require("../db");
 const report_1 = require("./report");
 const reviewer_1 = require("../ai/reviewer");
+const analytics_1 = require("./analytics");
 const db_2 = require("../db");
 const autotune_1 = require("../tuning/autotune");
 const clients = new Set();
@@ -112,6 +113,14 @@ function startServer() {
         try {
             const r = await (0, reviewer_1.runAiReview)();
             res.json(r.review ? { review: r.review } : { note: 'GEMINI_API_KEY not set — review unavailable' });
+        }
+        catch (e) {
+            res.status(500).json({ error: e.message });
+        }
+    });
+    app.get('/api/analytics', async (_req, res) => {
+        try {
+            res.json(await (0, analytics_1.buildAnalytics)());
         }
         catch (e) {
             res.status(500).json({ error: e.message });

@@ -94,10 +94,13 @@
   .mult-loss{color:var(--dim)}
   #loadmore{margin:20px;background:none;border:1px solid var(--line);color:var(--txt);padding:8px 18px;font:13px 'IBM Plex Mono';cursor:pointer}
   #loadmore:hover{border-color:var(--trigger)}
-  #walletpanel{border-top:1px solid var(--line);margin-top:24px;padding:14px 20px}
-  #walletpanel h2{font-family:'Barlow Condensed';font-weight:600;font-size:15px;letter-spacing:.12em;color:var(--dim);margin-bottom:4px}
-  #walletpanel h2 span{font-weight:500;color:var(--ext)}
-  #wallethint{color:var(--ext);font-size:11px;margin-bottom:10px;max-width:640px}
+  #analyticspanel{border-top:1px solid var(--line);margin-top:24px;padding:14px 20px}
+  #analyticspanel h2{font-family:'Barlow Condensed';font-weight:600;font-size:15px;letter-spacing:.12em;color:var(--dim);margin-bottom:10px}
+  #analyticspanel h2 span{font-weight:500;color:var(--ext);font-size:13px}
+  .anagrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:22px}
+  .anablock h3{font-family:'Barlow Condensed';font-weight:600;font-size:13px;letter-spacing:.1em;color:var(--dim);margin-bottom:4px}
+  .anablock h3 span{font-weight:500;color:var(--ext)}
+  .anahint{color:var(--ext);font-size:11px;margin-bottom:8px}
   .wal{display:flex;gap:12px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line);font-size:12px}
   .wal .ad{font-family:'IBM Plex Mono';color:var(--txt)}
   .wal .wn{color:var(--trigger);font-weight:600;min-width:70px}
@@ -172,10 +175,25 @@
 
 <div id="reviewout"></div>
 
-<section id="walletpanel">
-  <h2>TRACKED WALLETS <span id="walletcount"></span></h2>
-  <div id="wallethint">Wallets discovered by mining early buyers of tokens that already 3x'd. A wallet earns a slot after appearing early on 2+ separate winners — this list is built from winners the bot found, not public leaderboards. Populates once outcomes accumulate.</div>
-  <div id="walletlist"></div>
+<section id="analyticspanel">
+  <h2>ANALYTICS <span id="todaystats"></span></h2>
+  <div class="anagrid">
+    <div class="anablock">
+      <h3>TOP WALLETS <span id="walletcount"></span></h3>
+      <div class="anahint">Discovered by mining early buyers of our own 3x+ winners, ranked by measured hit rate on tokens they bought since.</div>
+      <div id="walletlist"></div>
+    </div>
+    <div class="anablock">
+      <h3>TOP COINS TODAY</h3>
+      <div class="anahint">Best realized multiple (from first score / kill price) among everything scanned in the last 24h — including ones the gates killed.</div>
+      <div id="topcoins"></div>
+    </div>
+    <div class="anablock">
+      <h3>MOST ACTIVE NOW</h3>
+      <div class="anahint">Live watchlist ranked by 5-minute volume.</div>
+      <div id="activenow"></div>
+    </div>
+  </div>
 </section>
 
 <section id="scanpanel">

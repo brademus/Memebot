@@ -5,6 +5,7 @@ import { activeTokens, allTokens, recentScans } from '../store';
 import { pool } from '../db';
 import { buildReport } from './report';
 import { runAiReview } from '../ai/reviewer';
+import { buildAnalytics } from './analytics';
 import { fetchHistory, addSmartWallet, removeSmartWallet, listSmartWallets } from '../db';
 import { latestSuggestion } from '../tuning/autotune';
 import { TokenRecord } from '../types';
@@ -94,6 +95,11 @@ export function startServer() {
       const r = await runAiReview();
       res.json(r.review ? { review: r.review } : { note: 'GEMINI_API_KEY not set — review unavailable' });
     } catch (e) { res.status(500).json({ error: (e as Error).message }); }
+  });
+
+  app.get('/api/analytics', async (_req, res) => {
+    try { res.json(await buildAnalytics()); }
+    catch (e) { res.status(500).json({ error: (e as Error).message }); }
   });
 
   app.get('/api/stats', (_req, res) => {
