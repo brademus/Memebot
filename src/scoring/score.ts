@@ -1,6 +1,7 @@
 import { cfg } from '../config';
 import { TokenRecord } from '../types';
 import { walletsTracked } from '../wallets/tracker';
+import { getStreamMode } from '../ingest/pumpfun';
 
 // SCORING v3 — research-ranked signal weights.
 // Evidence basis (2025-2026 academic + practitioner studies on pump.fun):
@@ -23,11 +24,20 @@ export function scoreToken(t: TokenRecord): number {
   const a = cfg().age;
   const onCurve = t.dex === 'pumpfun';
 
+  const lite = getStreamMode() === 'lite';
+
   // ---- #1 liquidity velocity: SOL bonded per trade + acceleration ----
   const bonded = Math.max(0, t.curveSol - CURVE_START_SOL);
-  const trades = t.totalBuys + t.totalSells;
+  const trades = lite ? (t.buys5m + t.sells5m) : (t.totalBuys + t.totalSells);
   let velocity: number;
-  if (onCurve) {
+  if (onCurve && lite) {
+    // LITE: per-trade stream unavailable. Demand proxy = Dexscreener 5m volume
+    // converted to SOL/min, progress = mcap fraction toward ~$69K graduation.
+    const solPerMin = t.vol5m > 0 ? (t.vol5m / 5) / 82 : 0;   // rough SOL conversion; magnitude is what matters
+    const vBase = clamp(solPerMin / 3);
+    const progress = clamp(t.mcapUsd / 69000);
+    velocity = 0.6 * vBase + 0.4 * progress;
+  } else if (onCurve) {
     // sol-per-trade: 0.4+ SOL/trade = elite (50 SOL in ~50 trades), log-scaled
     const solPerTrade = trades > 0 ? bonded / trades : 0;
     const vBase = clamp(Math.log(1 + solPerTrade / 0.08) / Math.log(1 + 5));
@@ -43,13 +53,19 @@ export function scoreToken(t: TokenRecord): number {
              + 0.5 * clamp(Math.log10(Math.max(t.liquidityUsd, 1) / 12000) / Math.log10(150000 / 12000));
   }
 
-  // ---- #2 organic participation: distinct buyers, spread, growth ----
-  const uniq = t.uniqueBuyers.length;
+  // ---- #2 organic participation ----
+  // LITE: no per-trade wallets -> log-scaled buy count is the best available proxy
+  const uniq = lite ? 0 : t.uniqueBuyers.length;
+  if (lite) {
+    // fallthrough uses buys-only organic below
+  }
   const uniqScore = clamp(Math.log(1 + uniq) / Math.log(1 + 80));
   const spread = t.totalBuys > 0 ? clamp(uniq / t.totalBuys / 0.7) : 0;  // 70%+ unique = fully organic
   const s = t.uniqueBuyerSamples;
   const slope = s.length >= 3 ? clamp((s[s.length - 1] - s[0]) / (s.length * 5)) : 0;
-  const organic = 0.45 * uniqScore + 0.35 * spread + 0.2 * slope;
+  const organic = lite
+    ? clamp(Math.log(1 + t.buys5m) / Math.log(1 + 40))
+    : 0.45 * uniqScore + 0.35 * spread + 0.2 * slope;
 
   // ---- #3 social presence: Telegram strongest, then X, then website ----
   const social = t.socials.fetched

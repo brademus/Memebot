@@ -1,8 +1,18 @@
 import { cfg } from '../config';
 import { TokenRecord } from '../types';
+import { getStreamMode } from '../ingest/pumpfun';
 
 // State machine. Returns the new state if it changed, else null.
 // Order matters: kill conditions (EXTENDED/DYING/DEAD) evaluated before promotions.
+function evidenceFloor(t: TokenRecord, s: ReturnType<typeof cfg>['states']): boolean {
+  if (getStreamMode() === 'lite') {
+    // no per-trade wallet data on free tier — floor on Dexscreener 5m activity
+    return (t.buys5m + t.sells5m) >= s.trigger_min_trades;
+  }
+  return (t.totalBuys + t.totalSells) >= s.trigger_min_trades
+      && t.uniqueBuyers.length >= s.trigger_min_unique_buyers;
+}
+
 export function updateState(t: TokenRecord): TokenRecord['state'] | null {
   const s = cfg().states;
   const a = cfg().age;
@@ -21,8 +31,7 @@ export function updateState(t: TokenRecord): TokenRecord['state'] | null {
              (buyRatio <= s.dying_buy_ratio_max && ageMin > 10)) {
     next = 'DYING';                                    // rollover — rotate attention away
   } else if (t.score >= s.trigger_score_min && buyRatio >= s.trigger_buy_ratio_min
-             && (t.totalBuys + t.totalSells) >= s.trigger_min_trades
-             && t.uniqueBuyers.length >= s.trigger_min_unique_buyers) {
+             && evidenceFloor(t, s)) {
     next = 'TRIGGER';                                  // decision time
   } else if (t.score >= s.heating_score_min) {
     next = 'HEATING';                                  // open the chart

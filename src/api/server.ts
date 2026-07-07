@@ -8,6 +8,7 @@ import { runAiReview } from '../ai/reviewer';
 import { buildAnalytics } from './analytics';
 import { rankToken } from '../scoring/rank';
 import { currentBestBuys } from './bestbuys';
+import { getStreamMode } from '../ingest/pumpfun';
 import { fetchHistory, addSmartWallet, removeSmartWallet, listSmartWallets } from '../db';
 import { latestSuggestion } from '../tuning/autotune';
 import { TokenRecord } from '../types';
@@ -155,6 +156,7 @@ export function startServer() {
       gemini: !!env.GEMINI_API_KEY,
       telegram: !!(env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID),
       walletTracking: !!pool && !!env.HELIUS_API_KEY,
+      tradeStream: getStreamMode(),
       activeWallets: walletCount,
       lastDiscovery,
     });

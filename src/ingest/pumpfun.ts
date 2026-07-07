@@ -1,6 +1,7 @@
 import WebSocket from 'ws';
 import { addToken, getToken } from '../store';
 import { bumpDeployer } from '../db';
+import { env } from '../config';
 import { fetchSocials } from './metadata';
 
 // SOL price proxy for converting curve SOL -> USD. Refreshed opportunistically; a
@@ -30,14 +31,25 @@ function applyCurveTrade(msg: any) {
   if (msg.vSolInBondingCurve) { t.curveSol = msg.vSolInBondingCurve; t.liquidityUsd = msg.vSolInBondingCurve * SOL_USD; }
   if (msg.marketCapSol) t.mcapUsd = msg.marketCapSol * SOL_USD;
   if (msg.txType === 'buy') {
-    t.buys5m++;
     t.totalBuys++;
-    t.uniqueBuyerSamples.push(t.buys5m);
-    if (t.uniqueBuyerSamples.length > 6) t.uniqueBuyerSamples.shift();
+    t.recentTrades.push({ at: Date.now(), buy: true });
     // distinct buyer wallets — the real organic-demand signal (capped to bound memory)
     const buyer = msg.traderPublicKey;
     if (buyer && !t.uniqueBuyers.includes(buyer) && t.uniqueBuyers.length < 500) t.uniqueBuyers.push(buyer);
-  } else if (msg.txType === 'sell') { t.sells5m++; t.totalSells++; }
+  } else if (msg.txType === 'sell') { t.totalSells++; t.recentTrades.push({ at: Date.now(), buy: false }); }
+  // maintain REAL 5-minute counters from the rolling window (curve tokens only —
+  // Dexscreener overwrites these with its own 5m data once an AMM pair exists)
+  const cutoff = Date.now() - 5 * 60_000;
+  while (t.recentTrades.length && t.recentTrades[0].at < cutoff) t.recentTrades.shift();
+  if (t.dex === 'pumpfun') {
+    t.buys5m = t.recentTrades.filter(x => x.buy).length;
+    t.sells5m = t.recentTrades.length - t.buys5m;
+  }
+  // unique-buyer sample now tracks the windowed count
+  if (msg.txType === 'buy') {
+    t.uniqueBuyerSamples.push(t.buys5m);
+    if (t.uniqueBuyerSamples.length > 6) t.uniqueBuyerSamples.shift();
+  }
   // rolling curve-SOL history for demand velocity (keep ~3 min of samples)
   t.curveSamples.push({ sol: t.curveSol, at: Date.now() });
   if (t.curveSamples.length > 60) t.curveSamples.shift();
@@ -48,7 +60,12 @@ function applyCurveTrade(msg: any) {
 
 // PumpPortal free public websocket — the standard community feed for pump.fun new mints.
 // If it dies, swap URL here; nothing downstream changes.
-const WS_URL = 'wss://pumpportal.fun/api/data';
+const WS_URL = () => 'wss://pumpportal.fun/api/data' + (env.PUMPPORTAL_API_KEY ? `?api-key=${env.PUMPPORTAL_API_KEY}` : '');
+
+// FULL = per-trade stream live (funded PumpPortal key). LITE = free tier; per-trade
+// signals unavailable, scoring/floors auto-switch to Dexscreener-derived proxies.
+let streamMode: 'full' | 'lite' = env.PUMPPORTAL_API_KEY ? 'full' : 'lite';
+export const getStreamMode = () => streamMode;
 let ws: WebSocket | null = null;
 let backoff = 1000;
 
@@ -57,7 +74,7 @@ export function startPumpfunMonitor(onNew: (ca: string) => void) {
 }
 
 function connect(onNew: (ca: string) => void) {
-  ws = new WebSocket(WS_URL);
+  ws = new WebSocket(WS_URL());
 
   ws.on('open', () => {
     backoff = 1000;
@@ -84,7 +101,7 @@ function connect(onNew: (ca: string) => void) {
           fetchSocials(t, msg.uri);   // async — 17x-lift signal, resolves within seconds
           if (t.creator) bumpDeployer(t.creator);
           // subscribe to this token's trades to track real curve buy pressure
-          ws!.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: [msg.mint] }));
+          if (streamMode === 'full') ws!.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: [msg.mint] }));
           onNew(t.ca);
         }
       } else if (msg.mint && (msg.txType === 'buy' || msg.txType === 'sell')) {
@@ -105,6 +122,10 @@ function connect(onNew: (ca: string) => void) {
 
   ws.on('close', () => reconnect(onNew));
   ws.on('error', (e) => { console.error('[pumpfun] ws error:', e.message); ws?.close(); });
+}
+
+export function unsubscribeToken(ca: string) {
+  try { ws?.send(JSON.stringify({ method: 'unsubscribeTokenTrade', keys: [ca] })); } catch {}
 }
 
 function reconnect(onNew: (ca: string) => void) {

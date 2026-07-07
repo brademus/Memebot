@@ -1,5 +1,5 @@
 import { initDb, upsertToken, markTrigger } from './db';
-import { startPumpfunMonitor, setSolPrice } from './ingest/pumpfun';
+import { startPumpfunMonitor, setSolPrice, unsubscribeToken } from './ingest/pumpfun';
 import { startDexscreenerPoller } from './ingest/dexscreener';
 import { runGates } from './gates';
 import { scoreToken } from './scoring/score';
@@ -72,26 +72,35 @@ async function main() {
     }
   };
 
-  // Pipeline: enrichment update → (gate if pending) → score → state → alert → broadcast
+  // Dexscreener callback: DATA ONLY (enrichment + gate attempts for AMM-path tokens).
+  // Scoring/state runs on its own loop below so curve tokens without a Dexscreener
+  // pair still score and transition — they were frozen after gating before this.
   startDexscreenerPoller(async (t: TokenRecord) => {
     await tryGate(t);
-    if (false) {
-      {
-        const fail = await runGates(t);
-      }
-    }
+  });
 
-    if (t.gated === true) {
+  // SCORING LOOP — every 5s over all gated tokens, independent of any data source.
+  setInterval(async () => {
+    for (const t of allTokens()) {
+      if (t.gated !== true || t.state === 'DEAD') continue;
+      // prune the rolling trade window even when no new trades arrive (decay to zero)
+      const cutoff = Date.now() - 5 * 60_000;
+      while (t.recentTrades.length && t.recentTrades[0].at < cutoff) t.recentTrades.shift();
+      if (t.dex === 'pumpfun') {
+        t.buys5m = t.recentTrades.filter(x => x.buy).length;
+        t.sells5m = t.recentTrades.length - t.buys5m;
+      }
       scoreToken(t);
       const changed = updateState(t);
       if (changed === 'TRIGGER') {
-        await generateNote(t);           // analyst thesis before the alert goes out
-        alertTrigger(t);
+        markTrigger(t.ca, t.priceUsd);
+        alertTrigger(t);                        // alert fires IMMEDIATELY
+        generateNote(t).catch(() => {});        // analyst note follows async, shows on dashboard
         console.log(`[state] 🎯 TRIGGER $${t.symbol} score=${t.score}`);
       }
-      if (changed) await upsertToken(t);
+      if (changed) upsertToken(t).catch(() => {});
     }
-  });
+  }, 5000);
 
   startPumpfunMonitor(async (ca) => {
     const t = getToken(ca);
@@ -108,12 +117,18 @@ async function main() {
   // janitor: most pump.fun mints die on the curve with zero liquidity — purge
   // anything still PENDING after 45min so the store stays full of live candidates
   setInterval(() => {
-    const pendingCutoff = Date.now() - 45 * 60_000;    // pending-but-no-liquidity: dead on curve
-    const killedCutoff = Date.now() - 30 * 60_000;      // killed: keep 30min so they show in seen feed
+    const now = Date.now();
+    const pendingCutoff = now - 45 * 60_000;   // pending-but-no-liquidity: dead on curve
+    const killedCutoff = now - 30 * 60_000;    // killed: keep 30min for the seen feed
+    const deadCutoff = now - 5 * 3600_000;     // DEAD (aged out): gone after 5h (durable copy is in Postgres)
     let purged = 0;
+    const drop = (ca: string) => {
+      removeToken(ca); gateAttempts.delete(ca); lastGateAt.delete(ca); unsubscribeToken(ca); purged++;
+    };
     for (const t of allTokens()) {
-      if (t.gated === null && t.firstSeen < pendingCutoff) { removeToken(t.ca); gateAttempts.delete(t.ca); purged++; }
-      else if (t.gated === false && t.firstSeen < killedCutoff) { removeToken(t.ca); purged++; }
+      if (t.gated === null && t.firstSeen < pendingCutoff) drop(t.ca);
+      else if (t.gated === false && t.firstSeen < killedCutoff) drop(t.ca);
+      else if (t.state === 'DEAD' && t.firstSeen < deadCutoff) drop(t.ca);
     }
     if (purged) console.log(`[janitor] purged ${purged} stale tokens`);
   }, 5 * 60_000);

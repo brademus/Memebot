@@ -2,6 +2,7 @@ import { cfg } from '../config';
 import { activeTokens, getToken } from '../store';
 import { rankToken } from '../scoring/rank';
 import { TokenRecord } from '../types';
+import { getStreamMode } from '../ingest/pumpfun';
 
 // STICKY BEST BUYS — a coin EARNS a slot (strict entry bar), then HOLDS it until
 // it genuinely stops looking good (hysteresis: enter at min_score, exit only below
@@ -15,6 +16,10 @@ const droppedAt = new Map<string, number>();   // ca -> when dropped (re-entry c
 export function currentBestBuys() {
   const bb = cfg().bestbuys;
   const now = Date.now();
+
+  // prune the re-entry cooldown map (bounded memory)
+  const pruneBefore = now - bb.reentry_cooldown_min * 60_000 * 2;
+  for (const [ca, at] of droppedAt) if (at < pruneBefore) droppedAt.delete(ca);
 
   // ---- 1. re-evaluate incumbents: hold unless genuinely degraded ----
   for (let i = slots.length - 1; i >= 0; i--) {

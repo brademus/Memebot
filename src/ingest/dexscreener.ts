@@ -7,12 +7,19 @@ import { TokenRecord } from '../types';
 const BASE = 'https://api.dexscreener.com/latest/dex/tokens/';
 
 export function startDexscreenerPoller(onUpdated: (t: TokenRecord) => void) {
+  let tickN = 0;
   const tick = async () => {
-    const tracked = allTokens().filter(t => t.state !== 'DEAD');
+    tickN++;
+    // Two-tier polling to spend the API budget where Dexscreener actually helps:
+    //  - every tick:   graduated/AMM tokens (Dexscreener is their only data source)
+    //  - every 3rd:    curve tokens (live data comes from the pump.fun stream; we
+    //                  only need Dexscreener to notice indexing/graduation)
+    const tracked = allTokens().filter(t =>
+      t.state !== 'DEAD' &&
+      (t.dex !== 'pumpfun' || tickN % 3 === 0));
     const batchSize = cfg().limits.dexscreener_batch_size;
     for (let i = 0; i < tracked.length; i += batchSize) {
-      const batch = tracked.slice(i, i + batchSize);
-      await enrich(batch, onUpdated);
+      await enrich(tracked.slice(i, i + batchSize), onUpdated);
     }
     setTimeout(tick, cfg().polling.dexscreener_interval_ms);
   };

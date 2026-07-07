@@ -21,6 +21,7 @@ export interface TokenRecord {
   devBuyPct: number;                 // % of supply the deployer bought at creation
   totalBuys: number;                 // cumulative buy count (liquidity-velocity denominator)
   totalSells: number;
+  recentTrades: { at: number; buy: boolean }[];   // rolling window -> real 5m counters
   socials: { x: boolean; tg: boolean; web: boolean; fetched: boolean };  // 17x graduation lift signal
   playType: 'MOMENTUM' | 'GRADUATION' | 'DIP' | null;
   laddersFired: number[];            // exit-ladder levels already alerted (2, 5, ...)

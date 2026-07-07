@@ -19,6 +19,9 @@ export function startWalletTracker(onDiscovery: (ca: string) => void) {
 
 async function pollOnce(onDiscovery: (ca: string) => void) {
   if (!pool) return;
+  // prune hit cache (bounded memory)
+  const hitCutoff = Date.now() - 24 * 3600_000;
+  for (const [ca, at] of recentHits) if (at < hitCutoff) recentHits.delete(ca);
   try {
     const active = await pool.query(
       `SELECT wallet FROM smart_wallets WHERE active ORDER BY last_validated DESC LIMIT 40`);
