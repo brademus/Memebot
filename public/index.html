@@ -183,6 +183,40 @@
   #watchhead h2{font-family:'Barlow Condensed';font-weight:600;font-size:15px;letter-spacing:.12em;color:var(--dim)}
   #watchhead p{color:var(--ext);font-size:11px;margin-top:2px}
 
+
+  /* ---- mobile / small screens ---- */
+  .tablewrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  @media (max-width: 900px){
+    td:nth-child(7), th:nth-child(7),      /* Liq:MC */
+    td:nth-child(9), th:nth-child(9),      /* Δ5m */
+    td:nth-child(11), th:nth-child(11),    /* Insider */
+    td:nth-child(12), th:nth-child(12)     /* Smart */
+    {display:none}
+  }
+  @media (max-width: 700px){
+    header{flex-wrap:wrap;gap:10px 16px;position:static;padding:10px 12px}
+    .wordmark{font-size:20px;width:100%}
+    #report,#aireview,#mute{padding:8px 12px;margin-left:0}
+    nav.tabs{top:0;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:0 8px}
+    .tab{padding:12px 12px;white-space:nowrap;font-size:13px}
+    th,td{padding:8px 8px;font-size:12px}
+    td:nth-child(6), th:nth-child(6){display:none}   /* Liq too on phones */
+    #bestbuys{margin:10px 8px;padding:10px}
+    #bblist{grid-template-columns:1fr}
+    .anagrid{grid-template-columns:1fr}
+    #seenlist{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
+    #winssummary{gap:16px;flex-wrap:wrap}
+    .win,.scan,.hist,.wal{flex-wrap:wrap;row-gap:2px}
+    .win .wt{flex-basis:100%}
+    #watchhead{padding:12px 12px 4px}
+    #sysstatus{gap:10px}
+    #reviewout{padding:10px 12px;font-size:11px}
+  }
+  @media (max-width: 700px){
+    /* bigger touch targets on row links */
+    .links a,.bblinks a{padding:6px 4px;display:inline-block}
+  }
+
 </style>
 </head>
 <body>
@@ -214,6 +248,7 @@
     <h2>FULL WATCHLIST</h2>
     <p>Every coin currently past the gates, ranked. This is the raw feed — NOT buy recommendations. Graduation candidates that survive the snipe window and keep accumulating SOL get promoted into the green BEST BUYS box above.</p>
   </div>
+  <div class="tablewrap">
   <table>
     <thead><tr>
       <th>Grade</th><th>State</th><th>Token</th><th>Age</th><th>Score</th><th>Liq</th><th>Liq:MC</th>
@@ -221,6 +256,7 @@
     </tr></thead>
     <tbody id="rows"></tbody>
   </table>
+  </div>
   <div id="empty"><b>SCANNING</b>Coins appear here once they pass the rug gates. Killed tokens are in ALL SCANNED.</div>
   <div id="reviewout"></div>
 </div>
