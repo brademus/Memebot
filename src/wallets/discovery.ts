@@ -38,7 +38,7 @@ export async function runDiscovery(): Promise<Diag> {
 
     // unmined winners only
     const winners = await pool.query(
-      `SELECT DISTINCT t.ca FROM tokens t
+      `SELECT DISTINCT t.ca, t.early_buyers FROM tokens t
        JOIN outcomes o ON o.ca = t.ca
        WHERE o.multiple_from_first >= $1
          AND t.first_seen > now() - interval '7 days'
@@ -48,7 +48,12 @@ export async function runDiscovery(): Promise<Diag> {
 
     let credited = 0;
     for (const row of winners.rows) {
-      const buyers = await earlyBuyers(row.ca, w.early_buyer_slot_window);
+      // primary source: the EXACT first-15 buyers we captured live off the trade
+      // stream — precise and free. Helius reconstruction only for pre-stream tokens.
+      const captured: string[] = row.early_buyers || [];
+      const buyers = captured.length >= 3
+        ? captured
+        : await earlyBuyers(row.ca, w.early_buyer_slot_window);
       for (const wallet of buyers) {
         await pool.query(
           `INSERT INTO wallet_winners (wallet, ca) VALUES ($1, $2) ON CONFLICT DO NOTHING`,

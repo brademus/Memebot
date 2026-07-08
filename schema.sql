@@ -67,3 +67,5 @@ CREATE TABLE IF NOT EXISTS wallet_winners (
   wallet TEXT, ca TEXT, PRIMARY KEY (wallet, ca)
 );
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS mined_at TIMESTAMPTZ;
+
+ALTER TABLE tokens ADD COLUMN IF NOT EXISTS early_buyers TEXT[] DEFAULT '{}';
