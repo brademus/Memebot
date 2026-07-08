@@ -115,7 +115,8 @@
   .mult-loss{color:var(--dim)}
   #loadmore{margin:20px;background:none;border:1px solid var(--line);color:var(--txt);padding:8px 18px;font:13px 'IBM Plex Mono';cursor:pointer}
   #loadmore:hover{border-color:var(--trigger)}
-  #sysstatus{padding:12px 20px;border-bottom:1px solid var(--line);font-size:12px;display:flex;gap:18px;flex-wrap:wrap}
+  #sysstatus{padding:12px 20px;border-bottom:1px solid var(--line);font-size:12px;display:flex;gap:18px;flex-wrap:wrap;align-items:center}
+  #rundisc{background:none;border:1px solid var(--trigger);color:var(--trigger);padding:5px 12px;font:11px 'IBM Plex Mono';cursor:pointer}
   .ss{display:flex;align-items:center;gap:6px;color:var(--dim)}
   .ss .d{width:8px;height:8px;border-radius:50%;display:inline-block}
   .ss .d.on{background:var(--trigger)} .ss .d.off{background:var(--dying)}
@@ -532,6 +533,71 @@ async function loadBestBuys(){
 }
 loadBestBuys();
 setInterval(loadBestBuys, 8000);
+
+
+// ---- STATUS + ANALYTICS loaders (rebuilt — lost in tab restructure) ----
+async function loadStatus(){
+  try {
+    const s = await (await fetch('/api/status')).json();
+    const row = (on, label, hint) => `<span class="ss"><span class="d ${on?'on':'off'}"></span><b>${label}</b> ${on?'live':esc(hint)}</span>`;
+    let html =
+      row(s.db, 'Database', 'add Postgres plugin') +
+      row(s.helius, 'Wallet tracking', 'needs HELIUS_API_KEY') +
+      row(s.gemini, 'AI analyst', 'needs GEMINI_API_KEY') +
+      row(s.telegram, 'Telegram', 'needs bot token + chat id') +
+      row(s.tradeStream === 'full', 'Trade stream', 'LITE — fund PumpPortal key (0.02 SOL) + set PUMPPORTAL_API_KEY') +
+      (s.walletTracking ? `<span class="ss"><b>${s.activeWallets}</b> wallets tracked</span>` : '');
+    if (s.discovery) {
+      const d = s.discovery;
+      const txt = d.blockedBy ? 'BLOCKED — ' + esc(d.blockedBy)
+        : d.lastError ? 'ERROR — ' + esc(d.lastError)
+        : d.lastRun ? `last run ${new Date(d.lastRun).toLocaleTimeString()} · ${d.winnersFound} winners mined · ${d.walletsCredited} credits`
+        : 'has not run yet (runs 90s after boot, then hourly)';
+      html += `<span class="ss"><b>discovery</b> ${txt}</span>`;
+    }
+    html += `<button id="rundisc">RUN DISCOVERY NOW</button>`;
+    $('sysstatus').innerHTML = html;
+    const btn = document.getElementById('rundisc');
+    if (btn) btn.onclick = async () => {
+      btn.textContent = 'MINING…';
+      try {
+        const r = await (await fetch('/api/discover')).json();
+        btn.textContent = r.lastError ? 'ERROR — see banner' : `DONE: ${r.winnersFound} winners, ${r.walletsCredited} credits`;
+      } catch { btn.textContent = 'FAILED'; }
+      setTimeout(() => { loadStatus(); loadAnalytics(); }, 3500);
+    };
+  } catch {}
+}
+loadStatus();
+setInterval(loadStatus, 30000);
+
+async function loadAnalytics(){
+  try {
+    const d = await (await fetch('/api/analytics')).json();
+    if (d.todayStats) $('todaystats').textContent = `— 24h: ${d.todayStats.seen} seen · ${d.todayStats.passed} passed · ${d.todayStats.triggered} triggers`;
+    const wl = $('walletlist');
+    if (!d.topWallets || !d.topWallets.length) {
+      wl.innerHTML = '<div class="wal"><span class="ty">none yet — hit RUN DISCOVERY NOW above, then check the discovery line for what it found (or why not)</span></div>';
+    } else {
+      $('walletcount').textContent = `— ${d.topWallets.filter(w=>w.active).length} tracking`;
+      wl.innerHTML = d.topWallets.slice(0,15).map(r => {
+        const short = r.wallet.slice(0,4) + '…' + r.wallet.slice(-4);
+        const rate = r.buys_tracked > 0 ? Math.round((r.wins_2x / r.buys_tracked) * 100) + '% hit' : 'no buys yet';
+        return `<div class="wal"><span class="wn">${r.winners_hit}× winners</span><span class="ad">${short}</span><span class="ty">${rate}</span><a href="https://solscan.io/account/${r.wallet}" target="_blank" rel="noopener">solscan</a><span class="st ${r.active?'on':'off'}">${r.active?'TRACKING':'watching'}</span></div>`;
+      }).join('');
+    }
+    const tc = $('topcoins');
+    tc.innerHTML = (d.topCoinsToday && d.topCoinsToday.length)
+      ? d.topCoinsToday.map(c => `<div class="wal"><span class="wn">${c.best_multiple}×</span><span class="ad">$${esc(c.symbol||'?')}</span><span class="ty">${c.gate_result==='passed'?(c.last_state||''):'KILLED'}</span><a href="https://dexscreener.com/solana/${c.ca}" target="_blank" rel="noopener">chart</a></div>`).join('')
+      : '<div class="wal"><span class="ty">no measured outcomes yet today</span></div>';
+    const an = $('activenow');
+    an.innerHTML = (d.mostActiveNow && d.mostActiveNow.length)
+      ? d.mostActiveNow.map(c => `<div class="wal"><span class="wn">$${(c.vol5m/1000).toFixed(1)}K</span><span class="ad">$${esc(c.symbol)}</span><span class="ty">${c.txns5m} tx · ${c.state}</span><a href="https://dexscreener.com/solana/${c.ca}" target="_blank" rel="noopener">chart</a></div>`).join('')
+      : '<div class="wal"><span class="ty">nothing past gates right now</span></div>';
+  } catch {}
+}
+loadAnalytics();
+setInterval(loadAnalytics, 20000);
 
 showTab('live');
 

@@ -61,3 +61,9 @@ CREATE TABLE IF NOT EXISTS wallet_hits (      -- live: a tracked wallet bought a
   ca TEXT, wallet TEXT, at TIMESTAMPTZ DEFAULT now(),
   PRIMARY KEY (ca, wallet)
 );
+
+-- wallet discovery v2 (idempotent)
+CREATE TABLE IF NOT EXISTS wallet_winners (
+  wallet TEXT, ca TEXT, PRIMARY KEY (wallet, ca)
+);
+ALTER TABLE tokens ADD COLUMN IF NOT EXISTS mined_at TIMESTAMPTZ;

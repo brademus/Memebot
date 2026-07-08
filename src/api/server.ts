@@ -9,6 +9,7 @@ import { buildAnalytics } from './analytics';
 import { rankToken } from '../scoring/rank';
 import { currentBestBuys } from './bestbuys';
 import { getStreamMode } from '../ingest/pumpfun';
+import { discoveryDiag, runDiscovery } from '../wallets/discovery';
 import { fetchHistory, addSmartWallet, removeSmartWallet, listSmartWallets } from '../db';
 import { latestSuggestion } from '../tuning/autotune';
 import { TokenRecord } from '../types';
@@ -159,7 +160,14 @@ export function startServer() {
       tradeStream: getStreamMode(),
       activeWallets: walletCount,
       lastDiscovery,
+      discovery: discoveryDiag(),
     });
+  });
+
+  // manual discovery trigger — run the winner-mining pass right now and return diagnostics
+  app.get('/api/discover', async (_req, res) => {
+    try { res.json(await runDiscovery()); }
+    catch (e) { res.status(500).json({ error: (e as Error).message }); }
   });
 
   app.get('/api/stats', (_req, res) => {
