@@ -68,6 +68,19 @@ export interface AppConfig {
     rugcheck_score_max: number;
     require_social: boolean;
   };
+  prefilter: {
+    enabled: boolean;
+    serial_launcher_24h: number;
+    symbol_wave_per_hour: number;
+    min_symbol_len: number;
+    max_symbol_len: number;
+  };
+  traction_floor: {
+    enabled: boolean;
+    min_trades: number;
+    min_bonded_sol: number;
+    pending_purge_min: number;
+  };
   deployer: {
     enabled: boolean;
     min_wallet_age_hours: number;

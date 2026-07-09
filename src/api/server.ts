@@ -13,6 +13,7 @@ import { getStreamMode } from '../ingest/pumpfun';
 import { earlyBuyers } from '../helius';
 import { discoveryDiag, runDiscovery } from '../wallets/discovery';
 import { handleWebhook, webhookDiag } from '../wallets/webhook';
+import { prefilterDiag } from '../gates/prefilter';
 import { fetchHistory, addSmartWallet, removeSmartWallet, listSmartWallets } from '../db';
 import { latestSuggestion } from '../tuning/autotune';
 import { TokenRecord } from '../types';
@@ -208,6 +209,7 @@ export function startServer() {
       lastDiscovery,
       discovery: discoveryDiag(),
       webhook: webhookDiag(),
+      prefilter: prefilterDiag(),
     });
   });
 

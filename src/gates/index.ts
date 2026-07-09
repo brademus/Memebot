@@ -3,7 +3,6 @@ import { TokenRecord } from '../types';
 import { fetchRugReport } from './rugcheck';
 import { canSell } from './honeypot';
 import { checkDeployer } from './deployer';
-import { checkBundle } from './bundle';
 
 // Ordered hard gates. First failure kills the token — cheap checks first.
 // Returns null on pass, or the fail reason string.
@@ -32,9 +31,11 @@ export async function runGates(t: TokenRecord): Promise<string | null> {
   if (g.require_social && t.socials.fetched && !t.socials.x && !t.socials.tg && !t.socials.web)
     return 'no_socials';
 
-  // bundle / same-block insider detection — two Helius calls
-  const b = await checkBundle(t);
-  if (!b.pass) return b.reason;
+  // NOTE: the bundle/insider check is deliberately NOT here anymore. Report data
+  // showed Helius has indexed ~nothing at gate time (21/9000 coverage), so the two
+  // Helius calls it cost per mint bought no information. The 3-8min late re-check
+  // in the scoring loop is the real insider gate — it runs once, when the data
+  // actually exists, and its verdict is sticky (insiderKilled).
 
   // rugcheck — covers authorities, holders, LP, risk score.
   // On the bonding curve, pump.fun's program guarantees mint+freeze authority are

@@ -1,6 +1,7 @@
 import WebSocket from 'ws';
-import { addToken, getToken } from '../store';
+import { addToken, getToken, recordScan } from '../store';
 import { bumpDeployer } from '../db';
+import { prefilter } from '../gates/prefilter';
 import { env } from '../config';
 import { fetchSocials } from './metadata';
 
@@ -99,6 +100,10 @@ function connect(onNew: (ca: string) => void) {
     try {
       const msg = JSON.parse(raw.toString());
       if (msg.mint && msg.txType === 'create') {
+        // PREFILTER: zero-API kills before we spend ANYTHING on this mint.
+        // Killed mints are still recorded (seen feed stays honest) but get no
+        // trade subscription, no metadata fetch, and never reach the gates.
+        const pf = prefilter(msg);
         const t = addToken({
           ca: msg.mint,
           symbol: msg.symbol || '?',
@@ -106,7 +111,11 @@ function connect(onNew: (ca: string) => void) {
           creator: msg.traderPublicKey || null,
           source: 'pumpfun',
         });
-        if (t) {
+        if (t && pf) {
+          t.gated = false;
+          t.gateFailReason = pf;
+          recordScan({ ca: t.ca, symbol: t.symbol, verdict: 'KILL', reason: pf, at: Date.now() });
+        } else if (t) {
           // seed curve liquidity/mcap from the create event so the gate can run
           // IMMEDIATELY, without waiting for Dexscreener to index the token
           seedCurve(t, msg);

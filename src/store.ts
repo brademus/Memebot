@@ -33,9 +33,17 @@ export const pendingGate = () => allTokens().filter(t => t.gated === null);
 export function removeToken(ca: string) { tokens.delete(ca); }
 
 function evictOldest() {
-  let oldest: TokenRecord | null = null;
-  for (const t of tokens.values()) if (!oldest || t.firstSeen < oldest.firstSeen) oldest = t;
-  if (oldest) tokens.delete(oldest.ca);
+  // eviction priority: killed first, then liquidity-less pending, then oldest of
+  // anything — a spam wave must never push a live gated token off the board
+  const pick = (pred: (t: TokenRecord) => boolean): TokenRecord | null => {
+    let oldest: TokenRecord | null = null;
+    for (const t of tokens.values()) if (pred(t) && (!oldest || t.firstSeen < oldest.firstSeen)) oldest = t;
+    return oldest;
+  };
+  const victim = pick(t => t.gated === false)
+             || pick(t => t.gated === null)
+             || pick(() => true);
+  if (victim) tokens.delete(victim.ca);
 }
 
 // ---- scan feed: rolling log of gate verdicts for the dashboard ----

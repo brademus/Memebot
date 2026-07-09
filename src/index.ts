@@ -17,6 +17,8 @@ import { startWalletTracker } from './wallets/tracker';
 import { startWalletWebhook } from './wallets/webhook';
 import { addToken } from './store';
 import { getToken, removeToken, allTokens, recordScan } from './store';
+import { cfg } from './config';
+import { getStreamMode } from './ingest/pumpfun';
 import { TokenRecord } from './types';
 
 // gate retry policy: new mints have no liquidity yet — re-check every 30s for up to 30min
@@ -60,6 +62,15 @@ async function main() {
   const tryGate = async (t: TokenRecord) => {
     if (t.gated !== null) return;
     if (t.liquidityUsd <= 0) return;
+    // TRACTION FLOOR: most mints die with a handful of trades — don't spend
+    // RugCheck/Helius on a coin that hasn't shown life. With the full trade
+    // stream this check is free; the janitor purges never-woke mints early.
+    const tf = cfg().traction_floor;
+    if (tf?.enabled && t.dex === 'pumpfun' && getStreamMode() === 'full') {
+      const trades = t.totalBuys + t.totalSells;
+      const bonded = t.curveSol - 30;   // fresh curve starts ~30 SOL virtual
+      if (trades < tf.min_trades && bonded < tf.min_bonded_sol) return;   // not a kill — just not yet
+    }
     const last = lastGateAt.get(t.ca) || 0;
     if (Date.now() - last < GATE_COOLDOWN_MS) return;
     lastGateAt.set(t.ca, Date.now());
@@ -162,7 +173,7 @@ async function main() {
   // anything still PENDING after 45min so the store stays full of live candidates
   setInterval(() => {
     const now = Date.now();
-    const pendingCutoff = now - 45 * 60_000;   // pending-but-no-liquidity: dead on curve
+    const pendingCutoff = now - (cfg().traction_floor?.pending_purge_min ?? 45) * 60_000;   // no traction by now = dead mint
     const killedCutoff = now - 30 * 60_000;    // killed: keep 30min for the seen feed
     const deadCutoff = now - 5 * 3600_000;     // DEAD (aged out): gone after 5h (durable copy is in Postgres)
     let purged = 0;

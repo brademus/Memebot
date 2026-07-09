@@ -16,6 +16,19 @@ gates:
   rugcheck_score_max: 5000            # RugCheck risk score ceiling (lower = safer)
   require_social: false               # true = hard-kill tokens with no X/TG/website (17x differential; off by default since metadata fetch can lag)
 
+prefilter:                            # zero-API kills at the create event, before anything is spent
+  enabled: true
+  serial_launcher_24h: 3              # creator minted more than this in 24h (counted off our own stream) = spray factory
+  symbol_wave_per_hour: 3             # same ticker launched more than this within 60min = copycat spam wave
+  min_symbol_len: 2
+  max_symbol_len: 14
+
+traction_floor:                       # don't spend gate API calls until the coin shows life (full stream only)
+  enabled: true
+  min_trades: 6                       # trades seen on the stream before gates run
+  min_bonded_sol: 1.5                 # OR net SOL into the curve above the ~30 start
+  pending_purge_min: 12               # nothing by now = dead mint, purged (was 45 — most deaths show in minutes)
+
 deployer:
   enabled: true                       # requires HELIUS_API_KEY; skipped if absent
   min_wallet_age_hours: 1             # fresh-funded deployer = suspicious
