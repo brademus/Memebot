@@ -9,6 +9,7 @@ import { buildAnalytics } from './analytics';
 import { rankToken } from '../scoring/rank';
 import { currentBestBuys } from './bestbuys';
 import { getStreamMode } from '../ingest/pumpfun';
+import { earlyBuyers } from '../helius';
 import { discoveryDiag, runDiscovery } from '../wallets/discovery';
 import { fetchHistory, addSmartWallet, removeSmartWallet, listSmartWallets } from '../db';
 import { latestSuggestion } from '../tuning/autotune';
@@ -137,6 +138,42 @@ export function startServer() {
   app.get('/api/analytics', async (_req, res) => {
     try { res.json(await buildAnalytics()); }
     catch (e) { res.status(500).json({ error: (e as Error).message }); }
+  });
+
+  // wallet-pipeline diagnostic: runs each stage against the live DB and reports
+  // exactly where discovery is stuck. Open /api/wallet-debug and read top to bottom.
+  app.get('/api/wallet-debug', async (_req, res) => {
+    const out: any = { helius_key_set: !!env.HELIUS_API_KEY, db: !!pool };
+    if (!pool) { res.json(out); return; }
+    const step = async (name: string, fn: () => Promise<any>) => {
+      try { out[name] = await fn(); } catch (e) { out[name] = 'ERROR: ' + (e as Error).message; }
+    };
+    await step('winners_3x_last7d', async () =>
+      (await pool!.query(`SELECT COUNT(DISTINCT t.ca)::int c FROM tokens t JOIN outcomes o ON o.ca=t.ca
+        WHERE o.multiple_from_first >= 3 AND t.first_seen > now() - interval '7 days'`)).rows[0].c);
+    await step('winners_unmined', async () =>
+      (await pool!.query(`SELECT COUNT(DISTINCT t.ca)::int c FROM tokens t JOIN outcomes o ON o.ca=t.ca
+        WHERE o.multiple_from_first >= 3 AND t.first_seen > now() - interval '7 days'
+        AND NOT COALESCE(t.wallets_mined,false)`)).rows[0].c);
+    await step('sample_winner_and_its_early_buyers', async () => {
+      const r = await pool!.query(`SELECT t.ca, MAX(o.multiple_from_first) m FROM tokens t JOIN outcomes o ON o.ca=t.ca
+        WHERE o.multiple_from_first >= 3 AND t.first_seen > now() - interval '7 days'
+        GROUP BY t.ca ORDER BY m DESC LIMIT 1`);
+      if (!r.rows.length) return 'no winners yet';
+      const ca = r.rows[0].ca;
+      const buyers = await earlyBuyers(ca, 3);
+      return { ca, best_multiple: r.rows[0].m, early_buyers_found: buyers.length, sample: buyers.slice(0, 3) };
+    });
+    await step('smart_wallets_total', async () => (await pool!.query(`SELECT COUNT(*)::int c FROM smart_wallets`)).rows[0].c);
+    await step('smart_wallets_active', async () => (await pool!.query(`SELECT COUNT(*)::int c FROM smart_wallets WHERE active`)).rows[0].c);
+    await step('wallet_hits_total', async () => (await pool!.query(`SELECT COUNT(*)::int c FROM wallet_hits`)).rows[0].c);
+    out.verdict = !env.HELIUS_API_KEY ? 'HELIUS_API_KEY missing'
+      : out.winners_3x_last7d === 0 ? 'no 3x winners logged yet — discovery has nothing to mine'
+      : typeof out.sample_winner_and_its_early_buyers === 'object' && out.sample_winner_and_its_early_buyers.early_buyers_found === 0
+        ? 'Helius returning no early buyers — key may lack API access or rate-limited'
+      : out.smart_wallets_total === 0 ? 'winners + buyers exist but no inserts — check Railway logs for [wallets] errors'
+      : 'pipeline healthy — wallets exist; if panel is empty, hard-refresh the dashboard';
+    res.json(out);
   });
 
   // system status: which subsystems are live and why others aren't
