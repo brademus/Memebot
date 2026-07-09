@@ -28,7 +28,8 @@ export function updateState(t: TokenRecord): TokenRecord['state'] | null {
   } else if (t.firstScorePrice && t.priceUsd > 0 &&
              ((t.priceUsd / t.firstScorePrice) - 1) * 100 >= s.extended_pct) {
     next = 'EXTENDED';                                 // already ran — you'd be exit liquidity
-  } else if ((t.peakScore - t.score >= s.dying_score_drop && t.peakScore >= s.heating_score_min) ||
+  } else if (t.insiderKilled ||
+             (t.peakScore - t.score >= s.dying_score_drop && t.peakScore >= s.heating_score_min) ||
              (buyRatio <= s.dying_buy_ratio_max && ageMin > 10) ||
              // curve outflow: SOL leaving the curve = holders cashing out = distribution.
              // >15% off the high-water mark (once meaningfully filled) is a death signal.

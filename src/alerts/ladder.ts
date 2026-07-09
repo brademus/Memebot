@@ -19,9 +19,15 @@ export function startLadderMonitor() {
 
 async function tick() {
   for (const t of allTokens()) {
-    if (t.state !== 'TRIGGER' && !t.laddersFired.length) continue;
-    if (!t.firstScorePrice || t.priceUsd <= 0) continue;
-    const mult = t.priceUsd / t.firstScorePrice;
+    // BUG FIX: was `t.state !== 'TRIGGER' && !laddersFired.length` — but EXTENDED
+    // fires at +40% and the first rung is 2x (+100%), so every token left TRIGGER
+    // before any rung could fire. Ladder alerts were structurally unreachable.
+    // Track "has ever triggered" instead, and measure multiples from trigger price
+    // so the "since trigger" message is literally true.
+    if (!t.triggeredAt || t.insiderKilled) continue;
+    const base = t.triggerPrice || t.firstScorePrice;
+    if (!base || t.priceUsd <= 0) continue;
+    const mult = t.priceUsd / base;
 
     for (const step of LADDER) {
       if (mult >= step.mult && !t.laddersFired.includes(step.mult)) {

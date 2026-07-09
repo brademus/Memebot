@@ -101,7 +101,8 @@ async function main() {
         bundleRetried.add(t.ca);
         checkBundle(t).then(res => {
           if (!res.pass) {
-            t.state = 'DYING';   // insider structure found late — off the screen, slot-ejected
+            t.insiderKilled = true;   // sticky — state machine holds DYING from here
+            t.state = 'DYING';        // insider structure found late — off the screen, slot-ejected
             console.log(`[bundle-late] $${t.symbol} — ${res.reason}`);
           }
           upsertToken(t).catch(() => {});
@@ -116,6 +117,7 @@ async function main() {
       }
       const changed = updateState(t);
       if (changed === 'TRIGGER') {
+        if (!t.triggeredAt) { t.triggeredAt = Date.now(); t.triggerPrice = t.priceUsd; }
         markTrigger(t.ca, t.priceUsd);
         alertTrigger(t);                        // alert fires IMMEDIATELY
         generateNote(t).catch(() => {});        // analyst note follows async, shows on dashboard

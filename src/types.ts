@@ -28,6 +28,9 @@ export interface TokenRecord {
   socials: { x: boolean; tg: boolean; web: boolean; fetched: boolean };  // 17x graduation lift signal
   playType: 'MOMENTUM' | 'GRADUATION' | 'DIP' | null;
   laddersFired: number[];            // exit-ladder levels already alerted (2, 5, ...)
+  triggeredAt: number | null;        // first time this token hit TRIGGER (in-memory; DB has triggered_at)
+  triggerPrice: number | null;       // price at first TRIGGER — ladder multiples measure from here
+  insiderKilled: boolean;            // late bundle re-check found insider structure — sticky kill
   dexId: string | null;              // 'pumpfun' = still on bonding curve; 'pumpswap'/'raydium' = graduated
   // gate
   gated: boolean | null;             // null = pending
