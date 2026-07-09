@@ -69,8 +69,17 @@ export function scoreToken(t: TokenRecord): number {
     : 0.45 * uniqScore + 0.35 * spread + 0.2 * slope;
 
   // ---- #3 social presence: Telegram strongest, then X, then website ----
+  // TG is tiered by VERIFIED member count: a manufactured shell (<25 members at
+  // launch) gets a fraction of the weight, a real community (200+) gets full.
+  // null = unverifiable -> slight discount vs verified-real.
+  const ls = cfg().launch_signals;
+  const tgW = !t.socials.tg ? 0
+    : t.socials.tgMembers === null ? 0.4
+    : t.socials.tgMembers < (ls?.tg_shell_max_members ?? 25) ? 0.15
+    : t.socials.tgMembers < (ls?.tg_real_min_members ?? 200) ? 0.35
+    : 0.5;
   const social = t.socials.fetched
-    ? (t.socials.tg ? 0.5 : 0) + (t.socials.x ? 0.3 : 0) + (t.socials.web ? 0.2 : 0)
+    ? tgW + (t.socials.x ? 0.3 : 0) + (t.socials.web ? 0.2 : 0)
     : 0.25;   // unknown-yet: neutral-low, resolves within seconds of create
 
   // ---- #4 buy pressure: ratio damped by evidence volume ----
@@ -104,7 +113,26 @@ export function scoreToken(t: TokenRecord): number {
     holderGrowth: round1((0.6 * organic + 0.4 * social) * (w.organic + w.social) * scale), // combined for compat
     smartMoney: round1(smartMoney * w.smart_money * (walletsLive ? 1 : 0)),
   };
-  const total = t.subs.freshness + t.subs.liquidity + t.subs.buyPressure + t.subs.holderGrowth + t.subs.smartMoney + devAdj;
+  // ---- launch-signal priors (adversarial reads of the launch playbook) ----
+  // GRADUATION PROXIMITY: the final curve push is a coordinated community event
+  // and a known catalyst — reward a curve at 80-100% of the threshold that's
+  // still taking inflow, scaled linearly into the graduation.
+  let gradBonus = 0;
+  if (t.dex === 'pumpfun' && ls) {
+    const grad = ls.graduation_curve_sol;
+    if (t.curveSol >= grad * 0.8 && t.curveSol <= grad * 1.02) {
+      const ref = t.curveSamples.find(cs => Date.now() - cs.at >= 3 * 60_000);
+      const inflow = !ref || t.curveSol >= ref.sol;
+      if (inflow) gradBonus = ls.graduation_bonus_max * Math.min(1, (t.curveSol - grad * 0.8) / (grad * 0.2));
+    }
+  }
+  // DEAD-HOURS PRIOR: the manipulation recipe deploys at dead hours where fake
+  // momentum is cheap; attention plays launch into peak windows. Mild penalty —
+  // the report's hourOfDay cohort exists to prove or kill this with our own data.
+  const hourUtc = new Date(t.firstSeen).getUTCHours();
+  const deadPenalty = ls?.dead_hours_utc?.includes(hourUtc) ? (ls.dead_hours_penalty ?? 0) : 0;
+
+  const total = t.subs.freshness + t.subs.liquidity + t.subs.buyPressure + t.subs.holderGrowth + t.subs.smartMoney + devAdj + gradBonus - deadPenalty;
   t.score = round1(Math.max(0, Math.min(100, total)));
   if (t.score > t.peakScore) t.peakScore = t.score;
   if (t.firstScorePrice === null && t.priceUsd > 0) t.firstScorePrice = t.priceUsd;

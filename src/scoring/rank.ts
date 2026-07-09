@@ -41,6 +41,8 @@ export function rankToken(t: TokenRecord): Rank {
   else if (t.state === 'HEATING' || t.state === 'TRIGGER') timing = 'EARLY';
 
   // ---- concrete data-driven cautions ----
+  if (t.socials.tg && t.socials.tgMembers !== null && t.socials.tgMembers < 25)
+    cautions.push(`TG is a ${t.socials.tgMembers}-member shell`);
   if (t.bundle && t.bundle.insiderPct > 15) cautions.push(`${t.bundle.insiderPct.toFixed(0)}% insider-held`);
   if (t.bundle && t.bundle.fundedSnipers > 0) cautions.push(`${t.bundle.fundedSnipers} deployer-linked snipers`);
   const buyRatio = t.sells5m > 0 ? t.buys5m / t.sells5m : (t.buys5m || 0);

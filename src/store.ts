@@ -13,7 +13,7 @@ export function addToken(partial: Pick<TokenRecord, 'ca' | 'symbol' | 'name' | '
     priceUsd: 0, liquidityUsd: 0, mcapUsd: 0, vol5m: 0, buys5m: 0, sells5m: 0, priceChange5m: 0,
     pairAddress: null, curveSol: 0, curveSamples: [], uniqueBuyers: [], devBuyPct: 0,
     totalBuys: 0, totalSells: 0, recentTrades: [], earlyBuyers: [], earlyExited: [], peakCurveSol: 0,
-    socials: { x: false, tg: false, web: false, fetched: false },
+    socials: { x: false, tg: false, web: false, fetched: false, tgMembers: null },
     playType: null, laddersFired: [], triggeredAt: null, triggerPrice: null, insiderKilled: false, convictionAt: null, dex: null, dexId: null,
     gated: null, gateFailReason: null, bundle: null, aiNote: null, smartHits: [], ai: null,
     score: 0, peakScore: 0, firstScorePrice: null,

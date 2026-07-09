@@ -77,11 +77,16 @@ export function checkConviction(t: TokenRecord, now = Date.now()): ConvictionRes
       : `${sh.wallets} smart wallet${sh.wallets > 1 ? 's' : ''} bought (last ${c.smart_wallet_window_min}m)`);
   else missing.push(`smart weight ${sh.weight}/${c.min_smart_wallets}`);
 
-  // 4. social presence
+  // 4. social presence — a verified shell TG (<25 members) does NOT confirm;
+  // unverifiable counts pass as before (fail-neutral)
   if (c.require_social) {
-    if (t.socials.tg || t.socials.x)
-      confirmed.push(`socials live (${[t.socials.tg && 'TG', t.socials.x && 'X', t.socials.web && 'web'].filter(Boolean).join('+')})`);
-    else missing.push('no TG/X');
+    const mem = t.socials.tgMembers;
+    const tgReal = t.socials.tg && (mem === null || mem >= 25);
+    if (tgReal || t.socials.x)
+      confirmed.push(`socials live (${[
+        tgReal && (mem !== null ? `TG ${mem >= 1000 ? (mem / 1000).toFixed(1) + 'K' : mem} members` : 'TG'),
+        t.socials.x && 'X', t.socials.web && 'web'].filter(Boolean).join(' + ')})`);
+    else missing.push(t.socials.tg ? `TG is a ${mem}-member shell, no X` : 'no TG/X');
   }
 
   // 5. entry still fresh — don't confirm someone into exit liquidity

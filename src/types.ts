@@ -25,7 +25,7 @@ export interface TokenRecord {
   earlyBuyers: string[];             // first N buyer wallets (the snipe cohort)
   earlyExited: string[];             // which of them have since SOLD
   peakCurveSol: number;              // high-water mark of SOL in curve (outflow detection)
-  socials: { x: boolean; tg: boolean; web: boolean; fetched: boolean };  // 17x graduation lift signal
+  socials: { x: boolean; tg: boolean; web: boolean; fetched: boolean; tgMembers: number | null };  // 17x lift; tgMembers verifies the community is REAL
   playType: 'MOMENTUM' | 'GRADUATION' | 'DIP' | 'RUNNER' | null;
   laddersFired: number[];            // exit-ladder levels already alerted (2, 5, ...)
   triggeredAt: number | null;        // first time this token hit TRIGGER (in-memory; DB has triggered_at)
@@ -143,6 +143,14 @@ export interface AppConfig {
     smart_lane_exit_score: number;
   };
   alerts: { telegram_on_trigger: boolean; realert_score_jump: number };
+  launch_signals: {
+    graduation_curve_sol: number;
+    graduation_bonus_max: number;
+    dead_hours_utc: number[];
+    dead_hours_penalty: number;
+    tg_shell_max_members: number;
+    tg_real_min_members: number;
+  };
   momentum: {
     enabled: boolean;
     poll_seconds: number;

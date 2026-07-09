@@ -32,6 +32,17 @@ export async function buildReport(days = 7): Promise<any> {
     WHERE t.conviction_at IS NOT NULL AND t.conviction_price > 0 ${win}
     GROUP BY o.snapshot_minutes ORDER BY o.snapshot_minutes`);
 
+  // 1c. Launch-hour cohort: does hour-of-day carry signal? (validates/kills the
+  // dead-hours prior in launch_signals with our own outcomes)
+  const hourOfDay = await q(`
+    SELECT EXTRACT(HOUR FROM t.first_seen AT TIME ZONE 'UTC')::int AS hour_utc,
+           COUNT(*) AS n,
+           ROUND(AVG(o.multiple_from_first)::numeric, 2) AS avg_multiple,
+           ROUND((COUNT(*) FILTER (WHERE o.multiple_from_first >= 2))::numeric / NULLIF(COUNT(*),0) * 100, 1) AS pct_2x_plus
+    FROM tokens t JOIN outcomes o ON o.ca = t.ca AND o.snapshot_minutes = 240
+    WHERE t.gate_result = 'passed' ${win}
+    GROUP BY 1 ORDER BY 1`);
+
   // 2. Score-bucket calibration: do higher scores actually predict bigger multiples? (4h)
   const scoreBuckets = await q(`
     SELECT width_bucket(GREATEST(t.peak_score, t.last_score), 0, 100, 5) * 20 AS score_band_top,
@@ -86,6 +97,7 @@ export async function buildReport(days = 7): Promise<any> {
     totals,
     triggerPerformance: triggerPerf,
     convictionPerformance: convictionPerf,
+    hourOfDay,
     scoreCalibration: scoreBuckets,
     falseKills,
     filterLearning,

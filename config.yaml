@@ -143,3 +143,11 @@ momentum:                             # second discovery engine — catches runn
   max_age_hours: 72                   # older than 3 days = established coin, different game
   min_change24h_pct: 50               # it must actually be running
   max_change5m_pct: 45                # vertical blow-off candle = exit liquidity, not entry — re-check in 30m
+
+launch_signals:                       # adversarial reads of the launch playbook (see meme-launcher analysis)
+  graduation_curve_sol: 69            # pump.fun graduation threshold — VERIFY, pump.fun has changed this over time
+  graduation_bonus_max: 6             # score bonus scaling 80% -> 100% of the curve: graduation is a known catalyst
+  dead_hours_utc: [5, 6, 7, 8, 9, 10, 11]   # stealth/manipulation launch window; peak attention is 14-18 UTC
+  dead_hours_penalty: 3               # mild prior — the weekly report's hour cohort will prove or kill this
+  tg_shell_max_members: 25            # a TG this small at launch is a manufactured shell, not a community
+  tg_real_min_members: 200            # at this size the 17.4x social signal is trustworthy at full weight
