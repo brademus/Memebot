@@ -76,8 +76,8 @@ export function startServer() {
   });
 
   // weekly feedback report — JSON you paste back for tuning
-  app.get('/api/report', async (_req, res) => {
-    try { res.json(await buildReport()); }
+  app.get('/api/report', async (req, res) => {
+    try { res.json(await buildReport(parseInt(String(req.query.days || '7'), 10) || 7)); }
     catch (e) { res.status(500).json({ error: (e as Error).message }); }
   });
 

@@ -11,7 +11,7 @@ gates:
   honeypot_sim: true                  # Jupiter sell-quote must succeed
   lp_locked_or_burned: true           # via RugCheck markets data
   liq_to_mcap_ratio_min: 0.08         # AMM-pool tokens only (post-graduation)
-  min_liquidity_usd: 12000            # AMM-pool tokens
+  min_liquidity_usd: 9000             # AMM-pool tokens (was 12k; a $4.8K-liq kill missed a measured 64.8x)
   min_liquidity_sol_curve: 8            # bonding-curve floor in SOL (price-independent). Fresh curve ~30 SOL; 8 filters dead sub-launches
   rugcheck_score_max: 5000            # RugCheck risk score ceiling (lower = safer)
   require_social: false               # true = hard-kill tokens with no X/TG/website (17x differential; off by default since metadata fetch can lag)

@@ -2,6 +2,7 @@ import { initDb, upsertToken, markTrigger } from './db';
 import { startPumpfunMonitor, setSolPrice, unsubscribeToken } from './ingest/pumpfun';
 import { startDexscreenerPoller } from './ingest/dexscreener';
 import { runGates } from './gates';
+import { checkBundle } from './gates/bundle';
 import { scoreToken } from './scoring/score';
 import { updateState } from './scoring/states';
 import { alertTrigger } from './alerts/telegram';
@@ -21,6 +22,7 @@ const gateAttempts = new Map<string, number>();
 const lastGateAt = new Map<string, number>();
 const MAX_GATE_ATTEMPTS = 60;
 const GATE_COOLDOWN_MS = 45_000;   // efficiency: don't re-hit RugCheck/Helius every 10s poll
+const bundleRetried = new Set<string>();
 
 async function main() {
   await initDb();
@@ -90,7 +92,28 @@ async function main() {
         t.buys5m = t.recentTrades.filter(x => x.buy).length;
         t.sells5m = t.recentTrades.length - t.buys5m;
       }
+      // LATE BUNDLE RE-CHECK: at gate time (seconds old) Helius hasn't indexed the
+      // token yet, so the insider check came back empty on ~99% of tokens. Re-run
+      // once at 3-8 min. Report data: insider-clean tokens averaged 2.69x vs 0.88x
+      // unknown — this is the single strongest per-token signal we have.
+      const ageMinB = (Date.now() - t.firstSeen) / 60000;
+      if (t.bundle === null && ageMinB >= 3 && ageMinB < 10 && !bundleRetried.has(t.ca)) {
+        bundleRetried.add(t.ca);
+        checkBundle(t).then(res => {
+          if (!res.pass) {
+            t.state = 'DYING';   // insider structure found late — off the screen, slot-ejected
+            console.log(`[bundle-late] $${t.symbol} — ${res.reason}`);
+          }
+          upsertToken(t).catch(() => {});
+        }).catch(() => {});
+      }
       scoreToken(t);
+      // keep DB labels fresh — scores were only written on state changes, so
+      // never-transitioned tokens carried stale near-zero labels into the report
+      if (!('lastUpsertAt' in (t as any)) || Date.now() - (t as any).lastUpsertAt > 10 * 60_000) {
+        (t as any).lastUpsertAt = Date.now();
+        upsertToken(t).catch(() => {});
+      }
       const changed = updateState(t);
       if (changed === 'TRIGGER') {
         markTrigger(t.ca, t.priceUsd);
@@ -123,7 +146,7 @@ async function main() {
     const deadCutoff = now - 5 * 3600_000;     // DEAD (aged out): gone after 5h (durable copy is in Postgres)
     let purged = 0;
     const drop = (ca: string) => {
-      removeToken(ca); gateAttempts.delete(ca); lastGateAt.delete(ca); unsubscribeToken(ca); purged++;
+      removeToken(ca); gateAttempts.delete(ca); lastGateAt.delete(ca); bundleRetried.delete(ca); unsubscribeToken(ca); purged++;
     };
     for (const t of allTokens()) {
       if (t.gated === null && t.firstSeen < pendingCutoff) drop(t.ca);

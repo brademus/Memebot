@@ -1,6 +1,7 @@
 import { cfg } from '../config';
 import { TokenRecord } from '../types';
 import { getStreamMode } from '../ingest/pumpfun';
+import { passesPersistence } from './persistence';
 
 // State machine. Returns the new state if it changed, else null.
 // Order matters: kill conditions (EXTENDED/DYING/DEAD) evaluated before promotions.
@@ -34,7 +35,8 @@ export function updateState(t: TokenRecord): TokenRecord['state'] | null {
              (t.dex === 'pumpfun' && t.peakCurveSol > 34 && t.curveSol < t.peakCurveSol * 0.85)) {
     next = 'DYING';                                    // rollover — rotate attention away
   } else if (t.score >= s.trigger_score_min && buyRatio >= s.trigger_buy_ratio_min
-             && evidenceFloor(t, s)) {
+             && evidenceFloor(t, s)
+             && passesPersistence(t)) {
     next = 'TRIGGER';                                  // decision time
   } else if (t.score >= s.heating_score_min) {
     next = 'HEATING';                                  // open the chart
