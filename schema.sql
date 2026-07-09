@@ -69,3 +69,8 @@ CREATE TABLE IF NOT EXISTS wallet_winners (
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS mined_at TIMESTAMPTZ;
 
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS early_buyers TEXT[] DEFAULT '{}';
+
+-- CONVICTION tier (added 2026-07): measured separately from triggers so the
+-- weekly review can compare precision between the two alert tiers.
+ALTER TABLE tokens ADD COLUMN IF NOT EXISTS conviction_at TIMESTAMPTZ;
+ALTER TABLE tokens ADD COLUMN IF NOT EXISTS conviction_price DOUBLE PRECISION;

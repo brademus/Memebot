@@ -1,11 +1,12 @@
-import { initDb, upsertToken, markTrigger } from './db';
+import { initDb, upsertToken, markTrigger, markConviction } from './db';
 import { startPumpfunMonitor, setSolPrice, unsubscribeToken } from './ingest/pumpfun';
 import { startDexscreenerPoller } from './ingest/dexscreener';
 import { runGates } from './gates';
 import { checkBundle } from './gates/bundle';
 import { scoreToken } from './scoring/score';
 import { updateState } from './scoring/states';
-import { alertTrigger } from './alerts/telegram';
+import { checkConviction, consumeBudget } from './scoring/conviction';
+import { alertTrigger, alertConviction } from './alerts/telegram';
 import { startOutcomeLogger } from './outcomes/logger';
 import { startLadderMonitor } from './alerts/ladder';
 import { startAutotune } from './tuning/autotune';
@@ -122,6 +123,20 @@ async function main() {
         alertTrigger(t);                        // alert fires IMMEDIATELY
         generateNote(t).catch(() => {});        // analyst note follows async, shows on dashboard
         console.log(`[state] 🎯 TRIGGER $${t.symbol} score=${t.score}`);
+      }
+      // CONVICTION: evaluated every tick while a token holds TRIGGER. Fires at most
+      // once per token, only when ALL independent confirmations agree (verified-clean
+      // insiders, smart-wallet buys, held through the burst, still early, socials).
+      if (t.state === 'TRIGGER' && !t.convictionAt) {
+        const cv = checkConviction(t);
+        if (cv.pass) {
+          t.convictionAt = Date.now();
+          consumeBudget();
+          markConviction(t.ca, t.priceUsd);
+          alertConviction(t, cv.confirmed);
+          upsertToken(t).catch(() => {});
+          console.log(`[state] 🔥 CONVICTION $${t.symbol} — ${cv.confirmed.join('; ')}`);
+        }
       }
       if (changed) upsertToken(t).catch(() => {});
     }

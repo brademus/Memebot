@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { env, cfg } from '../config';
 import { activeTokens, allTokens, recentScans } from '../store';
+import { checkConviction } from '../scoring/conviction';
 import { pool } from '../db';
 import { buildReport } from './report';
 import { runAiReview } from '../ai/reviewer';
@@ -279,5 +280,10 @@ function pick(t: TokenRecord) {
     retention: t.earlyBuyers.length >= 5 ? +((1 - t.earlyExited.length / t.earlyBuyers.length)).toFixed(2) : null,
     socials: t.socials,
     devPct: +t.devBuyPct.toFixed(1),
+    conviction: t.convictionAt !== null,
+    // for TRIGGER tokens that haven't confirmed yet: show exactly what's blocking
+    // conviction, so threshold tuning is done from evidence instead of guesswork
+    convictionMissing: t.state === 'TRIGGER' && t.convictionAt === null
+      ? checkConviction(t).missing : null,
   };
 }

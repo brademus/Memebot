@@ -113,3 +113,11 @@ export async function markTrigger(ca: string, price: number) {
     [ca, price]
   ).catch(() => {});
 }
+
+export async function markConviction(ca: string, price: number) {
+  if (!pool) return;
+  await pool.query(
+    `UPDATE tokens SET conviction_at = COALESCE(conviction_at, now()), conviction_price = COALESCE(conviction_price, $2) WHERE ca = $1`,
+    [ca, price]
+  ).catch(() => {});
+}

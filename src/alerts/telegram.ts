@@ -31,3 +31,29 @@ export async function alertTrigger(t: TokenRecord) {
 }
 
 const fmt = (n: number) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : (n / 1e3).toFixed(0) + 'K';
+
+// CONVICTION alert — the rare one. Bypasses the score-jump dedup (it fires once
+// per token by construction) and shows the full evidence stack so every alert
+// is auditable: you can see exactly WHY the bot believes this one.
+export async function alertConviction(t: TokenRecord, confirmed: string[]) {
+  if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) return;
+  const ageMin = Math.round((Date.now() - t.firstSeen) / 60000);
+  const text = [
+    `🔥 CONVICTION — $${t.symbol}  [${t.score}]`,
+    `ALL CONFIRMATIONS PASSED:`,
+    ...confirmed.map(r => `  ✅ ${r}`),
+    ``,
+    `age ${ageMin}m | liq $${fmt(t.liquidityUsd)} | mcap $${fmt(t.mcapUsd)} | buys:sells 5m ${t.buys5m}:${t.sells5m}`,
+    `chart: https://dexscreener.com/solana/${t.pairAddress || t.ca}`,
+    `swap: https://jup.ag/swap/SOL-${t.ca}`,
+    `CA: ${t.ca}`,
+    t.aiNote ? `\n🧠 ${t.aiNote}` : '',
+  ].filter(x => x !== null).join('\n');
+  try {
+    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text, disable_web_page_preview: true }),
+    });
+  } catch (e) { console.error('[telegram]', (e as Error).message); }
+}

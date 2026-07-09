@@ -31,6 +31,7 @@ export interface TokenRecord {
   triggeredAt: number | null;        // first time this token hit TRIGGER (in-memory; DB has triggered_at)
   triggerPrice: number | null;       // price at first TRIGGER — ladder multiples measure from here
   insiderKilled: boolean;            // late bundle re-check found insider structure — sticky kill
+  convictionAt: number | null;       // when the CONVICTION tier confirmed this token (null = never)
   dexId: string | null;              // 'pumpfun' = still on bonding curve; 'pumpswap'/'raydium' = graduated
   // gate
   gated: boolean | null;             // null = pending
@@ -118,6 +119,17 @@ export interface AppConfig {
     net_inflow_window_min: number;
   };
   alerts: { telegram_on_trigger: boolean; realert_score_jump: number };
+  conviction: {
+    enabled: boolean;
+    min_score: number;
+    min_trigger_hold_seconds: number;
+    require_clean_bundle: boolean;
+    min_smart_wallets: number;
+    smart_wallet_window_min: number;
+    require_social: boolean;
+    max_run_pct: number;
+    max_alerts_per_day: number;
+  };
   polling: { dexscreener_interval_ms: number; outcome_snapshot_minutes: number[] };
   limits: { max_tracked_tokens: number; dexscreener_batch_size: number };
 }

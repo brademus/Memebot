@@ -93,3 +93,14 @@ wallets:                              # smart-money discovery + tracking (needs 
 limits:
   max_tracked_tokens: 400             # in-memory watchlist cap
   dexscreener_batch_size: 30          # max token addresses per API call
+
+conviction:                           # CONVICTION tier — the "confirmed buy" alert above TRIGGER.
+  enabled: true                       # fires ONLY when independent signals agree; a few/day, often zero
+  min_score: 72                       # 80+ band hit 2x at 37.5%; 72 takes the strong end
+  min_trigger_hold_seconds: 90        # must HOLD trigger — survives the 85%-sniper-exit window
+  require_clean_bundle: true          # insiders VERIFIED clean (2.69x vs 0.88x) — unverified != clean
+  min_smart_wallets: 1                # distinct proven-winner wallets that bought; raise to 2 once tracker matures
+  smart_wallet_window_min: 30         # ...within this window
+  require_social: true                # TG or X must exist (17.4x differential)
+  max_run_pct: 25                     # no confirming into exit liquidity — must still be early
+  max_alerts_per_day: 5               # scarcity is the product; zero on a bad day is CORRECT behavior

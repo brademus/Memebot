@@ -19,6 +19,19 @@ export async function buildReport(days = 7): Promise<any> {
     WHERE t.triggered_at IS NOT NULL AND t.trigger_price > 0 ${win}
     GROUP BY o.snapshot_minutes ORDER BY o.snapshot_minutes`);
 
+  // 1b. CONVICTION performance: the confirmed-buy tier, measured from ITS OWN entry
+  // price. This is the tier's report card — it must beat triggerPerformance on
+  // avg_multiple and pct_down or its thresholds need work.
+  const convictionPerf = await q(`
+    SELECT o.snapshot_minutes AS mins,
+           COUNT(*) AS n,
+           ROUND(AVG(o.price_usd / NULLIF(t.conviction_price, 0))::numeric, 2) AS avg_multiple,
+           ROUND((COUNT(*) FILTER (WHERE o.price_usd / NULLIF(t.conviction_price,0) >= 2))::numeric / NULLIF(COUNT(*),0) * 100, 1) AS pct_2x_plus,
+           ROUND((COUNT(*) FILTER (WHERE o.price_usd / NULLIF(t.conviction_price,0) < 1))::numeric / NULLIF(COUNT(*),0) * 100, 1) AS pct_down
+    FROM tokens t JOIN outcomes o ON o.ca = t.ca
+    WHERE t.conviction_at IS NOT NULL AND t.conviction_price > 0 ${win}
+    GROUP BY o.snapshot_minutes ORDER BY o.snapshot_minutes`);
+
   // 2. Score-bucket calibration: do higher scores actually predict bigger multiples? (4h)
   const scoreBuckets = await q(`
     SELECT width_bucket(GREATEST(t.peak_score, t.last_score), 0, 100, 5) * 20 AS score_band_top,
@@ -57,7 +70,8 @@ export async function buildReport(days = 7): Promise<any> {
      COUNT(*) AS total_seen,
      COUNT(*) FILTER (WHERE gate_result='passed') AS passed,
      COUNT(*) FILTER (WHERE gate_result='failed') AS killed,
-     COUNT(*) FILTER (WHERE triggered_at IS NOT NULL) AS triggered
+     COUNT(*) FILTER (WHERE triggered_at IS NOT NULL) AS triggered,
+     COUNT(*) FILTER (WHERE conviction_at IS NOT NULL) AS convictions
      FROM tokens`))[0];
 
   return {
@@ -65,9 +79,10 @@ export async function buildReport(days = 7): Promise<any> {
     window: `last ${days} days`,
     totals,
     triggerPerformance: triggerPerf,
+    convictionPerformance: convictionPerf,
     scoreCalibration: scoreBuckets,
     falseKills,
     insiderCorrelation: insiderCorr,
-    readme: 'Paste this whole object to Claude to tune config.yaml. triggerPerformance = did BUY calls go up. scoreCalibration = are high scores earning their weight. falseKills = gates rejecting winners (loosen these). insiderCorrelation = is the bundle gate threshold right.',
+    readme: 'Paste this whole object to Claude to tune config.yaml. triggerPerformance = did BUY calls go up. convictionPerformance = the confirmed-buy tier measured from its own entry price (must beat triggers or tighten conviction thresholds). scoreCalibration = are high scores earning their weight. falseKills = gates rejecting winners (loosen these). insiderCorrelation = is the bundle gate threshold right.',
   };
 }
