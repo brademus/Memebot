@@ -3,7 +3,7 @@ export interface TokenRecord {
   symbol: string;
   name: string;
   creator: string | null;
-  source: 'pumpfun' | 'dexscreener' | 'wallet';
+  source: 'pumpfun' | 'dexscreener' | 'wallet' | 'momentum';
   firstSeen: number;                 // epoch ms
   // enrichment (Dexscreener)
   priceUsd: number;
@@ -26,7 +26,7 @@ export interface TokenRecord {
   earlyExited: string[];             // which of them have since SOLD
   peakCurveSol: number;              // high-water mark of SOL in curve (outflow detection)
   socials: { x: boolean; tg: boolean; web: boolean; fetched: boolean };  // 17x graduation lift signal
-  playType: 'MOMENTUM' | 'GRADUATION' | 'DIP' | null;
+  playType: 'MOMENTUM' | 'GRADUATION' | 'DIP' | 'RUNNER' | null;
   laddersFired: number[];            // exit-ladder levels already alerted (2, 5, ...)
   triggeredAt: number | null;        // first time this token hit TRIGGER (in-memory; DB has triggered_at)
   triggerPrice: number | null;       // price at first TRIGGER — ladder multiples measure from here
@@ -143,6 +143,15 @@ export interface AppConfig {
     smart_lane_exit_score: number;
   };
   alerts: { telegram_on_trigger: boolean; realert_score_jump: number };
+  momentum: {
+    enabled: boolean;
+    poll_seconds: number;
+    min_liquidity_usd: number;
+    min_vol24h_usd: number;
+    max_age_hours: number;
+    min_change24h_pct: number;
+    max_change5m_pct: number;
+  };
   learning: {
     enabled: boolean;
     window_days: number;

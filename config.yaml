@@ -134,3 +134,12 @@ learning:                             # closed-loop filter tuning — the bot ad
   window_days: 14                     # rolling evidence window
   min_samples: 8                      # measured kills a rule needs before it's allowed to move
   loosen_false_kill_rate: 0.05        # a rule killing >5% future-3x winners loosens ONE bounded step per cycle
+
+momentum:                             # second discovery engine — catches runners + non-pump.fun launches
+  enabled: true
+  poll_seconds: 180                   # GeckoTerminal trending + new pools (free tier: 30 req/min; we use ~1/90s)
+  min_liquidity_usd: 30000            # a runner worth a late entry has real liquidity
+  min_vol24h_usd: 150000              # and real volume behind the move
+  max_age_hours: 72                   # older than 3 days = established coin, different game
+  min_change24h_pct: 50               # it must actually be running
+  max_change5m_pct: 45                # vertical blow-off candle = exit liquidity, not entry — re-check in 30m

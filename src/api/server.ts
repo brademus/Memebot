@@ -15,6 +15,7 @@ import { discoveryDiag, runDiscovery } from '../wallets/discovery';
 import { handleWebhook, webhookDiag } from '../wallets/webhook';
 import { prefilterDiag } from '../gates/prefilter';
 import { learningDiag } from '../tuning/filtertune';
+import { momentumDiag } from '../ingest/momentum';
 import { fetchHistory, addSmartWallet, removeSmartWallet, listSmartWallets } from '../db';
 import { latestSuggestion } from '../tuning/autotune';
 import { TokenRecord } from '../types';
@@ -212,6 +213,7 @@ export function startServer() {
       webhook: webhookDiag(),
       prefilter: prefilterDiag(),
       learning: learningDiag(),
+      momentum: momentumDiag(),
     });
   });
 

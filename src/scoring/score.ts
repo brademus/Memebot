@@ -54,16 +54,17 @@ export function scoreToken(t: TokenRecord): number {
   }
 
   // ---- #2 organic participation ----
-  // LITE: no per-trade wallets -> log-scaled buy count is the best available proxy
-  const uniq = lite ? 0 : t.uniqueBuyers.length;
-  if (lite) {
-    // fallthrough uses buys-only organic below
-  }
+  // Per-trade wallet data only exists for pump.fun curve tokens on the full
+  // stream. Momentum-surfaced / AMM-native tokens have none — for those the
+  // log-scaled Dexscreener buy count is the proxy (same as LITE mode), otherwise
+  // they'd score ~0 organic forever and the runner lane would be stillborn.
+  const noStream = lite || t.dex !== 'pumpfun' || t.source === 'momentum';
+  const uniq = noStream ? 0 : t.uniqueBuyers.length;
   const uniqScore = clamp(Math.log(1 + uniq) / Math.log(1 + 80));
   const spread = t.totalBuys > 0 ? clamp(uniq / t.totalBuys / 0.7) : 0;  // 70%+ unique = fully organic
   const s = t.uniqueBuyerSamples;
   const slope = s.length >= 3 ? clamp((s[s.length - 1] - s[0]) / (s.length * 5)) : 0;
-  const organic = lite
+  const organic = noStream
     ? clamp(Math.log(1 + t.buys5m) / Math.log(1 + 40))
     : 0.45 * uniqScore + 0.35 * spread + 0.2 * slope;
 

@@ -1,6 +1,7 @@
 import { initDb, upsertToken, markTrigger, markConviction } from './db';
 import { startPumpfunMonitor, setSolPrice, unsubscribeToken } from './ingest/pumpfun';
 import { startDexscreenerPoller } from './ingest/dexscreener';
+import { startMomentumScanner } from './ingest/momentum';
 import { runGates } from './gates';
 import { checkBundle } from './gates/bundle';
 import { scoreToken } from './scoring/score';
@@ -56,6 +57,12 @@ async function main() {
   };
   startWalletTracker(walletSurface);       // polling fallback (stands down when webhook is live)
   startWalletWebhook(walletSurface);       // primary: real-time push for ALL active wallets
+  startMomentumScanner(async (ca) => {
+    // second discovery engine: runners + non-pump.fun launches. Seeded with a
+    // full pool snapshot, so gate immediately on the AMM path.
+    const t = getToken(ca);
+    if (t) await tryGate(t);
+  });
   startAutotune();
   startFilterLearner();   // the closed loop: filters measure their own mistakes and adjust
 
