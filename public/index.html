@@ -3,262 +3,346 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MEMEWATCH</title>
+<title>MEMEWATCH — surveillance terminal</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Barlow+Condensed:wght@500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
+  /* ============================================================
+     MEMEWATCH terminal identity.
+     Brand accent: phosphor AMBER (quote-terminal heritage) — used for
+     the instrument itself: wordmark, focus, active tab, CONVICTION.
+     Green/red are reserved strictly for money semantics.
+     Flat surfaces, hairline borders, zero radius, tabular numerals.
+     ============================================================ */
   :root{
-    --ink:#0B0F14; --panel:#121922; --line:#1E2937;
-    --txt:#C7D3DE; --dim:#64768A;
-    --trigger:#35E0A1; --heating:#E8A33D; --dying:#E85C6B; --ext:#4A5868;
+    --bg0:#0A0C10; --bg1:#0E1218; --bg2:#141A24;
+    --line:#1B2230; --line2:#2B3547;
+    --txt:#D8E0EA; --dim:#8593A6; --faint:#525E70;
+    --amber:#E8B44C; --amber-ink:#0A0C10; --amber-wash:rgba(232,180,76,.07);
+    --up:#3DDC97; --up-wash:rgba(61,220,151,.06);
+    --down:#F0566A; --down-wash:rgba(240,86,106,.05);
+    --ext:#465166;
   }
   *{box-sizing:border-box;margin:0;padding:0}
-  body{background:var(--ink);color:var(--txt);font:14px/1.4 'IBM Plex Mono',monospace}
+  html{scrollbar-color:var(--line2) var(--bg0)}
+  body{background:var(--bg0);color:var(--txt);font:13px/1.45 'IBM Plex Mono',monospace;
+       font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
   a{color:var(--txt)}
-  a:focus-visible,button:focus-visible{outline:2px solid var(--heating);outline-offset:2px}
+  a:focus-visible,button:focus-visible,.tab:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+  ::selection{background:var(--amber);color:var(--amber-ink)}
 
-  #bestbuys{padding:14px 20px;border-bottom:1px solid var(--line);background:rgba(53,224,161,.03)}
-  #bestbuys h2{font-family:'Barlow Condensed';font-weight:600;font-size:15px;letter-spacing:.12em;color:var(--trigger);margin-bottom:10px}
-  #bestbuys h2 span{font-weight:500;color:var(--ext);font-size:12px}
-  #bblist{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px}
-  .bb{border:1px solid var(--trigger);padding:10px 12px;background:var(--ink)}
-  .bb .top{display:flex;align-items:baseline;gap:10px;margin-bottom:4px}
-  .bb .bbg{font-family:'Barlow Condensed';font-weight:600;font-size:18px;color:var(--trigger)}
-  .bb .bbs{font-weight:600;font-size:14px;flex:1}
-  .bb .bbsc{color:var(--dim);font-size:12px}
-  .bb .bblabel{color:var(--txt);font-size:12px;margin-bottom:5px}
-  .bb .bbcaut{color:var(--dying);font-size:11px}
-  .bb .bblinks a{color:var(--dim);font-size:11px;margin-right:10px;border-bottom:1px dotted var(--dim);text-decoration:none}
-  header{display:flex;align-items:baseline;gap:24px;padding:14px 20px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--ink);z-index:2}
-  .wordmark{font-family:'Barlow Condensed';font-size:26px;font-weight:600;letter-spacing:.12em;color:var(--txt)}
-  .wordmark span{color:var(--trigger)}
-  .stat{color:var(--dim);font-size:12px}
-  .stat b{color:var(--txt);font-weight:500}
-  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--dying);margin-right:6px;vertical-align:1px}
-  .dot.live{background:var(--trigger)}
-  #report{margin-left:auto;background:none;border:1px solid var(--line);color:var(--dim);padding:4px 12px;font:12px 'IBM Plex Mono';cursor:pointer}
-  #report:hover{color:var(--txt);border-color:var(--dim)}
-  #aireview{background:none;border:1px solid var(--line);color:var(--dim);padding:4px 12px;font:12px 'IBM Plex Mono';cursor:pointer}
-  #aireview:hover{color:var(--heating);border-color:var(--heating)}
-  #reviewout{display:none;border-top:1px solid var(--line);padding:14px 20px;white-space:pre-wrap;font-size:12px;color:var(--txt);max-width:900px}
-  #mute{background:none;border:1px solid var(--line);color:var(--dim);padding:4px 12px;font:12px 'IBM Plex Mono';cursor:pointer}
-  #mute.on{color:var(--trigger);border-color:var(--trigger)}
+  /* ---- eyebrow: the label voice of the whole instrument ---- */
+  .eyebrow{font-family:'Archivo';font-weight:700;font-size:10px;letter-spacing:.18em;
+           text-transform:uppercase;color:var(--faint)}
 
+  /* ================= COMMAND BAR ================= */
+  header{display:flex;align-items:stretch;border-bottom:1px solid var(--line);
+         position:sticky;top:0;background:var(--bg0);z-index:5}
+  .brand{padding:10px 18px 9px;border-right:1px solid var(--line)}
+  .wordmark{font-family:'Archivo';font-size:21px;font-weight:800;letter-spacing:.02em;line-height:1;color:var(--txt)}
+  .wordmark b{color:var(--amber);font-weight:800}
+  .brand .eyebrow{margin-top:3px;display:flex;align-items:center;gap:7px}
+  .dot{display:inline-block;width:7px;height:7px;background:var(--down);flex-shrink:0}
+  .dot.live{background:var(--up);animation:pulse 2.4s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  @media (prefers-reduced-motion: reduce){.dot.live{animation:none}}
+
+  #vitals{display:flex;align-items:stretch}
+  .vital{padding:9px 16px 8px;border-right:1px solid var(--line);min-width:76px}
+  .vital .eyebrow{margin-bottom:2px}
+  .vital b{font-family:'IBM Plex Mono';font-weight:600;font-size:17px;color:var(--txt);line-height:1.15}
+  .vital.hot b{color:var(--up)}
+  .vital.amber b{color:var(--amber)}
+  .vital span{color:var(--faint);font-size:11px}
+
+  #clock{margin-left:auto;padding:9px 16px 8px;border-left:1px solid var(--line);text-align:right}
+  #clock b{font-weight:500;font-size:15px;color:var(--dim);letter-spacing:.04em}
+  .actions{display:flex;align-items:center;gap:8px;padding:0 16px;border-left:1px solid var(--line)}
+  .actions button{background:none;border:1px solid var(--line2);color:var(--dim);
+                  padding:6px 12px;font:600 10px/1 'Archivo';letter-spacing:.14em;cursor:pointer;
+                  text-transform:uppercase}
+  .actions button:hover{color:var(--txt);border-color:var(--dim)}
+  #mute.on{color:var(--amber);border-color:var(--amber)}
+
+  /* ================= TABS ================= */
+  nav.tabs{display:flex;gap:0;padding:0 18px;border-bottom:1px solid var(--line);
+           background:var(--bg0);position:sticky;top:55px;z-index:4}
+  .tab{font-family:'Archivo';font-weight:700;font-size:11px;letter-spacing:.16em;
+       padding:12px 16px;color:var(--faint);cursor:pointer;border-bottom:2px solid transparent;
+       user-select:none;text-transform:uppercase}
+  .tab:hover{color:var(--dim)}
+  .tab.active{color:var(--amber);border-bottom-color:var(--amber)}
+  .tabpanel{display:none}
+
+  /* ================= CONVICTION STRIP — the klaxon ================= */
+  /* The product thesis as UI: silent and armed almost always; when the bot
+     confirms a buy, this is the loudest thing on the screen. */
+  #convstrip{border-bottom:1px solid var(--line)}
+  .conv-armed{display:flex;align-items:baseline;gap:14px;padding:8px 18px;color:var(--faint);font-size:11px}
+  .conv-armed .sq{color:var(--amber);font-size:10px}
+  .conv-armed b{font-family:'Archivo';font-weight:700;font-size:10px;letter-spacing:.18em;color:var(--dim)}
+  .conv-armed .n{color:var(--amber)}
+  .conv-live{border-top:2px solid var(--amber);border-bottom:2px solid var(--amber);
+             background:var(--amber-wash);padding:12px 18px;position:relative;overflow:hidden}
+  .conv-live::before{content:'';position:absolute;inset:0;
+             background:linear-gradient(100deg,transparent 30%,rgba(232,180,76,.18) 50%,transparent 70%);
+             transform:translateX(-100%);animation:sweep 1.4s ease-out 1 forwards}
+  @keyframes sweep{to{transform:translateX(100%)}}
+  @media (prefers-reduced-motion: reduce){.conv-live::before{animation:none}}
+  .conv-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+  .conv-tag{font-family:'Archivo';font-weight:800;font-size:12px;letter-spacing:.16em;
+            background:var(--amber);color:var(--amber-ink);padding:3px 9px}
+  .conv-sym{font-family:'Archivo';font-weight:800;font-size:19px;color:var(--txt)}
+  .conv-score{color:var(--amber);font-weight:600;font-size:15px}
+  .conv-links{margin-left:auto}
+  .conv-links a{color:var(--amber);font-size:12px;margin-left:14px;text-decoration:none;border-bottom:1px solid var(--amber)}
+  .conv-proof{margin-top:7px;display:flex;flex-wrap:wrap;gap:5px 16px;font-size:11px;color:var(--dim)}
+  .conv-proof i{font-style:normal;color:var(--amber);margin-right:5px}
+
+  /* ================= BEST BUYS — three earned sockets ================= */
+  #bestbuys{padding:14px 18px;border-bottom:1px solid var(--line)}
+  #bestbuys .bbhead{display:flex;align-items:baseline;gap:12px;margin-bottom:10px}
+  #bestbuys h2{font-family:'Archivo';font-weight:700;font-size:12px;letter-spacing:.18em;color:var(--txt)}
+  #bestbuys h2 i{font-style:normal;color:var(--up)}
+  #bbnote{color:var(--faint);font-size:11px}
+  #bblist{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .bb{border:1px solid var(--up);padding:11px 13px;background:var(--up-wash);min-height:96px}
+  .bb .top{display:flex;align-items:baseline;gap:9px;margin-bottom:5px}
+  .bb .bbg{font-family:'Archivo';font-weight:800;font-size:17px;color:var(--up)}
+  .bb .bbs{font-weight:600;font-size:14px;color:var(--txt)}
+  .bb .bbsc{color:var(--dim);font-size:11px;margin-left:auto;text-align:right}
+  .bb .bblabel{color:var(--txt);font-size:12px;margin-bottom:6px;line-height:1.45}
+  .bb .bbcaut{color:var(--down);font-size:11px;margin-bottom:5px}
+  .bb .bblinks a{color:var(--dim);font-size:11px;margin-right:12px;border-bottom:1px dotted var(--faint);text-decoration:none}
+  .bb .bblinks a:hover{color:var(--up);border-color:var(--up)}
+  .bb.socket{border:1px dashed var(--line2);background:none;display:flex;flex-direction:column;
+             justify-content:center;gap:4px}
+  .bb.socket .eyebrow{color:var(--faint)}
+  .bb.socket p{color:var(--faint);font-size:11px;line-height:1.5}
+
+  /* ================= WATCHLIST ================= */
+  #watchhead{padding:16px 18px 6px;display:flex;align-items:baseline;gap:12px}
+  #watchhead h2{font-family:'Archivo';font-weight:700;font-size:12px;letter-spacing:.18em;color:var(--dim)}
+  #watchhead p{color:var(--faint);font-size:11px}
+
+  .tablewrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
   table{width:100%;border-collapse:collapse}
-  th{font-family:'Barlow Condensed';font-weight:500;font-size:13px;letter-spacing:.1em;color:var(--dim);text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);text-transform:uppercase}
-  td{padding:9px 12px;border-bottom:1px solid var(--line);white-space:nowrap;font-size:13px}
-  tr.row{border-left:3px solid transparent}
-  tr.TRIGGER{border-left-color:var(--trigger);background:rgba(53,224,161,.05)}
-  tr.HEATING{border-left-color:var(--heating)}
-  tr.DYING{border-left-color:var(--dying);opacity:.55}
-  tr.EXTENDED{opacity:.4}
+  th{font-family:'Archivo';font-weight:700;font-size:10px;letter-spacing:.14em;color:var(--faint);
+     text-align:left;padding:9px 12px;border-bottom:1px solid var(--line2);text-transform:uppercase;
+     background:var(--bg0);position:sticky;top:97px;z-index:1}
+  th.num{text-align:right}
+  td{padding:8px 12px;border-bottom:1px solid var(--line);white-space:nowrap;font-size:13px}
+  td.num{text-align:right}
+  tr.row{border-left:2px solid transparent}
+  tr.row:hover td{background:var(--bg1)}
+  tr.TRIGGER{border-left-color:var(--up);background:var(--up-wash)}
+  tr.HEATING{border-left-color:var(--amber)}
+  tr.DYING{border-left-color:var(--down);opacity:.5}
+  tr.EXTENDED{opacity:.38}
+  tr.conviction{border-left-color:var(--amber);background:var(--amber-wash)}
   tr.flash{animation:flash 1.2s ease-out 2}
-  @keyframes flash{0%{background:rgba(53,224,161,.35)}100%{background:rgba(53,224,161,.05)}}
+  @keyframes flash{0%{background:rgba(61,220,151,.3)}100%{background:var(--up-wash)}}
   @media (prefers-reduced-motion: reduce){tr.flash{animation:none}}
 
-  .grade{font-family:'Barlow Condensed';font-weight:600;font-size:16px;letter-spacing:.04em;padding:1px 8px;border:1px solid;display:inline-block}
-  .grade-Aplus{color:#0B0F14;background:var(--trigger);border-color:var(--trigger)}
-  .grade-A{color:var(--trigger);border-color:var(--trigger)}
-  .grade-B{color:var(--heating);border-color:var(--heating)}
-  .grade-C{color:var(--dim);border-color:var(--line)}
+  .grade{font-family:'Archivo';font-weight:800;font-size:14px;letter-spacing:.02em;
+         padding:1px 8px;border:1px solid;display:inline-block;min-width:34px;text-align:center}
+  .grade-Aplus{color:var(--amber-ink);background:var(--up);border-color:var(--up)}
+  .grade-A{color:var(--up);border-color:var(--up)}
+  .grade-B{color:var(--amber);border-color:var(--amber)}
+  .grade-C{color:var(--dim);border-color:var(--line2)}
   .grade-D{color:var(--ext);border-color:var(--line)}
-  .timing{font-family:'Barlow Condensed';font-size:9px;letter-spacing:.1em;margin-top:2px;color:var(--ext)}
-  .t-EARLY{color:var(--trigger)} .t-LATE,.t-STALE{color:var(--dying)}
-  .chip{font-family:'Barlow Condensed';font-size:12px;font-weight:600;letter-spacing:.08em;padding:2px 8px;border:1px solid}
-  .chip.TRIGGER{color:var(--trigger);border-color:var(--trigger)}
-  .chip.HEATING{color:var(--heating);border-color:var(--heating)}
-  .chip.WATCHING{color:var(--dim);border-color:var(--line)}
-  .chip.DYING{color:var(--dying);border-color:var(--dying)}
+  .timing{font-family:'Archivo';font-weight:700;font-size:8px;letter-spacing:.14em;margin-top:3px;color:var(--ext)}
+  .t-EARLY{color:var(--up)} .t-LATE,.t-STALE{color:var(--down)}
+
+  .chip{font-family:'Archivo';font-size:10px;font-weight:700;letter-spacing:.1em;padding:2px 7px;border:1px solid}
+  .chip.TRIGGER{color:var(--up);border-color:var(--up)}
+  .chip.HEATING{color:var(--amber);border-color:var(--amber)}
+  .chip.WATCHING{color:var(--dim);border-color:var(--line2)}
+  .chip.DYING{color:var(--down);border-color:var(--down)}
   .chip.EXTENDED{color:var(--ext);border-color:var(--ext)}
+  .chip.CONVICTION{color:var(--amber-ink);background:var(--amber);border-color:var(--amber)}
+  .needs{font-size:9px;color:var(--faint);margin-top:3px;max-width:150px;white-space:normal;line-height:1.5}
+  .needs b{font-family:'Archivo';font-weight:700;font-size:8px;letter-spacing:.12em;color:var(--ext)}
 
-  .sym{font-weight:600}
-  .name{color:var(--dim);font-size:11px}
-  .socials{color:var(--trigger);font-size:10px;letter-spacing:2px}
-  /* the fuse: 4h window burning down under each ticker */
-  .fuse{height:3px;background:var(--line);margin-top:4px;width:110px}
-  .fuse i{display:block;height:100%;background:var(--heating)}
-  tr.TRIGGER .fuse i{background:var(--trigger)}
+  .sym{font-weight:600;font-size:13px}
+  .name{color:var(--faint);font-size:11px}
+  .socials{color:var(--up);font-size:10px;letter-spacing:2px}
+  /* the fuse: 4h eligibility window burning down */
+  .fuse{height:2px;background:var(--line2);margin-top:5px;width:110px}
+  .fuse i{display:block;height:100%;background:var(--amber)}
+  tr.TRIGGER .fuse i{background:var(--up)}
 
-  .score{font-weight:600;font-size:15px}
-  .pos{color:var(--trigger)} .neg{color:var(--dying)} .mut{color:var(--dim)}
-  .links a{color:var(--dim);text-decoration:none;margin-right:10px;border-bottom:1px dotted var(--dim)}
-  .links a:hover{color:var(--txt)}
-  .moved-hot{color:var(--dying);font-weight:600}
-  tr.ainote td{border-bottom:1px solid var(--line);padding:2px 12px 10px;font-size:12px;color:var(--dim);line-height:1.5}
-  tr.ainote.TRIGGER td{border-left:3px solid var(--trigger)}
-  .ai-label{font-family:'Barlow Condensed';font-weight:600;letter-spacing:.1em;color:var(--trigger);font-size:11px;margin-right:8px}
+  .score{font-weight:600;font-size:14px}
+  .pos{color:var(--up)} .neg{color:var(--down)} .mut{color:var(--faint)}
+  .links a{color:var(--dim);text-decoration:none;margin-right:10px;border-bottom:1px dotted var(--faint)}
+  .links a:hover{color:var(--txt);border-color:var(--txt)}
+  .moved-hot{color:var(--down);font-weight:600}
+  tr.ainote td{border-bottom:1px solid var(--line);padding:2px 12px 10px;font-size:12px;color:var(--dim);line-height:1.55}
+  tr.ainote.TRIGGER td{border-left:2px solid var(--up)}
+  .ai-label{font-family:'Archivo';font-weight:700;letter-spacing:.14em;color:var(--amber);font-size:9px;margin-right:8px}
 
-  #empty{padding:60px 20px;color:var(--dim);text-align:center}
-  #empty b{color:var(--txt);display:block;margin-bottom:8px;font-family:'Barlow Condensed';font-size:18px;letter-spacing:.08em}
+  #empty{padding:70px 20px;color:var(--faint);text-align:center;font-size:12px}
+  #empty b{color:var(--dim);display:block;margin-bottom:8px;font-family:'Archivo';font-size:14px;letter-spacing:.2em;font-weight:700}
+  #reviewout{display:none;border-top:1px solid var(--line);padding:14px 18px;white-space:pre-wrap;font-size:12px;color:var(--txt);max-width:920px}
 
-  #seenpanel{border-top:1px solid var(--line);margin-top:24px;padding:14px 20px}
-  #seenpanel h2{font-family:'Barlow Condensed';font-weight:600;font-size:15px;letter-spacing:.12em;color:var(--dim);margin-bottom:4px}
-  #seenpanel h2 span{font-weight:500;color:var(--ext)}
-  #seenhint{color:var(--ext);font-size:11px;margin-bottom:10px;max-width:640px}
-  #seenlist{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px}
-  .seen{display:flex;gap:8px;align-items:baseline;padding:6px 8px;border:1px solid var(--line);font-size:12px}
-  .seen .st{font-family:'Barlow Condensed';font-weight:600;letter-spacing:.06em;font-size:11px;padding:1px 6px;border:1px solid;flex-shrink:0}
-  .seen .st.PENDING{color:var(--ext);border-color:var(--line)}
-  .seen .st.KILLED{color:var(--dying);border-color:var(--dying)}
-  .seen .st.WATCHING{color:var(--dim);border-color:var(--line)}
-  .seen .st.HEATING{color:var(--heating);border-color:var(--heating)}
-  .seen .st.TRIGGER{color:var(--trigger);border-color:var(--trigger)}
-  .seen .st.EXTENDED,.seen .st.DYING{color:var(--ext);border-color:var(--line)}
-  .seen .sy{color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
-  .seen .ag{color:var(--ext);flex-shrink:0}
+  /* ================= PANELS (wins / wallets / scanned) ================= */
+  .panel{border-top:1px solid var(--line);padding:14px 18px}
+  .panel h2{font-family:'Archivo';font-weight:700;font-size:12px;letter-spacing:.18em;color:var(--dim);margin-bottom:10px}
+  .panel h2 span{font-weight:500;color:var(--faint);font-size:11px;letter-spacing:.04em;font-family:'IBM Plex Mono';text-transform:none}
+  .panelhint{color:var(--faint);font-size:11px;margin:-6px 0 10px;max-width:680px}
 
-  #tabs{display:flex;gap:0;border-bottom:1px solid var(--line);padding:0 20px}
-  .tab{background:none;border:none;border-bottom:2px solid transparent;color:var(--dim);font-family:'Barlow Condensed';font-weight:600;font-size:14px;letter-spacing:.1em;padding:12px 18px;cursor:pointer}
-  .tab.on{color:var(--txt);border-bottom-color:var(--trigger)}
-  #historyview{padding-bottom:40px}
-  .mult-win{color:var(--trigger);font-weight:600}
-  .mult-loss{color:var(--dim)}
-  #loadmore{margin:20px;background:none;border:1px solid var(--line);color:var(--txt);padding:8px 18px;font:13px 'IBM Plex Mono';cursor:pointer}
-  #loadmore:hover{border-color:var(--trigger)}
-  #sysstatus{padding:12px 20px;border-bottom:1px solid var(--line);font-size:12px;display:flex;gap:18px;flex-wrap:wrap;align-items:center}
-  #rundisc{background:none;border:1px solid var(--trigger);color:var(--trigger);padding:5px 12px;font:11px 'IBM Plex Mono';cursor:pointer}
-  .ss{display:flex;align-items:center;gap:6px;color:var(--dim)}
-  .ss .d{width:8px;height:8px;border-radius:50%;display:inline-block}
-  .ss .d.on{background:var(--trigger)} .ss .d.off{background:var(--dying)}
+  #winssummary{display:flex;gap:0;border-bottom:1px solid var(--line)}
+  .winstat{padding:14px 26px 12px;border-right:1px solid var(--line)}
+  .winstat .eyebrow{margin-bottom:3px}
+  .winstat b{font-size:26px;color:var(--txt);display:block;font-weight:600;line-height:1.1}
+  .winstat span{color:var(--up);font-size:12px}
+  #winslist{padding:8px 18px 40px}
+  .win{display:flex;gap:14px;align-items:baseline;padding:8px 0;border-bottom:1px solid var(--line);font-size:12px}
+  .win .wm{font-family:'Archivo';font-weight:800;font-size:16px;min-width:58px;color:var(--dim)}
+  .win .wm.mid{color:var(--amber)} .win .wm.big{color:var(--up)}
+  .win .ws{font-weight:600;min-width:92px}
+  .win .wsc{color:var(--dim);min-width:150px}
+  .win .wt{color:var(--faint);flex:1}
+  .win a{color:var(--dim)}
+
+  #sysstatus{padding:12px 18px;border-bottom:1px solid var(--line);font-size:12px;display:flex;gap:18px;flex-wrap:wrap;align-items:center}
+  #rundisc{background:none;border:1px solid var(--amber);color:var(--amber);padding:5px 12px;font:700 10px 'Archivo';letter-spacing:.12em;cursor:pointer;text-transform:uppercase}
+  .ss{display:flex;align-items:center;gap:7px;color:var(--dim)}
+  .ss .d{width:7px;height:7px;display:inline-block}
+  .ss .d.on{background:var(--up)} .ss .d.off{background:var(--down)}
   .ss b{color:var(--txt);font-weight:500}
-  #analyticspanel{border-top:1px solid var(--line);margin-top:24px;padding:14px 20px}
-  #analyticspanel h2{font-family:'Barlow Condensed';font-weight:600;font-size:15px;letter-spacing:.12em;color:var(--dim);margin-bottom:10px}
-  #analyticspanel h2 span{font-weight:500;color:var(--ext);font-size:13px}
-  .anagrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:22px}
-  .anablock h3{font-family:'Barlow Condensed';font-weight:600;font-size:13px;letter-spacing:.1em;color:var(--dim);margin-bottom:4px}
-  .anablock h3 span{font-weight:500;color:var(--ext)}
-  .anahint{color:var(--ext);font-size:11px;margin-bottom:8px}
-  .wal{display:flex;gap:12px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line);font-size:12px}
-  .wal .ad{font-family:'IBM Plex Mono';color:var(--txt)}
-  .wal .wn{color:var(--trigger);font-weight:600;min-width:70px}
+
+  .anagrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:24px}
+  .anablock h3{font-family:'Archivo';font-weight:700;font-size:11px;letter-spacing:.14em;color:var(--dim);margin-bottom:4px}
+  .anablock h3 span{font-weight:500;color:var(--faint);font-family:'IBM Plex Mono';font-size:11px;letter-spacing:.02em}
+  .anahint{color:var(--faint);font-size:11px;margin-bottom:8px;line-height:1.5}
+  .wal{display:flex;gap:12px;align-items:baseline;padding:6px 0;border-bottom:1px solid var(--line);font-size:12px}
+  .wal .ad{color:var(--txt)}
+  .wal .wn{color:var(--up);font-weight:600;min-width:72px}
   .wal .ty{color:var(--dim);min-width:80px}
-  .wal .st{margin-left:auto;font-family:'Barlow Condensed';font-weight:600;letter-spacing:.06em}
-  .wal .st.on{color:var(--trigger)} .wal .st.off{color:var(--ext)}
+  .wal .st{margin-left:auto;font-family:'Archivo';font-weight:700;letter-spacing:.08em;font-size:10px}
+  .wal .st.on{color:var(--up)} .wal .st.off{color:var(--ext)}
   .wal a{color:var(--dim)}
 
-  #histpanel{border-top:1px solid var(--line);margin-top:24px;padding:14px 20px}
-  #histpanel h2{font-family:'Barlow Condensed';font-weight:600;font-size:15px;letter-spacing:.12em;color:var(--dim);margin-bottom:10px}
-  #histpanel h2 span{font-weight:500;color:var(--ext)}
-  #loadhist{background:none;border:1px solid var(--line);color:var(--dim);padding:6px 14px;font:12px 'IBM Plex Mono';cursor:pointer;margin-bottom:10px}
+  #seenlist{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:6px}
+  .seen{display:flex;gap:8px;align-items:baseline;padding:6px 9px;border:1px solid var(--line);font-size:12px}
+  .seen .st{font-family:'Archivo';font-weight:700;letter-spacing:.06em;font-size:9px;padding:2px 6px;border:1px solid;flex-shrink:0}
+  .seen .st.PENDING{color:var(--ext);border-color:var(--line)}
+  .seen .st.KILLED{color:var(--down);border-color:var(--down)}
+  .seen .st.WATCHING{color:var(--dim);border-color:var(--line2)}
+  .seen .st.HEATING{color:var(--amber);border-color:var(--amber)}
+  .seen .st.TRIGGER{color:var(--up);border-color:var(--up)}
+  .seen .st.EXTENDED,.seen .st.DYING{color:var(--ext);border-color:var(--line)}
+  .seen .sy{color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+  .seen .ag{color:var(--faint);flex-shrink:0}
+
+  .scan{display:flex;gap:14px;align-items:baseline;padding:6px 0;border-bottom:1px solid var(--line);font-size:12px}
+  .scan .t{color:var(--faint);min-width:56px}
+  .scan .v{font-family:'Archivo';font-weight:700;letter-spacing:.08em;min-width:46px;font-size:11px}
+  .scan .v.PASS{color:var(--up)} .scan .v.KILL{color:var(--down)}
+  .scan .s{color:var(--txt);min-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .scan .r{color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  #loadhist{background:none;border:1px solid var(--line2);color:var(--dim);padding:6px 14px;font:700 10px 'Archivo';letter-spacing:.12em;cursor:pointer;margin-bottom:10px;text-transform:uppercase}
   #loadhist:hover{color:var(--txt);border-color:var(--dim)}
-  .hist{display:flex;gap:14px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line);font-size:12px}
-  .hist .d{color:var(--ext);min-width:120px}
-  .hist .v{font-family:'Barlow Condensed';font-weight:600;min-width:44px}
-  .hist .v.passed{color:var(--trigger)} .hist .v.failed{color:var(--dying)} .hist .v.none{color:var(--ext)}
+  .hist{display:flex;gap:14px;align-items:baseline;padding:6px 0;border-bottom:1px solid var(--line);font-size:12px}
+  .hist .d{color:var(--faint);min-width:130px}
+  .hist .v{font-family:'Archivo';font-weight:700;min-width:46px;font-size:11px}
+  .hist .v.passed{color:var(--up)} .hist .v.failed{color:var(--down)} .hist .v.none{color:var(--ext)}
   .hist .s{color:var(--txt);min-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .hist .r{color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
   .hist a{color:var(--dim)}
 
-  #scanpanel{border-top:1px solid var(--line);margin-top:24px;padding:14px 20px 40px}
-  #scanpanel h2{font-family:'Barlow Condensed';font-weight:600;font-size:15px;letter-spacing:.12em;color:var(--dim);margin-bottom:10px}
-  #scanpanel h2 span{font-weight:500;color:var(--ext)}
-  .scan{display:flex;gap:14px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line);font-size:12px}
-  .scan .t{color:var(--ext);min-width:52px}
-  .scan .v{font-family:'Barlow Condensed';font-weight:600;letter-spacing:.08em;min-width:44px}
-  .scan .v.PASS{color:var(--trigger)} .scan .v.KILL{color:var(--dying)}
-  .scan .s{color:var(--txt);min-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .scan .r{color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-
-  /* ---- tab navigation (restored after stylesheet-truncation bug) ---- */
-  nav.tabs{display:flex;gap:2px;padding:0 20px;border-bottom:1px solid var(--line);background:var(--ink);position:sticky;top:53px;z-index:2}
-  .tab{font-family:'Barlow Condensed';font-weight:600;font-size:14px;letter-spacing:.1em;padding:11px 18px;color:var(--dim);cursor:pointer;border-bottom:2px solid transparent;user-select:none}
-  .tab:hover{color:var(--txt)}
-  .tab.active{color:var(--trigger);border-bottom-color:var(--trigger)}
-  .tabpanel{display:none}
-  /* ---- wins ---- */
-  #winssummary{display:flex;gap:28px;padding:14px 20px;border-bottom:1px solid var(--line)}
-  .winstat{font-family:'Barlow Condensed';font-size:13px;letter-spacing:.06em;color:var(--dim)}
-  .winstat b{font-size:24px;color:var(--txt);display:block;font-weight:600}
-  .winstat span{color:var(--trigger)}
-  #winslist{padding:8px 20px 40px}
-  .win{display:flex;gap:14px;align-items:baseline;padding:7px 0;border-bottom:1px solid var(--line);font-size:12px}
-  .win .wm{font-family:'Barlow Condensed';font-weight:600;font-size:16px;min-width:56px;color:var(--dim)}
-  .win .wm.mid{color:var(--heating)} .win .wm.big{color:var(--trigger)}
-  .win .ws{font-weight:600;min-width:90px}
-  .win .wsc{color:var(--dim);min-width:150px}
-  .win .wt{color:var(--ext);flex:1}
-  .win a{color:var(--dim)}
-  /* ---- best buys vs watchlist separation ---- */
-  #bestbuys{border:1px solid var(--trigger);margin:14px 20px;padding:14px 16px;background:rgba(53,224,161,.04)}
-  #watchhead{padding:18px 20px 6px}
-  #watchhead h2{font-family:'Barlow Condensed';font-weight:600;font-size:15px;letter-spacing:.12em;color:var(--dim)}
-  #watchhead p{color:var(--ext);font-size:11px;margin-top:2px}
-
-
-  /* ---- mobile / small screens ---- */
-  .tablewrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  /* ================= MOBILE ================= */
+  @media (max-width: 1100px){ #bblist{grid-template-columns:repeat(2,1fr)} }
   @media (max-width: 900px){
     td:nth-child(7), th:nth-child(7),      /* Liq:MC */
     td:nth-child(9), th:nth-child(9),      /* Δ5m */
     td:nth-child(11), th:nth-child(11),    /* Insider */
     td:nth-child(12), th:nth-child(12)     /* Smart */
     {display:none}
+    #clock{display:none}
   }
   @media (max-width: 700px){
-    header{flex-wrap:wrap;gap:10px 16px;position:static;padding:10px 12px}
-    .wordmark{font-size:20px;width:100%}
-    #report,#aireview,#mute{padding:8px 12px;margin-left:0}
+    header{flex-wrap:wrap;position:static}
+    .brand{width:100%;border-right:none;border-bottom:1px solid var(--line)}
+    #vitals{flex:1;overflow-x:auto}
+    .vital{min-width:0;flex:1;padding:8px 7px 7px}
+    .vital b{font-size:15px}
+    .vital .eyebrow{font-size:8px;letter-spacing:.1em}
+    .actions{border-left:none;padding:8px 12px;width:100%;border-top:1px solid var(--line)}
+    .actions button{padding:8px 10px}
     nav.tabs{top:0;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:0 8px}
-    .tab{padding:12px 12px;white-space:nowrap;font-size:13px}
+    .tab{padding:12px 12px;white-space:nowrap}
+    th{top:0}
     th,td{padding:8px 8px;font-size:12px}
     td:nth-child(6), th:nth-child(6){display:none}   /* Liq too on phones */
-    #bestbuys{margin:10px 8px;padding:10px}
+    #bestbuys{padding:10px}
     #bblist{grid-template-columns:1fr}
+    .bb.socket{min-height:0;padding:9px 13px}
     .anagrid{grid-template-columns:1fr}
     #seenlist{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
-    #winssummary{gap:16px;flex-wrap:wrap}
+    #winssummary{flex-wrap:wrap}
+    .winstat{padding:10px 16px}
     .win,.scan,.hist,.wal{flex-wrap:wrap;row-gap:2px}
     .win .wt{flex-basis:100%}
-    #watchhead{padding:12px 12px 4px}
+    #watchhead{padding:12px 10px 4px;flex-wrap:wrap}
     #sysstatus{gap:10px}
     #reviewout{padding:10px 12px;font-size:11px}
-  }
-  @media (max-width: 700px){
-    /* bigger touch targets on row links */
+    .conv-links{margin-left:0;flex-basis:100%}
+    .conv-links a{margin-left:0;margin-right:14px}
     .links a,.bblinks a{padding:6px 4px;display:inline-block}
   }
-
 </style>
 </head>
 <body>
 <header>
-  <div class="wordmark">MEME<span>WATCH</span></div>
-  <div class="stat"><span class="dot" id="conn"></span><span id="connTxt">connecting</span></div>
-  <div class="stat">seen <b id="sSeen">0</b></div>
-  <div class="stat">killed <b id="sKilled">0</b></div>
-  <div class="stat">watching <b id="sWatch">0</b></div>
-  <div class="stat">triggers <b id="sTrig">0</b></div>
-  <button id="report">WEEKLY REPORT</button>
-  <button id="aireview">AI REVIEW</button>
-  <button id="mute" aria-pressed="false">SOUND OFF</button>
+  <div class="brand">
+    <div class="wordmark">MEME<b>WATCH</b></div>
+    <div class="eyebrow"><span class="dot" id="conn"></span><span id="connTxt">connecting</span> · solana surveillance</div>
+  </div>
+  <div id="vitals">
+    <div class="vital"><div class="eyebrow">Seen</div><b id="sSeen">0</b></div>
+    <div class="vital"><div class="eyebrow">Killed</div><b id="sKilled">0</b></div>
+    <div class="vital"><div class="eyebrow">Watching</div><b id="sWatch">0</b></div>
+    <div class="vital hot"><div class="eyebrow">Triggers</div><b id="sTrig">0</b></div>
+    <div class="vital amber"><div class="eyebrow">Convictions</div><b id="sConv">0</b><span id="sConvB"></span></div>
+  </div>
+  <div id="clock"><div class="eyebrow">Local</div><b id="clockTxt">--:--:--</b></div>
+  <div class="actions">
+    <button id="report">Weekly report</button>
+    <button id="aireview">AI review</button>
+    <button id="mute" aria-pressed="false">Sound off</button>
+  </div>
 </header>
 
 <nav class="tabs">
-  <div class="tab" data-tab="live">LIVE PICKS</div>
-  <div class="tab" data-tab="wins">WINS</div>
-  <div class="tab" data-tab="wallets">WALLETS &amp; STATS</div>
-  <div class="tab" data-tab="scanned">ALL SCANNED</div>
+  <div class="tab" data-tab="live" tabindex="0">Live picks</div>
+  <div class="tab" data-tab="wins" tabindex="0">Wins</div>
+  <div class="tab" data-tab="wallets" tabindex="0">Wallets &amp; stats</div>
+  <div class="tab" data-tab="scanned" tabindex="0">All scanned</div>
 </nav>
 
 <div id="tab-live" class="tabpanel">
+  <div id="convstrip"></div>
   <section id="bestbuys">
-    <h2>BEST BUYS RIGHT NOW <span id="bbnote"></span></h2>
+    <div class="bbhead"><h2><i>■</i> BEST BUYS RIGHT NOW</h2><span id="bbnote"></span></div>
     <div id="bblist"></div>
   </section>
   <div id="watchhead">
     <h2>FULL WATCHLIST</h2>
-    <p>Every coin currently past the gates, ranked. This is the raw feed — NOT buy recommendations. Graduation candidates that survive the snipe window and keep accumulating SOL get promoted into the green BEST BUYS box above.</p>
+    <p>Every coin past the gates, ranked. Raw feed — not buy recommendations. Survivors of the snipe window that keep accumulating SOL earn the sockets above.</p>
   </div>
   <div class="tablewrap">
   <table>
     <thead><tr>
-      <th>Grade</th><th>State</th><th>Token</th><th>Age</th><th>Score</th><th>Liq</th><th>Liq:MC</th>
-      <th>B:S 5m</th><th>&Delta;5m</th><th>Moved</th><th>Insider</th><th>Smart</th><th>Open</th>
+      <th>Grade</th><th>State</th><th>Token</th><th class="num">Age</th><th class="num">Score</th><th class="num">Liq</th><th class="num">Liq:MC</th>
+      <th class="num">B:S 5m</th><th class="num">&Delta;5m</th><th class="num">Moved</th><th class="num">Insider</th><th class="num">Smart</th><th>Open</th>
     </tr></thead>
     <tbody id="rows"></tbody>
   </table>
   </div>
-  <div id="empty"><b>SCANNING</b>Coins appear here once they pass the rug gates. Killed tokens are in ALL SCANNED.</div>
+  <div id="empty"><b>SCANNING</b>Coins appear here once they pass the rug gates. Killed tokens live in All scanned.</div>
   <div id="reviewout"></div>
 </div>
 
@@ -269,7 +353,7 @@
 
 <div id="tab-wallets" class="tabpanel">
   <div id="sysstatus"></div>
-  <section id="analyticspanel">
+  <section class="panel" id="analyticspanel">
     <h2>ANALYTICS <span id="todaystats"></span></h2>
     <div class="anagrid">
       <div class="anablock">
@@ -292,77 +376,126 @@
 </div>
 
 <div id="tab-scanned" class="tabpanel">
-  <section id="seenpanel">
+  <section class="panel" id="seenpanel">
     <h2>ALL SCANNED <span id="seencount"></span></h2>
-    <div id="seenhint">Every token detected, newest first. PENDING = seen, waiting for liquidity before gates run.</div>
+    <div class="panelhint" id="seenhint">Every token detected, newest first. PENDING = seen, waiting for liquidity before gates run.</div>
     <div id="seenlist"></div>
   </section>
-  <section id="scanpanel">
+  <section class="panel" id="scanpanel">
     <h2>SCAN FEED <span id="scancount"></span></h2>
     <div id="scanlist"></div>
   </section>
-  <section id="histpanel">
+  <section class="panel" id="histpanel">
     <h2>FULL HISTORY <span id="histcount"></span></h2>
-    <button id="loadhist">LOAD FROM DATABASE</button>
+    <button id="loadhist">Load from database</button>
     <div id="histlist"></div>
   </section>
 </div>
 
 <script>
 const MAX_AGE = 240; // keep in sync with config age.max_token_age_minutes
-let sound = false, prevStates = {};
+let sound = false, prevStates = {}, prevConv = {};
 const $ = id => document.getElementById(id);
 
 $('mute').onclick = () => {
   sound = !sound;
-  $('mute').textContent = sound ? 'SOUND ON' : 'SOUND OFF';
+  $('mute').textContent = sound ? 'Sound on' : 'Sound off';
   $('mute').className = sound ? 'on' : '';
   $('mute').setAttribute('aria-pressed', sound);
   if (sound) ding(); // unlock audio context on user gesture
 };
 
 let ctx;
-function ding(){
+function ding(conviction){
   if (!sound) return;
   ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
   const o = ctx.createOscillator(), g = ctx.createGain();
-  o.type = 'sine'; o.frequency.value = 880;
+  o.type = 'sine'; o.frequency.value = conviction ? 660 : 880;
   g.gain.setValueAtTime(.25, ctx.currentTime);
-  g.gain.exponentialRampToValueAtTime(.001, ctx.currentTime + .5);
+  g.gain.exponentialRampToValueAtTime(.001, ctx.currentTime + (conviction ? .9 : .5));
   o.connect(g); g.connect(ctx.destination);
-  o.start(); o.frequency.setValueAtTime(1320, ctx.currentTime + .12); o.stop(ctx.currentTime + .5);
+  o.start();
+  if (conviction) { o.frequency.setValueAtTime(880, ctx.currentTime + .15); o.frequency.setValueAtTime(1320, ctx.currentTime + .3); o.stop(ctx.currentTime + .9); }
+  else { o.frequency.setValueAtTime(1320, ctx.currentTime + .12); o.stop(ctx.currentTime + .5); }
 }
 
 const fmt = n => n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(0)+'K' : n.toFixed(0);
+
+// clock — the instrument is live
+setInterval(() => { $('clockTxt').textContent = new Date().toLocaleTimeString([], {hour12:false}); }, 1000);
+
+// shorten conviction blockers for the table ("smart wallets 0/1" -> "smart 0/1")
+function shortNeed(m){
+  return m.replace('smart wallets','smart').replace('bundle unverified','insiders unverified')
+          .replace('trigger hold','held').replace('persistence failed at confirm time','persistence')
+          .replace('daily alert budget spent','budget spent');
+}
+
+function renderConviction(tokens, statConv){
+  const live = tokens.filter(t => t.conviction);
+  const el = $('convstrip');
+  if (!live.length){
+    el.innerHTML = `<div class="conv-armed"><span class="sq">▣</span><b>CONVICTION ARMED</b>` +
+      `<span>fired today <span class="n">${statConv || 0}</span></span>` +
+      `<span>fires only when independent signals agree: insiders verified clean · smart-wallet buy · held through the snipe burst · still early</span></div>`;
+    return;
+  }
+  el.innerHTML = live.map(t => {
+    const fresh = !prevConv[t.ca];
+    prevConv[t.ca] = true;
+    if (fresh) ding(true);
+    return `<div class="conv-live">
+      <div class="conv-head">
+        <span class="conv-tag">CONVICTION</span>
+        <span class="conv-sym">$${esc(t.symbol)}</span>
+        <span class="conv-score">${t.score}</span>
+        <span class="conv-links">
+          <a href="https://dexscreener.com/solana/${t.pair || t.ca}" target="_blank" rel="noopener">chart</a>
+          <a href="https://jup.ag/swap/SOL-${t.ca}" target="_blank" rel="noopener">swap</a>
+        </span>
+      </div>
+      <div class="conv-proof">
+        <span><i>✓</i>insiders verified clean</span>
+        <span><i>✓</i>smart wallet bought</span>
+        <span><i>✓</i>held through the burst</span>
+        <span><i>✓</i>still early (+${t.movedPct}%)</span>
+        ${t.retention !== null ? `<span><i>✓</i>retention ${(t.retention*100).toFixed(0)}%</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
 
 function render(data){
   const tokens = data.tokens || [];
   renderScans(data.scans || []);
   renderSeen(data.seenFeed || []);
+  renderConviction(tokens, lastConvCount);
   $('empty').style.display = tokens.length ? 'none' : 'block';
   const tb = $('rows'); tb.innerHTML = '';
   const newTriggers = [];
   for (const t of tokens){
     if (t.state === 'TRIGGER' && prevStates[t.ca] !== 'TRIGGER') newTriggers.push(t.ca);
     const tr = document.createElement('tr');
-    tr.className = 'row ' + t.state + (newTriggers.includes(t.ca) ? ' flash' : '');
+    tr.className = 'row ' + t.state + (t.conviction ? ' conviction' : '') + (newTriggers.includes(t.ca) ? ' flash' : '');
     const fusePct = Math.max(0, 100 - (t.ageMin / MAX_AGE) * 100);
     const movedCls = t.movedPct >= 40 ? 'moved-hot' : t.movedPct > 0 ? 'pos' : 'mut';
     const g = t.rank || {grade:'—',timing:'',confidence:''};
+    const needs = (!t.conviction && t.state === 'TRIGGER' && t.convictionMissing && t.convictionMissing.length)
+      ? `<div class="needs"><b>NEEDS</b> ${t.convictionMissing.slice(0,3).map(m => esc(shortNeed(m))).join(' · ')}</div>` : '';
     tr.innerHTML = `
       <td><span class="grade grade-${g.grade.replace('+','plus')}" title="${esc(g.label||'')} · confidence: ${g.confidence}">${g.grade}</span><div class="timing t-${g.timing}">${g.timing}${t.play ? ' · '+t.play : ''}</div></td>
-      <td><span class="chip ${t.state}">${t.state}</span></td>
+      <td><span class="chip ${t.conviction ? 'CONVICTION' : t.state}">${t.conviction ? 'CONVICTION' : t.state}</span>${needs}</td>
       <td><span class="sym">$${esc(t.symbol)}</span> <span class="socials">${t.socials ? (t.socials.tg?'✆':'')+(t.socials.x?'𝕏':'')+(t.socials.web?'◍':'') : ''}</span> <span class="name">${esc(t.name).slice(0,20)}</span>
           <div class="fuse" title="${MAX_AGE - t.ageMin}m left in window"><i style="width:${fusePct}%"></i></div></td>
-      <td>${t.ageMin}m</td>
-      <td><span class="score" title="fresh ${t.subs.freshness} | liq ${t.subs.liquidity} | buy ${t.subs.buyPressure} | hold ${t.subs.holderGrowth}">${t.score}</span></td>
-      <td>$${fmt(t.liq)}</td>
-      <td class="${t.ratio >= .12 ? 'pos':'mut'}">${(t.ratio*100).toFixed(0)}%</td>
-      <td class="${t.buys > t.sells ? 'pos' : 'neg'}">${t.buys}:${t.sells}</td>
-      <td class="${t.chg5m >= 0 ? 'pos':'neg'}">${t.chg5m > 0 ? '+':''}${t.chg5m}%</td>
-      <td class="${movedCls}">${t.movedPct > 0 ? '+':''}${t.movedPct}%</td>
-      <td class="${t.insider === null ? 'mut' : t.insider > 15 ? 'neg' : 'pos'}" title="${t.funded} deployer-linked snipers">${t.insider === null ? '—' : t.insider + '%'}</td>
-      <td class="${t.smart > 0 ? 'pos' : 'mut'}">${t.smart || '—'}</td>
+      <td class="num">${t.ageMin}m</td>
+      <td class="num"><span class="score" title="fresh ${t.subs.freshness} | liq ${t.subs.liquidity} | buy ${t.subs.buyPressure} | hold ${t.subs.holderGrowth}">${t.score}</span></td>
+      <td class="num">$${fmt(t.liq)}</td>
+      <td class="num ${t.ratio >= .12 ? 'pos':'mut'}">${(t.ratio*100).toFixed(0)}%</td>
+      <td class="num ${t.buys > t.sells ? 'pos' : 'neg'}">${t.buys}:${t.sells}</td>
+      <td class="num ${t.chg5m >= 0 ? 'pos':'neg'}">${t.chg5m > 0 ? '+':''}${t.chg5m}%</td>
+      <td class="num ${movedCls}">${t.movedPct > 0 ? '+':''}${t.movedPct}%</td>
+      <td class="num ${t.insider === null ? 'mut' : t.insider > 15 ? 'neg' : 'pos'}" title="${t.funded} deployer-linked snipers">${t.insider === null ? '—' : t.insider + '%'}</td>
+      <td class="num ${t.smart > 0 ? 'pos' : 'mut'}">${t.smart || '—'}</td>
       <td class="links">
         <a href="https://dexscreener.com/solana/${t.pair || t.ca}" target="_blank" rel="noopener">chart</a>
         <a href="https://jup.ag/swap/SOL-${t.ca}" target="_blank" rel="noopener">swap</a>
@@ -388,14 +521,17 @@ function connect(){
     es.close(); setTimeout(connect, 3000);
   };
 }
-// ---- (legacy dual-view history removed; history now lives in the SCANNED tab via loadhist) ----
 
+let lastConvCount = 0;
 connect();
 setInterval(async () => {
   try {
     const s = await (await fetch('/api/stats')).json();
     $('sSeen').textContent = s.seen; $('sKilled').textContent = s.gatedOut;
     $('sWatch').textContent = s.watching; $('sTrig').textContent = s.triggers;
+    lastConvCount = s.convictionsToday || 0;
+    $('sConv').textContent = lastConvCount;
+    $('sConvB').textContent = s.convictionBudget ? ' /' + s.convictionBudget : '';
   } catch {}
 }, 5000);
 
@@ -430,14 +566,14 @@ $('report').onclick = async () => {
     const txt = JSON.stringify(d, null, 2);
     out.textContent = txt;
     // clipboard is best-effort (iPad Safari often blocks it) — never fail the flow on it
-    try { await navigator.clipboard.writeText(txt); $('report').textContent = 'SHOWN + COPIED ✓'; }
-    catch { $('report').textContent = 'SHOWN BELOW ✓'; }
+    try { await navigator.clipboard.writeText(txt); $('report').textContent = 'Shown + copied ✓'; }
+    catch { $('report').textContent = 'Shown below ✓'; }
   } catch (e) {
     out.textContent = 'Report failed: ' + (e && e.message ? e.message : 'network error');
-    $('report').textContent = 'WEEKLY REPORT';
+    $('report').textContent = 'Weekly report';
     return;
   }
-  setTimeout(() => $('report').textContent = 'WEEKLY REPORT', 2500);
+  setTimeout(() => $('report').textContent = 'Weekly report', 2500);
 };
 
 $('aireview').onclick = async () => {
@@ -445,14 +581,14 @@ $('aireview').onclick = async () => {
   out.style.display = 'block';
   out.textContent = 'AI review running — reads the full outcomes DB + config, usually 15-60 seconds…';
   out.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  $('aireview').textContent = 'ANALYZING…';
+  $('aireview').textContent = 'Analyzing…';
   try {
     const d = await (await fetch('/api/ai-review')).json();
     out.textContent = d.review || d.note || d.error || 'No output returned — check GEMINI_API_KEY and model names in config.yaml (see Railway logs for [gemini] errors).';
   } catch (e) {
     out.textContent = 'Review failed: ' + (e && e.message ? e.message : 'network error') + ' — check Railway logs for [gemini] lines.';
   }
-  $('aireview').textContent = 'AI REVIEW';
+  $('aireview').textContent = 'AI review';
 };
 
 let histOffset = 0;
@@ -467,7 +603,7 @@ $('loadhist').onclick = async () => {
       return `<div class="hist"><span class="d">${when}</span><span class="v ${verdict}">${verdict === 'passed' ? 'PASS' : verdict === 'failed' ? 'KILL' : '—'}</span><span class="s">$${esc(r.symbol || '?')}</span><span class="r">${esc(r.gate_fail_reason || r.last_state || '')}</span><a href="https://dexscreener.com/solana/${r.ca}" target="_blank" rel="noopener">chart</a></div>`;
     }).join('');
     histOffset += d.rows.length;
-    $('loadhist').textContent = d.rows.length < 500 ? 'ALL LOADED' : 'LOAD 500 MORE';
+    $('loadhist').textContent = d.rows.length < 500 ? 'All loaded' : 'Load 500 more';
   } catch { $('histlist').innerHTML = '<div class="hist"><span class="r">history fetch failed</span></div>'; }
 };
 
@@ -480,7 +616,10 @@ function showTab(name){
   if (name === 'wins') loadWins();
   if (name === 'wallets') loadAnalytics();
 }
-document.querySelectorAll('.tab').forEach(t => t.onclick = () => showTab(t.dataset.tab));
+document.querySelectorAll('.tab').forEach(t => {
+  t.onclick = () => showTab(t.dataset.tab);
+  t.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showTab(t.dataset.tab); } };
+});
 
 // ---- wins: the bot's real track record ----
 async function loadWins(){
@@ -491,7 +630,9 @@ async function loadWins(){
       const s = d.summary;
       const rate = s.triggered > 0 ? Math.round((s.won_2x / s.triggered) * 100) : 0;
       document.getElementById('winssummary').innerHTML =
-        `<div class="winstat"><b>${s.triggered||0}</b> triggered</div><div class="winstat"><b>${s.won_2x||0}</b> hit 2x+ <span>(${rate}%)</span></div><div class="winstat"><b>${s.won_5x||0}</b> hit 5x+</div>`;
+        `<div class="winstat"><div class="eyebrow">Triggered</div><b>${s.triggered||0}</b></div>` +
+        `<div class="winstat"><div class="eyebrow">Hit 2x+</div><b>${s.won_2x||0}</b><span>${rate}%</span></div>` +
+        `<div class="winstat"><div class="eyebrow">Hit 5x+</div><b>${s.won_5x||0}</b></div>`;
     }
     const el = document.getElementById('winslist');
     el.innerHTML = (d.wins && d.wins.length)
@@ -507,35 +648,40 @@ async function loadWins(){
 loadWins();
 setInterval(() => { if (document.querySelector('.tab.active')?.dataset.tab === 'wins') loadWins(); }, 30000);
 
-
-// ---- BEST BUYS client (rebuilt — was lost in tab restructure) ----
+// ---- BEST BUYS: three sockets, always visible, brutally earned ----
+const BB_SLOTS = 3;   // keep in sync with config bestbuys.max_shown
+const SOCKET_REQS = [
+  '4+ min old — past the snipe window',
+  'early buyers still holding · SOL flowing in',
+  'score 68+ · real socials · clean dev · no insider cluster',
+];
 async function loadBestBuys(){
   try {
     const d = await (await fetch('/api/bestbuys')).json();
     const el = $('bblist');
-    $('bbnote').textContent = d.buys && d.buys.length
-      ? `— ${d.buys.length} earned slot${d.buys.length!==1?'s':''} of ${d.watching} watched · holds until it stops qualifying`
-      : `— 0 of ${d.watching||0} watched qualify`;
-    if (!d.buys || !d.buys.length) {
-      el.innerHTML = '<div class="bb" style="border-color:var(--line)"><span class="bblabel">EMPTY — no coin currently qualifies. A slot requires: 4+ min old (past the snipe window), early buyers still holding, SOL still flowing INTO the curve, score 68+, real socials, clean dev, no insider cluster. Empty most of the time is the filter working — these are graduation candidates, not a feed.</span></div>';
-      return;
-    }
-    el.innerHTML = d.buys.map(b => `
+    const buys = d.buys || [];
+    $('bbnote').textContent = buys.length
+      ? `${buys.length} of ${BB_SLOTS} slots earned · ${d.watching} watched · a slot holds until it stops qualifying`
+      : `0 of ${BB_SLOTS} slots earned · ${d.watching||0} watched · empty is the filter working`;
+    let html = buys.map(b => `
       <div class="bb">
-        <div class="top"><span class="bbg">${b.grade}</span><span class="bbs">$${esc(b.symbol)}</span><span class="bbsc">score ${b.score}${b.peakScore>b.score?' (peak '+b.peakScore+')':''} · held ${b.heldMin}m · ${b.confidence} conf</span></div>
+        <div class="top"><span class="bbg">${b.grade}</span><span class="bbs">$${esc(b.symbol)}</span><span class="bbsc">score ${b.score}${b.peakScore>b.score?' (pk '+b.peakScore+')':''}<br>held ${b.heldMin}m · ${b.confidence} conf</span></div>
         <div class="bblabel">${esc(b.label||'')}</div>
         ${b.cautions && b.cautions.length ? `<div class="bbcaut">⚠ ${b.cautions.map(esc).join(' · ')}</div>` : ''}
         <div class="bblinks"><a href="https://dexscreener.com/solana/${b.pair||b.ca}" target="_blank" rel="noopener">chart</a><a href="https://jup.ag/swap/SOL-${b.ca}" target="_blank" rel="noopener">swap</a><a href="https://solscan.io/token/${b.ca}" target="_blank" rel="noopener">contract</a></div>
       </div>`).join('');
+    for (let i = buys.length; i < BB_SLOTS; i++) {
+      html += `<div class="bb socket"><div class="eyebrow">Slot open</div><p>${SOCKET_REQS[i] || SOCKET_REQS[2]}</p></div>`;
+    }
+    el.innerHTML = html;
   } catch (e) {
-    $('bblist').innerHTML = '<div class="bb" style="border-color:var(--dying)"><span class="bblabel">best-buys fetch failed</span></div>';
+    $('bblist').innerHTML = '<div class="bb socket" style="border-color:var(--down)"><p>best-buys fetch failed</p></div>';
   }
 }
 loadBestBuys();
 setInterval(loadBestBuys, 8000);
 
-
-// ---- STATUS + ANALYTICS loaders (rebuilt — lost in tab restructure) ----
+// ---- STATUS + ANALYTICS loaders ----
 async function loadStatus(){
   try {
     const s = await (await fetch('/api/status')).json();
@@ -555,7 +701,7 @@ async function loadStatus(){
         : 'has not run yet (runs 90s after boot, then hourly)';
       html += `<span class="ss"><b>discovery</b> ${txt}</span>`;
     }
-    html += `<button id="rundisc">RUN DISCOVERY NOW</button>`;
+    html += `<button id="rundisc">Run discovery now</button>`;
     $('sysstatus').innerHTML = html;
     const btn = document.getElementById('rundisc');
     if (btn) btn.onclick = async () => {
@@ -600,7 +746,6 @@ loadAnalytics();
 setInterval(loadAnalytics, 20000);
 
 showTab('live');
-
 </script>
 </body>
 </html>

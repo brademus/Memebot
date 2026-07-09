@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'path';
 import { env, cfg } from '../config';
 import { activeTokens, allTokens, recentScans } from '../store';
-import { checkConviction } from '../scoring/conviction';
+import { checkConviction, convictionFiredToday } from '../scoring/conviction';
 import { pool } from '../db';
 import { buildReport } from './report';
 import { runAiReview } from '../ai/reviewer';
@@ -215,6 +215,8 @@ export function startServer() {
       gatedOut: all.filter(t => t.gated === false).length,
       watching: all.filter(t => t.gated === true && t.state !== 'DEAD').length,
       triggers: all.filter(t => t.state === 'TRIGGER').length,
+      convictionsToday: convictionFiredToday(),
+      convictionBudget: cfg().conviction?.max_alerts_per_day ?? 5,
     });
   });
 
