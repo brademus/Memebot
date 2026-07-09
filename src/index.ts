@@ -10,6 +10,7 @@ import { alertTrigger, alertConviction } from './alerts/telegram';
 import { startOutcomeLogger } from './outcomes/logger';
 import { startLadderMonitor } from './alerts/ladder';
 import { startAutotune } from './tuning/autotune';
+import { startFilterLearner } from './tuning/filtertune';
 import { generateNote } from './ai/analyst';
 import { startServer, broadcast } from './api/server';
 import { startWalletDiscovery } from './wallets/discovery';
@@ -56,6 +57,7 @@ async function main() {
   startWalletTracker(walletSurface);       // polling fallback (stands down when webhook is live)
   startWalletWebhook(walletSurface);       // primary: real-time push for ALL active wallets
   startAutotune();
+  startFilterLearner();   // the closed loop: filters measure their own mistakes and adjust
 
   // shared gate runner — called from BOTH the create event (curve-seeded liquidity)
   // and the Dexscreener poller (AMM liquidity). Handles cooldown + retry + verdict.

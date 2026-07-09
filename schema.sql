@@ -74,3 +74,21 @@ ALTER TABLE tokens ADD COLUMN IF NOT EXISTS early_buyers TEXT[] DEFAULT '{}';
 -- weekly review can compare precision between the two alert tiers.
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS conviction_at TIMESTAMPTZ;
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS conviction_price DOUBLE PRECISION;
+
+-- FILTER LEARNING (added 2026-07): the bot's learned threshold adjustments.
+-- Overrides survive redeploys (Railway resets config.yaml); the log is the
+-- audit trail every change must leave.
+CREATE TABLE IF NOT EXISTS filter_overrides (
+  path TEXT PRIMARY KEY,
+  value DOUBLE PRECISION NOT NULL,
+  reason TEXT,
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS filter_tuning_log (
+  id SERIAL PRIMARY KEY,
+  at TIMESTAMPTZ DEFAULT now(),
+  path TEXT NOT NULL,
+  old_value DOUBLE PRECISION,
+  new_value DOUBLE PRECISION,
+  evidence TEXT
+);

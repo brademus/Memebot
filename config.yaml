@@ -126,3 +126,9 @@ conviction:                           # CONVICTION tier — the "confirmed buy" 
   require_social: true                # TG or X must exist (17.4x differential)
   max_run_pct: 25                     # no confirming into exit liquidity — must still be early
   max_alerts_per_day: 5               # scarcity is the product; zero on a bad day is CORRECT behavior
+
+learning:                             # closed-loop filter tuning — the bot adjusts its own thresholds
+  enabled: true                       # kill switch; overrides persist in Postgres and survive redeploys
+  window_days: 14                     # rolling evidence window
+  min_samples: 8                      # measured kills a rule needs before it's allowed to move
+  loosen_false_kill_rate: 0.05        # a rule killing >5% future-3x winners loosens ONE bounded step per cycle

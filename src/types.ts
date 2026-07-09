@@ -141,6 +141,12 @@ export interface AppConfig {
     smart_lane_exit_score: number;
   };
   alerts: { telegram_on_trigger: boolean; realert_score_jump: number };
+  learning: {
+    enabled: boolean;
+    window_days: number;
+    min_samples: number;
+    loosen_false_kill_rate: number;
+  };
   conviction: {
     enabled: boolean;
     min_score: number;

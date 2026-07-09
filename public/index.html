@@ -703,7 +703,8 @@ async function loadStatus(){
       row(s.tradeStream === 'full', 'Trade stream', 'LITE — fund PumpPortal key (0.02 SOL) + set PUMPPORTAL_API_KEY') +
       (s.walletTracking ? `<span class="ss"><b>${s.activeWallets}</b> wallets tracked</span>` : '') +
       (s.webhook ? `<span class="ss"><span class="d ${s.webhook.registered?'on':'off'}"></span><b>Webhook</b> ${s.webhook.registered ? s.webhook.addressCount + ' streaming' : esc(s.webhook.lastError || 'registering…')}</span>` : '') +
-      (s.prefilter ? `<span class="ss"><b>Prefilter</b> ${Object.values(s.prefilter.kills||{}).reduce((a,b)=>a+b,0)} instant kills · ${s.prefilter.blacklistSize} blacklisted deployers cached</span>` : '');
+      (s.prefilter ? `<span class="ss"><b>Prefilter</b> ${Object.values(s.prefilter.kills||{}).reduce((a,b)=>a+b,0)} instant kills · ${s.prefilter.blacklistSize} blacklisted deployers cached</span>` : '') +
+      (s.learning ? `<span class="ss"><span class="d ${s.learning.lastError?'off':'on'}"></span><b>Learning</b> ${s.learning.activeOverrides} learned overrides${s.learning.decisions && s.learning.decisions.length ? ' · latest: ' + esc(s.learning.decisions[0].path.split('.').pop() + ' ' + s.learning.decisions[0].from + '→' + s.learning.decisions[0].to) : ' · no changes yet — needs measured kills'}</span>` : '');
     if (s.discovery) {
       const d = s.discovery;
       const txt = d.blockedBy ? 'BLOCKED — ' + esc(d.blockedBy)

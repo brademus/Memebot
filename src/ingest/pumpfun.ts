@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
 import { addToken, getToken, recordScan } from '../store';
-import { bumpDeployer } from '../db';
+import { bumpDeployer, upsertToken } from '../db';
 import { prefilter } from '../gates/prefilter';
 import { env } from '../config';
 import { fetchSocials } from './metadata';
@@ -114,7 +114,14 @@ function connect(onNew: (ca: string) => void) {
         if (t && pf) {
           t.gated = false;
           t.gateFailReason = pf;
+          // seed the curve state anyway (free, from this same message) so the kill
+          // gets a reference price — without it the outcome logger can't measure
+          // whether this prefilter rule ever kills future winners, and the filter
+          // learner would be flying blind on its own mistakes.
+          seedCurve(t, msg);
+          if (t.firstScorePrice === null && t.priceUsd > 0) t.firstScorePrice = t.priceUsd;
           recordScan({ ca: t.ca, symbol: t.symbol, verdict: 'KILL', reason: pf, at: Date.now() });
+          upsertToken(t).catch(() => {});
         } else if (t) {
           // seed curve liquidity/mcap from the create event so the gate can run
           // IMMEDIATELY, without waiting for Dexscreener to index the token

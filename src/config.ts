@@ -4,7 +4,27 @@ import yaml from 'js-yaml';
 import { AppConfig } from './types';
 
 const CONFIG_PATH = path.join(process.cwd(), 'config.yaml');
-let current: AppConfig = load();
+
+// LEARNED OVERRIDES — the filter learner (tuning/filtertune.ts) persists threshold
+// adjustments to Postgres so they survive redeploys (config.yaml on Railway resets
+// with every deploy). They overlay the yaml baseline here; yaml stays the human's
+// document, the DB holds what the bot learned.
+let overrides: Record<string, number> = {};
+export function setConfigOverrides(o: Record<string, number>) {
+  overrides = o;
+  try { current = withOverrides(load()); } catch {}
+}
+function withOverrides(base: AppConfig): AppConfig {
+  for (const [p, v] of Object.entries(overrides)) {
+    const keys = p.split('.');
+    let node: any = base;
+    for (let i = 0; i < keys.length - 1 && node; i++) node = node[keys[i]];
+    if (node && typeof node[keys[keys.length - 1]] === 'number') node[keys[keys.length - 1]] = v;
+  }
+  return base;
+}
+
+let current: AppConfig = withOverrides(load());
 
 function load(): AppConfig {
   return yaml.load(fs.readFileSync(CONFIG_PATH, 'utf8')) as AppConfig;
@@ -13,7 +33,7 @@ function load(): AppConfig {
 // hot-reload every 60s so threshold tuning never needs a redeploy
 setInterval(() => {
   try {
-    current = load();
+    current = withOverrides(load());
   } catch (e) {
     console.error('[config] reload failed, keeping previous:', (e as Error).message);
   }

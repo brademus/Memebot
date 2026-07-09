@@ -66,6 +66,12 @@ export async function buildReport(days = 7): Promise<any> {
     WHERE t.gate_result = 'passed' ${win}
     GROUP BY insider_band ORDER BY insider_band`);
 
+  // filter learning: what the bot changed about its own filters, with evidence
+  const filterLearning = {
+    activeOverrides: await q(`SELECT path, value, reason, updated_at FROM filter_overrides ORDER BY updated_at DESC`).catch(() => []),
+    recentDecisions: await q(`SELECT at, path, old_value, new_value, evidence FROM filter_tuning_log ORDER BY at DESC LIMIT 20`).catch(() => []),
+  };
+
   const totals = (await q(`SELECT
      COUNT(*) AS total_seen,
      COUNT(*) FILTER (WHERE gate_result='passed') AS passed,
@@ -82,6 +88,7 @@ export async function buildReport(days = 7): Promise<any> {
     convictionPerformance: convictionPerf,
     scoreCalibration: scoreBuckets,
     falseKills,
+    filterLearning,
     insiderCorrelation: insiderCorr,
     readme: 'Paste this whole object to Claude to tune config.yaml. triggerPerformance = did BUY calls go up. convictionPerformance = the confirmed-buy tier measured from its own entry price (must beat triggers or tighten conviction thresholds). scoreCalibration = are high scores earning their weight. falseKills = gates rejecting winners (loosen these). insiderCorrelation = is the bundle gate threshold right.',
   };
