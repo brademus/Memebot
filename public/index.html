@@ -497,7 +497,7 @@ function render(data){
       <td class="num ${t.chg5m >= 0 ? 'pos':'neg'}">${t.chg5m > 0 ? '+':''}${t.chg5m}%</td>
       <td class="num ${movedCls}">${t.movedPct > 0 ? '+':''}${t.movedPct}%</td>
       <td class="num ${t.insider === null ? 'mut' : t.insider > 15 ? 'neg' : 'pos'}" title="${t.funded} deployer-linked snipers">${t.insider === null ? '—' : t.insider + '%'}</td>
-      <td class="num ${t.smart > 0 ? 'pos' : 'mut'}">${t.smart || '—'}</td>
+      <td class="num ${t.smart > 0 ? 'pos' : 'mut'}">${t.smartElite ? '<span style="color:var(--amber)" title="includes an ELITE wallet (10+ winners)">◆</span>' : ''}${t.smart || '—'}</td>
       <td class="links">
         <a href="https://dexscreener.com/solana/${t.pair || t.ca}" target="_blank" rel="noopener">chart</a>
         <a href="https://jup.ag/swap/SOL-${t.ca}" target="_blank" rel="noopener">swap</a>
@@ -741,7 +741,8 @@ async function loadAnalytics(){
       wl.innerHTML = d.topWallets.slice(0,15).map(r => {
         const short = r.wallet.slice(0,4) + '…' + r.wallet.slice(-4);
         const rate = r.buys_tracked > 0 ? Math.round((r.wins_2x / r.buys_tracked) * 100) + '% hit' : 'no buys yet';
-        return `<div class="wal"><span class="wn">${r.winners_hit}× winners</span><span class="ad">${short}</span><span class="ty">${rate}</span><a href="https://solscan.io/account/${r.wallet}" target="_blank" rel="noopener">solscan</a><span class="st ${r.active?'on':'off'}">${r.active?'TRACKING':'watching'}</span></div>`;
+        const elite = (r.winners_hit || 0) >= 10;
+        return `<div class="wal">${elite ? '<span style="color:var(--amber);font-family:Archivo;font-weight:800;font-size:9px;letter-spacing:.12em">◆ ELITE</span>' : ''}<span class="wn">${r.winners_hit}× winners</span><span class="ad">${short}</span><span class="ty">${rate}</span><a href="https://solscan.io/account/${r.wallet}" target="_blank" rel="noopener">solscan</a><span class="st ${r.active?'on':'off'}">${r.active?'TRACKING':'watching'}</span></div>`;
       }).join('');
     }
     const tc = $('topcoins');

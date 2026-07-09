@@ -4,6 +4,7 @@ import { activeTokens, getToken } from '../store';
 import { rankToken } from '../scoring/rank';
 import { TokenRecord } from '../types';
 import { getStreamMode } from '../ingest/pumpfun';
+import { weightedSmartHits } from '../wallets/tracker';
 
 // STICKY BEST BUYS — a coin EARNS a slot (strict entry bar), then HOLDS it until
 // it genuinely stops looking good (hysteresis: enter at min_score, exit only below
@@ -11,11 +12,15 @@ import { getStreamMode } from '../ingest/pumpfun';
 // This makes the panel a stable shortlist you can actually watch, not a slot machine.
 
 
-// distinct tracked wallets that bought this token within the smart-lane window
+// tier-weighted smart-money confluence within the smart-lane window.
+// Weight, not raw count, is the qualifying number: one ELITE wallet
+// (elite_weight 3) clears a bar of 2 by itself — a 31-winner wallet's buy is
+// worth more than two 2-winner wallets agreeing.
 function smartCount(t: TokenRecord, bb: ReturnType<typeof cfg>['bestbuys']): number {
-  const winMs = bb.smart_lane_window_min * 60_000;
-  const now = Date.now();
-  return new Set(t.smartHits.filter(h => now - h.at < winMs).map(h => h.wallet)).size;
+  return smartStats(t, bb).weight;
+}
+function smartStats(t: TokenRecord, bb: ReturnType<typeof cfg>['bestbuys']) {
+  return weightedSmartHits(t.smartHits, bb.smart_lane_window_min * 60_000);
 }
 
 interface Slot { ca: string; enteredAt: number; peakScore: number; lane: 'organic' | 'smart' }
@@ -142,18 +147,19 @@ export function currentBestBuys() {
     .map(s => {
       const t = getToken(s.ca)!;
       const r = rankToken(t);
-      const nSmart = smartCount(t, bb);
+      const st = smartStats(t, bb);
       return {
         ca: t.ca, symbol: t.symbol, grade: r.grade, timing: r.timing,
         lane: s.lane,
         label: s.lane === 'smart'
-          ? `${nSmart} proven-winner wallet${nSmart !== 1 ? 's' : ''} bought this within ${bb.smart_lane_window_min}m. ` + (r.label || '')
+          ? `${st.elite ? st.elite + ' ELITE + ' : ''}${st.wallets - st.elite} proven-winner wallet${st.wallets !== 1 ? 's' : ''} bought this within ${bb.smart_lane_window_min}m (confluence weight ${st.weight}). ` + (r.label || '')
           : r.label,
         confidence: r.confidence, score: t.score, peakScore: s.peakScore,
         heldMin: Math.round((now - s.enteredAt) / 60000),
         cautions: r.cautions,
         liq: Math.round(t.liquidityUsd), buys: t.buys5m, sells: t.sells5m,
-        smart: nSmart,
+        smart: st.wallets,
+        smartElite: st.elite,
         pair: t.pairAddress,
       };
     });

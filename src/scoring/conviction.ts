@@ -1,6 +1,7 @@
 import { cfg } from '../config';
 import { TokenRecord } from './../types';
 import { passesPersistence } from './persistence';
+import { weightedSmartHits } from '../wallets/tracker';
 
 // CONVICTION TIER — the "confirmed buy" layer above TRIGGER.
 //
@@ -66,12 +67,15 @@ export function checkConviction(t: TokenRecord, now = Date.now()): ConvictionRes
     else confirmed.push(`insiders verified clean (0 funded snipers, slot0 ${t.bundle.insiderPct.toFixed(0)}%)`);
   }
 
-  // 3. smart-wallet confluence — proven-winner wallets bought this, recently
+  // 3. smart-wallet confluence — tier-weighted: one ELITE wallet outweighs
+  // several marginal ones, so it clears this check alone
   const winMs = c.smart_wallet_window_min * 60_000;
-  const smart = new Set(t.smartHits.filter(h => now - h.at < winMs).map(h => h.wallet)).size;
-  if (smart >= c.min_smart_wallets)
-    confirmed.push(`${smart} smart wallet${smart > 1 ? 's' : ''} bought (last ${c.smart_wallet_window_min}m)`);
-  else missing.push(`smart wallets ${smart}/${c.min_smart_wallets}`);
+  const sh = weightedSmartHits(t.smartHits, winMs, now);
+  if (sh.weight >= c.min_smart_wallets)
+    confirmed.push(sh.elite
+      ? `${sh.elite} ELITE wallet${sh.elite > 1 ? 's' : ''} bought (weight ${sh.weight}, last ${c.smart_wallet_window_min}m)`
+      : `${sh.wallets} smart wallet${sh.wallets > 1 ? 's' : ''} bought (last ${c.smart_wallet_window_min}m)`);
+  else missing.push(`smart weight ${sh.weight}/${c.min_smart_wallets}`);
 
   // 4. social presence
   if (c.require_social) {

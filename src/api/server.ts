@@ -288,6 +288,7 @@ function pick(t: TokenRecord) {
     insider: t.bundle ? t.bundle.insiderPct : null,
     funded: t.bundle ? t.bundle.fundedSnipers : 0,
     smart: new Set(t.smartHits.map(h => h.wallet)).size,
+    smartElite: t.smartHits.some(h => (h.w || 1) > 1),
     aiNote: t.aiNote,
     pair: t.pairAddress,
     rank: rankToken(t),

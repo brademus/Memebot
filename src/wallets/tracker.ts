@@ -13,18 +13,46 @@ const recentHits = new Map<string, number>();
 let activeCount = 0;
 export const walletsTracked = () => activeCount > 0 || webhookLive();
 
+// WALLET TIERS — a 31-winner wallet is not a 2-winner wallet. Weights come from
+// winners_hit: ELITE wallets (>= elite_min_winners) carry elite_weight in every
+// piece of confluence math (scoring, smart lane, conviction), so one elite buy
+// can move the pipeline by itself.
+const walletWinners = new Map<string, number>();   // wallet -> winners_hit
+export function setWalletWeights(rows: { wallet: string; winners_hit: number }[]) {
+  for (const r of rows) walletWinners.set(r.wallet, Number(r.winners_hit) || 0);
+}
+export function walletWeight(wallet: string): number {
+  const w = cfg().wallets;
+  return (walletWinners.get(wallet) || 0) >= (w.elite_min_winners ?? 10) ? (w.elite_weight ?? 3) : 1;
+}
+// weighted distinct confluence within a window — THE smart-money number
+export function weightedSmartHits(hits: { wallet: string; at: number; w: number }[], windowMs: number, now = Date.now()) {
+  const seen = new Map<string, number>();
+  for (const h of hits) if (now - h.at < windowMs) seen.set(h.wallet, Math.max(seen.get(h.wallet) || 0, h.w || 1));
+  let weight = 0, elite = 0;
+  for (const w of seen.values()) { weight += w; if (w > 1) elite++; }
+  return { wallets: seen.size, weight, elite };
+}
+
 // shared hit recorder — used by BOTH the poller and the webhook
 export function recordSmartBuy(wallet: string, ca: string, onDiscovery: (ca: string) => void) {
   recentHits.set(ca, Date.now());
   if (pool) pool.query(
     `INSERT INTO wallet_hits (ca, wallet) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
     [ca, wallet]).catch(() => {});
+  const w = walletWeight(wallet);
   const existing = getToken(ca);
   if (existing) {
-    if (!existing.smartHits.some(h => h.wallet === wallet))
-      existing.smartHits.push({ wallet, at: Date.now() });
+    if (!existing.smartHits.some(h => h.wallet === wallet)) {
+      existing.smartHits.push({ wallet, at: Date.now(), w });
+      if (w > 1) console.log(`[wallets] ◆ ELITE buy: ${wallet.slice(0, 4)}…(${walletWinners.get(wallet)} winners) -> $${existing.symbol}`);
+    }
   } else {
     onDiscovery(ca);
+    // the surfaced token exists after onDiscovery — credit the hit that surfaced it
+    const t = getToken(ca);
+    if (t) t.smartHits.push({ wallet, at: Date.now(), w });
+    if (w > 1) console.log(`[wallets] ◆ ELITE wallet surfaced ${ca}`);
   }
 }
 
@@ -45,8 +73,9 @@ async function pollOnce(onDiscovery: (ca: string) => void) {
   if (webhookLive()) { activeCount = 0; return; }   // webhook has it — stand down
   try {
     const active = await pool.query(
-      `SELECT wallet FROM smart_wallets WHERE active ORDER BY winners_hit DESC, last_validated DESC LIMIT 40`);
+      `SELECT wallet, winners_hit FROM smart_wallets WHERE active ORDER BY winners_hit DESC, last_validated DESC LIMIT 40`);
     activeCount = active.rows.length;
+    setWalletWeights(active.rows);
     for (const { wallet } of active.rows) {
       const txs = await heliusTxs(wallet, 10);
       for (const tx of txs) {

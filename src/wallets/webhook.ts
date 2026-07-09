@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { cfg, env } from '../config';
 import { pool } from '../db';
-import { recordSmartBuy } from './tracker';
+import { recordSmartBuy, setWalletWeights } from './tracker';
 
 // WEBHOOK WALLET TRACKING — the scale upgrade over polling.
 //
@@ -53,12 +53,13 @@ export async function syncWebhook() {
   const hookUrl = `${url}/api/helius-webhook`;
   try {
     const active = await pool.query(
-      `SELECT wallet FROM smart_wallets WHERE active ORDER BY winners_hit DESC LIMIT $1`,
+      `SELECT wallet, winners_hit FROM smart_wallets WHERE active ORDER BY winners_hit DESC LIMIT $1`,
       [cfg().wallets.max_tracked_wallets]);
     const addresses: string[] = active.rows.map((r: any) => r.wallet);
     if (!addresses.length) { lastError = 'no active wallets yet'; return; }
     trackedSet.clear();
     for (const a of addresses) trackedSet.add(a);
+    setWalletWeights(active.rows);   // tier weights refresh with every sync
 
     const base = `https://api.helius.xyz/v0/webhooks?api-key=${env.HELIUS_API_KEY}`;
     const existing: any[] = await (await fetch(base)).json().catch(() => []);

@@ -111,6 +111,8 @@ wallets:                              # smart-money discovery + tracking (needs 
   webhook_enabled: true               # real-time push for every active wallet (needs public URL — Railway provides one)
   prune_min_measured_buys: 5          # judge a wallet only after this many buys have measured outcomes
   prune_max_2x_rate: 0.08             # below this 2x hit-rate on measured buys = deactivated (cold wallet)
+  elite_min_winners: 10               # wallets with this many logged winners are ELITE — their buys move the pipeline alone
+  elite_weight: 3                     # one elite buy counts as this many standard buys in all confluence math
 
 limits:
   max_tracked_tokens: 400             # in-memory watchlist cap

@@ -45,7 +45,7 @@ export interface TokenRecord {
   uniqueBuyerSamples: number[];      // rolling buys5m samples for growth calc
   bundle: { insiderPct: number; slot0Buyers: number; fundedSnipers: number } | null;
   aiNote: string | null;             // analyst thesis, generated once on TRIGGER
-  smartHits: { wallet: string; at: number }[];
+  smartHits: { wallet: string; at: number; w: number }[];   // w = confluence weight (elite wallets > 1)
   ai: { verdict: string; confidence: number; thesis: string; risks: string } | null;
   // state machine
   state: 'PENDING' | 'WATCHING' | 'HEATING' | 'TRIGGER' | 'EXTENDED' | 'DYING' | 'DEAD';
@@ -107,6 +107,8 @@ export interface AppConfig {
     webhook_enabled: boolean;
     prune_min_measured_buys: number;
     prune_max_2x_rate: number;
+    elite_min_winners: number;
+    elite_weight: number;
   };
   states: {
     heating_score_min: number;

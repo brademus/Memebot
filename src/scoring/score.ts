@@ -1,6 +1,6 @@
 import { cfg } from '../config';
 import { TokenRecord } from '../types';
-import { walletsTracked } from '../wallets/tracker';
+import { walletsTracked, weightedSmartHits } from '../wallets/tracker';
 import { getStreamMode } from '../ingest/pumpfun';
 
 // SCORING v3 — research-ranked signal weights.
@@ -81,10 +81,10 @@ export function scoreToken(t: TokenRecord): number {
   const ageMin = (Date.now() - t.firstSeen) / 60000;
   const freshness = Math.pow(0.5, ageMin / a.freshness_half_life_minutes);
 
-  // ---- #6 smart money ----
+  // ---- #6 smart money (tier-weighted: one ELITE buy = full component) ----
   const winMs = cfg().wallets.hit_recency_hours * 3600_000;
-  const hits = new Set(t.smartHits.filter(h => Date.now() - h.at < winMs).map(h => h.wallet)).size;
-  const smartMoney = Math.min(1, hits / 3);
+  const { weight } = weightedSmartHits(t.smartHits, winMs);
+  const smartMoney = Math.min(1, weight / 3);
 
   // ---- dev self-buy curve: moderate = commitment (+), large = dump risk (−) ----
   // 0.5-4% -> up to +5 bonus; >7% -> scaling penalty to −12 at 15%+
