@@ -10,7 +10,15 @@ import { getStreamMode } from '../ingest/pumpfun';
 // exit_score, or on hard fails). Dropped coins can't flap back in for a cooldown.
 // This makes the panel a stable shortlist you can actually watch, not a slot machine.
 
-interface Slot { ca: string; enteredAt: number; peakScore: number }
+
+// distinct tracked wallets that bought this token within the smart-lane window
+function smartCount(t: TokenRecord, bb: ReturnType<typeof cfg>['bestbuys']): number {
+  const winMs = bb.smart_lane_window_min * 60_000;
+  const now = Date.now();
+  return new Set(t.smartHits.filter(h => now - h.at < winMs).map(h => h.wallet)).size;
+}
+
+interface Slot { ca: string; enteredAt: number; peakScore: number; lane: 'organic' | 'smart' }
 const slots: Slot[] = [];
 const droppedAt = new Map<string, number>();   // ca -> when dropped (re-entry cooldown)
 
@@ -37,10 +45,13 @@ export function currentBestBuys() {
       // churn from supersession, never against showing a degraded coin — a D-grade
       // card in Best Buys is a lie regardless of how recently it was admitted.
       if (t.bundle && t.bundle.fundedSnipers > 0) dropReason = 'insider detected';
+      else if (t.insiderKilled) dropReason = 'insider detected';
       else if (t.state === 'DYING') dropReason = 'momentum died';
-      else if (t.score < bb.exit_score) dropReason = `score fell to ${t.score}`;
-      else if (r.grade === 'C' || r.grade === 'D') dropReason = `degraded to ${r.grade}`;
-      else if (r.timing === 'LATE' || r.timing === 'STALE') dropReason = 'entry window closed';
+      else if (t.score < (slot.lane === 'smart' ? bb.smart_lane_exit_score : bb.exit_score))
+        dropReason = `score fell to ${t.score}`;
+      else if (slot.lane === 'organic' && (r.grade === 'C' || r.grade === 'D')) dropReason = `degraded to ${r.grade}`;
+      else if (slot.lane === 'organic' && (r.timing === 'LATE' || r.timing === 'STALE')) dropReason = 'entry window closed';
+      else if (slot.lane === 'smart' && smartCount(t, bb) === 0) dropReason = 'smart wallets exited window';
       else if (t.devBuyPct > bb.max_dev_pct) dropReason = 'dev bag grew';
       else if (t.dex === 'pumpfun' && t.earlyBuyers.length >= 5
                && (1 - t.earlyExited.length / t.earlyBuyers.length) < bb.min_retention)
@@ -57,6 +68,7 @@ export function currentBestBuys() {
 
   // ---- 2. admissions: strict entry bar, fill free slots, rare supersede ----
   const inSlots = new Set(slots.map(s => s.ca));
+  const organicSlots = () => slots.filter(s => s.lane === 'organic');
   const cooldownMs = bb.reentry_cooldown_min * 60_000;
   const candidates = activeTokens()
     .filter(t => !inSlots.has(t.ca))
@@ -76,23 +88,50 @@ export function currentBestBuys() {
     .sort((a, b) => b.t.score - a.t.score);
 
   for (const { t } of candidates) {
-    if (slots.length < bb.max_shown) {
-      slots.push({ ca: t.ca, enteredAt: now, peakScore: t.score });
+    if (organicSlots().length < bb.max_shown) {
+      slots.push({ ca: t.ca, enteredAt: now, peakScore: t.score, lane: 'organic' });
     } else {
       // full: only supersede the weakest incumbent by a clear margin, and never
       // one still inside its minimum hold
-      const weakest = slots.reduce((min, s) => {
+      const org = organicSlots();
+      const weakest = org.reduce((min, s) => {
         const st = getToken(s.ca);
         const mt = getToken(min.ca);
         return (st?.score ?? 0) < (mt?.score ?? 0) ? s : min;
-      }, slots[0]);
+      }, org[0]);
       const wt = getToken(weakest.ca);
       const heldSec = (now - weakest.enteredAt) / 1000;
       if (wt && heldSec >= bb.min_hold_seconds && t.score >= (wt.score + bb.supersede_margin)) {
         droppedAt.set(weakest.ca, now);
         slots.splice(slots.indexOf(weakest), 1);
-        slots.push({ ca: t.ca, enteredAt: now, peakScore: t.score });
+        slots.push({ ca: t.ca, enteredAt: now, peakScore: t.score, lane: 'organic' });
       }
+    }
+  }
+
+  // ---- 2b. SMART LANE: the wallet-sourced socket. When multiple wallets that
+  // made money on OUR OWN logged winners converge on one fresh coin, that
+  // confluence front-runs the score — retail volume (which the score needs)
+  // hasn't arrived yet. Lower SCORE bar, identical SAFETY bar: gates passed,
+  // no insider structure, dev bag capped. One socket, same hysteresis idea.
+  if (bb.smart_lane && !slots.some(s => s.lane === 'smart')) {
+    const smart = activeTokens()
+      .filter(t => !inSlots.has(t.ca))
+      .filter(t => (droppedAt.get(t.ca) || 0) < now - cooldownMs)
+      .filter(t => t.gated === true && !t.insiderKilled)
+      .filter(t => !['DYING', 'DEAD', 'EXTENDED'].includes(t.state))
+      .filter(t => (!t.bundle || t.bundle.fundedSnipers === 0))
+      .filter(t => t.devBuyPct <= bb.max_dev_pct)
+      .filter(t => (now - t.firstSeen) / 60000 >= bb.smart_lane_min_age_min)
+      .filter(t => t.score >= bb.smart_lane_min_score)
+      // curve health without the full organic gauntlet: no meaningful drawdown
+      .filter(t => !(t.dex === 'pumpfun' && t.peakCurveSol > 34 && t.curveSol < t.peakCurveSol * 0.9))
+      .map(t => ({ t, n: smartCount(t, bb) }))
+      .filter(({ n }) => n >= bb.smart_lane_min_wallets)
+      .sort((a, b) => b.n - a.n || b.t.score - a.t.score);
+    if (smart.length) {
+      const { t } = smart[0];
+      slots.push({ ca: t.ca, enteredAt: now, peakScore: t.score, lane: 'smart' });
     }
   }
 
@@ -103,13 +142,18 @@ export function currentBestBuys() {
     .map(s => {
       const t = getToken(s.ca)!;
       const r = rankToken(t);
+      const nSmart = smartCount(t, bb);
       return {
-        ca: t.ca, symbol: t.symbol, grade: r.grade, label: r.label, timing: r.timing,
+        ca: t.ca, symbol: t.symbol, grade: r.grade, timing: r.timing,
+        lane: s.lane,
+        label: s.lane === 'smart'
+          ? `${nSmart} proven-winner wallet${nSmart !== 1 ? 's' : ''} bought this within ${bb.smart_lane_window_min}m. ` + (r.label || '')
+          : r.label,
         confidence: r.confidence, score: t.score, peakScore: s.peakScore,
         heldMin: Math.round((now - s.enteredAt) / 60000),
         cautions: r.cautions,
         liq: Math.round(t.liquidityUsd), buys: t.buys5m, sells: t.sells5m,
-        smart: new Set(t.smartHits.map(h => h.wallet)).size,
+        smart: nSmart,
         pair: t.pairAddress,
       };
     });

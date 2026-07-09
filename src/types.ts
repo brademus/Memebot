@@ -91,6 +91,9 @@ export interface AppConfig {
     early_buyer_slot_window: number;
     max_tracked_wallets: number;
     hit_recency_hours: number;
+    webhook_enabled: boolean;
+    prune_min_measured_buys: number;
+    prune_max_2x_rate: number;
   };
   states: {
     heating_score_min: number;
@@ -117,6 +120,12 @@ export interface AppConfig {
     min_age_minutes: number;
     min_retention: number;
     net_inflow_window_min: number;
+    smart_lane: boolean;
+    smart_lane_min_wallets: number;
+    smart_lane_window_min: number;
+    smart_lane_min_score: number;
+    smart_lane_min_age_min: number;
+    smart_lane_exit_score: number;
   };
   alerts: { telegram_on_trigger: boolean; realert_score_jump: number };
   conviction: {

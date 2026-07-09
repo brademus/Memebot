@@ -1,6 +1,7 @@
 import { cfg, env } from '../config';
 import { pool } from '../db';
 import { earlyBuyers } from '../helius';
+import { syncWebhook } from './webhook';
 
 // WALLET DISCOVERY v2.
 // Fixes from v1: (a) winners were re-mined EVERY hour with no processed-marker, so a
@@ -80,9 +81,29 @@ export async function runDiscovery(): Promise<Diag> {
          SELECT wallet FROM smart_wallets WHERE active ORDER BY winners_hit DESC LIMIT $1)`,
       [w.max_tracked_wallets]);
 
+    // PRUNE PROVEN LOSERS: a wallet earned its slot from past winners, but slots
+    // are for wallets that are STILL good. Enough measured buys to judge + almost
+    // no 2x hits = deactivated, freeing capacity for fresher discoveries.
+    // Denominator is measured outcomes only, so fresh buys never count against it.
+    const pruned = await pool.query(
+      `UPDATE smart_wallets SET active = false WHERE wallet IN (
+         SELECT w2.wallet
+         FROM smart_wallets w2
+         JOIN wallet_hits h ON h.wallet = w2.wallet
+         JOIN outcomes o ON o.ca = h.ca AND o.snapshot_minutes = 240
+         WHERE w2.active
+         GROUP BY w2.wallet
+         HAVING COUNT(DISTINCT h.ca) >= $1
+            AND (COUNT(DISTINCT h.ca) FILTER (WHERE o.multiple_from_first >= 2))::float
+                / COUNT(DISTINCT h.ca) < $2
+       ) RETURNING wallet`,
+      [w.prune_min_measured_buys, w.prune_max_2x_rate]);
+    if (pruned.rowCount) console.log(`[wallets] pruned ${pruned.rowCount} cold wallets (>=${w.prune_min_measured_buys} measured buys, <${w.prune_max_2x_rate * 100}% 2x rate)`);
+
     const n = await pool.query(`SELECT COUNT(*)::int c FROM smart_wallets WHERE active`);
     diag.activeWallets = n.rows[0].c;
     console.log(`[wallets] discovery: ${diag.winnersFound} new winners mined, ${credited} wallet credits, ${diag.activeWallets} active`);
+    syncWebhook().catch(() => {});   // newly credited wallets start streaming now, not next cycle
   } catch (e) {
     diag.lastError = (e as Error).message;
     console.error('[wallets] discovery', diag.lastError);

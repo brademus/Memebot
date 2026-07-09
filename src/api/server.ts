@@ -12,6 +12,7 @@ import { currentBestBuys } from './bestbuys';
 import { getStreamMode } from '../ingest/pumpfun';
 import { earlyBuyers } from '../helius';
 import { discoveryDiag, runDiscovery } from '../wallets/discovery';
+import { handleWebhook, webhookDiag } from '../wallets/webhook';
 import { fetchHistory, addSmartWallet, removeSmartWallet, listSmartWallets } from '../db';
 import { latestSuggestion } from '../tuning/autotune';
 import { TokenRecord } from '../types';
@@ -49,6 +50,13 @@ export function startServer() {
       return res.status(401).json({ error: 'unauthorized' });
     try { await removeSmartWallet(req.params.wallet); res.json({ ok: true }); }
     catch (e) { res.status(500).json({ error: (e as Error).message }); }
+  });
+
+  // Helius pushes tracked-wallet swaps here (see wallets/webhook.ts). Auth is the
+  // per-boot secret registered with the webhook — anything else is rejected.
+  app.post('/api/helius-webhook', (req, res) => {
+    const code = handleWebhook(req.header('authorization'), req.body);
+    res.status(code).end();
   });
 
   app.get('/api/tokens', (_req, res) => res.json(payload()));
@@ -199,6 +207,7 @@ export function startServer() {
       activeWallets: walletCount,
       lastDiscovery,
       discovery: discoveryDiag(),
+      webhook: webhookDiag(),
     });
   });
 

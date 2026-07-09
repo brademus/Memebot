@@ -14,6 +14,7 @@ import { generateNote } from './ai/analyst';
 import { startServer, broadcast } from './api/server';
 import { startWalletDiscovery } from './wallets/discovery';
 import { startWalletTracker } from './wallets/tracker';
+import { startWalletWebhook } from './wallets/webhook';
 import { addToken } from './store';
 import { getToken, removeToken, allTokens, recordScan } from './store';
 import { TokenRecord } from './types';
@@ -44,11 +45,14 @@ async function main() {
 
   // wallet subsystems: discovery mines winners for smart wallets; tracker watches them live
   startWalletDiscovery();
-  startWalletTracker((ca: string) => {
-    // a tracked wallet bought a token we're not watching — pull it in for gating
+  const walletSurface = (ca: string) => {
+    // a tracked wallet bought a token we're not watching — pull it in for gating.
+    // It rides the normal pipeline from here: gates, scoring, states, smart lane.
     const t = addToken({ ca, symbol: '?', name: '(wallet-surfaced)', creator: null, source: 'dexscreener' });
     if (t) console.log(`[wallets] smart wallet surfaced new token ${ca}`);
-  });
+  };
+  startWalletTracker(walletSurface);       // polling fallback (stands down when webhook is live)
+  startWalletWebhook(walletSurface);       // primary: real-time push for ALL active wallets
   startAutotune();
 
   // shared gate runner — called from BOTH the create event (curve-seeded liquidity)

@@ -73,6 +73,12 @@ bestbuys:                             # BEST BUYS panel — deliberately brutal 
   min_age_minutes: 4                  # PERSISTENCE: no admission during the snipe burst — research: 85% of snipers exit by 5min
   min_retention: 0.65                 # PERSISTENCE: ≥65% of the first-15 buyer cohort still holding
   net_inflow_window_min: 3            # PERSISTENCE: curve SOL now must be ≥ its level 3 minutes ago
+  smart_lane: true                    # dedicated extra socket for smart-wallet confluence coins
+  smart_lane_min_wallets: 2           # distinct tracked winners in the window
+  smart_lane_window_min: 30
+  smart_lane_min_score: 55            # algo still has to like it — lower bar because wallets front-run volume
+  smart_lane_min_age_min: 2           # wallets move early; half the organic lane's persistence age
+  smart_lane_exit_score: 45           # smart slot drops below this (hysteresis, like the organic lane)
 
 alerts:
   telegram_on_trigger: true
@@ -87,8 +93,11 @@ wallets:                              # smart-money discovery + tracking (needs 
   discovery_min_multiple: 3           # a token must have ≥3x'd for us to mine its early buyers
   wallet_min_winners: 2               # a wallet must appear early on ≥2 winners to earn a slot
   early_buyer_slot_window: 3          # "early" = bought within this many slots of creation
-  max_tracked_wallets: 300
+  max_tracked_wallets: 1000           # webhook streams ALL of these (was 300 under polling; Helius allows 100k/hook)
   hit_recency_hours: 6                # a wallet hit counts toward score for this long
+  webhook_enabled: true               # real-time push for every active wallet (needs public URL — Railway provides one)
+  prune_min_measured_buys: 5          # judge a wallet only after this many buys have measured outcomes
+  prune_max_2x_rate: 0.08             # below this 2x hit-rate on measured buys = deactivated (cold wallet)
 
 limits:
   max_tracked_tokens: 400             # in-memory watchlist cap

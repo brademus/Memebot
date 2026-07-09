@@ -105,7 +105,7 @@
   #bestbuys h2{font-family:'Archivo';font-weight:700;font-size:12px;letter-spacing:.18em;color:var(--txt)}
   #bestbuys h2 i{font-style:normal;color:var(--up)}
   #bbnote{color:var(--faint);font-size:11px}
-  #bblist{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  #bblist{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
   .bb{border:1px solid var(--up);padding:11px 13px;background:var(--up-wash);min-height:96px}
   .bb .top{display:flex;align-items:baseline;gap:9px;margin-bottom:5px}
   .bb .bbg{font-family:'Archivo';font-weight:800;font-size:17px;color:var(--up)}
@@ -119,6 +119,8 @@
              justify-content:center;gap:4px}
   .bb.socket .eyebrow{color:var(--faint)}
   .bb.socket p{color:var(--faint);font-size:11px;line-height:1.5}
+  .lane-tag{font-family:'Archivo';font-weight:800;font-size:8px;letter-spacing:.16em;color:var(--amber);
+            display:block;margin-bottom:5px}
 
   /* ================= WATCHLIST ================= */
   #watchhead{padding:16px 18px 6px;display:flex;align-items:baseline;gap:12px}
@@ -648,31 +650,38 @@ async function loadWins(){
 loadWins();
 setInterval(() => { if (document.querySelector('.tab.active')?.dataset.tab === 'wins') loadWins(); }, 30000);
 
-// ---- BEST BUYS: three sockets, always visible, brutally earned ----
-const BB_SLOTS = 3;   // keep in sync with config bestbuys.max_shown
+// ---- BEST BUYS: 3 organic sockets + 1 smart-money socket, brutally earned ----
+const BB_SLOTS = 3;   // organic slots; keep in sync with config bestbuys.max_shown
 const SOCKET_REQS = [
   '4+ min old — past the snipe window',
   'early buyers still holding · SOL flowing in',
   'score 68+ · real socials · clean dev · no insider cluster',
 ];
+function bbCard(b){
+  return `
+      <div class="bb">
+        ${b.lane === 'smart' ? '<span class="lane-tag">◆ SMART MONEY LANE</span>' : ''}
+        <div class="top"><span class="bbg">${b.grade}</span><span class="bbs">$${esc(b.symbol)}</span><span class="bbsc">score ${b.score}${b.peakScore>b.score?' (pk '+b.peakScore+')':''}<br>held ${b.heldMin}m · ${b.confidence} conf</span></div>
+        <div class="bblabel">${esc(b.label||'')}</div>
+        ${b.cautions && b.cautions.length ? `<div class="bbcaut">⚠ ${b.cautions.map(esc).join(' · ')}</div>` : ''}
+        <div class="bblinks"><a href="https://dexscreener.com/solana/${b.pair||b.ca}" target="_blank" rel="noopener">chart</a><a href="https://jup.ag/swap/SOL-${b.ca}" target="_blank" rel="noopener">swap</a><a href="https://solscan.io/token/${b.ca}" target="_blank" rel="noopener">contract</a></div>
+      </div>`;
+}
 async function loadBestBuys(){
   try {
     const d = await (await fetch('/api/bestbuys')).json();
     const el = $('bblist');
     const buys = d.buys || [];
-    $('bbnote').textContent = buys.length
-      ? `${buys.length} of ${BB_SLOTS} slots earned · ${d.watching} watched · a slot holds until it stops qualifying`
-      : `0 of ${BB_SLOTS} slots earned · ${d.watching||0} watched · empty is the filter working`;
-    let html = buys.map(b => `
-      <div class="bb">
-        <div class="top"><span class="bbg">${b.grade}</span><span class="bbs">$${esc(b.symbol)}</span><span class="bbsc">score ${b.score}${b.peakScore>b.score?' (pk '+b.peakScore+')':''}<br>held ${b.heldMin}m · ${b.confidence} conf</span></div>
-        <div class="bblabel">${esc(b.label||'')}</div>
-        ${b.cautions && b.cautions.length ? `<div class="bbcaut">⚠ ${b.cautions.map(esc).join(' · ')}</div>` : ''}
-        <div class="bblinks"><a href="https://dexscreener.com/solana/${b.pair||b.ca}" target="_blank" rel="noopener">chart</a><a href="https://jup.ag/swap/SOL-${b.ca}" target="_blank" rel="noopener">swap</a><a href="https://solscan.io/token/${b.ca}" target="_blank" rel="noopener">contract</a></div>
-      </div>`).join('');
-    for (let i = buys.length; i < BB_SLOTS; i++) {
+    const organic = buys.filter(b => b.lane !== 'smart');
+    const smart = buys.find(b => b.lane === 'smart');
+    $('bbnote').textContent =
+      `${organic.length} of ${BB_SLOTS} slots earned · smart lane ${smart ? 'FILLED' : 'open'} · ${d.watching||0} watched · a slot holds until it stops qualifying`;
+    let html = organic.map(bbCard).join('');
+    for (let i = organic.length; i < BB_SLOTS; i++) {
       html += `<div class="bb socket"><div class="eyebrow">Slot open</div><p>${SOCKET_REQS[i] || SOCKET_REQS[2]}</p></div>`;
     }
+    html += smart ? bbCard(smart)
+      : `<div class="bb socket"><div class="eyebrow" style="color:var(--amber)">◆ Smart money lane</div><p>fills when 2+ proven-winner wallets buy the same fresh coin — gates and insider checks still apply</p></div>`;
     el.innerHTML = html;
   } catch (e) {
     $('bblist').innerHTML = '<div class="bb socket" style="border-color:var(--down)"><p>best-buys fetch failed</p></div>';
@@ -692,7 +701,8 @@ async function loadStatus(){
       row(s.gemini, 'AI analyst', 'needs GEMINI_API_KEY') +
       row(s.telegram, 'Telegram', 'needs bot token + chat id') +
       row(s.tradeStream === 'full', 'Trade stream', 'LITE — fund PumpPortal key (0.02 SOL) + set PUMPPORTAL_API_KEY') +
-      (s.walletTracking ? `<span class="ss"><b>${s.activeWallets}</b> wallets tracked</span>` : '');
+      (s.walletTracking ? `<span class="ss"><b>${s.activeWallets}</b> wallets tracked</span>` : '') +
+      (s.webhook ? `<span class="ss"><span class="d ${s.webhook.registered?'on':'off'}"></span><b>Webhook</b> ${s.webhook.registered ? s.webhook.addressCount + ' streaming' : esc(s.webhook.lastError || 'registering…')}</span>` : '');
     if (s.discovery) {
       const d = s.discovery;
       const txt = d.blockedBy ? 'BLOCKED — ' + esc(d.blockedBy)
