@@ -206,6 +206,14 @@
   .win .wsc{color:var(--dim);min-width:150px}
   .win .wt{color:var(--faint);flex:1}
   .win a{color:var(--dim)}
+  .miss{display:flex;gap:14px;align-items:baseline;padding:8px 0;border-bottom:1px solid var(--line);font-size:12px}
+  .miss .mp{font-family:'Archivo';font-weight:800;font-size:15px;min-width:64px;color:var(--down)}
+  .miss .ms{font-weight:600;min-width:92px;color:var(--txt)}
+  .miss .mw{color:var(--dim);min-width:230px}
+  .miss .mn{flex:1;color:var(--faint)}
+  .miss .mn.alive{color:var(--up)}
+  .miss .rs{font-family:'Archivo';font-weight:700;font-size:9px;letter-spacing:.12em;color:var(--amber)}
+  .miss a{color:var(--dim)}
 
   #sysstatus{padding:12px 18px;border-bottom:1px solid var(--line);font-size:12px;display:flex;gap:18px;flex-wrap:wrap;align-items:center}
   #rundisc{background:none;border:1px solid var(--amber);color:var(--amber);padding:5px 12px;font:700 10px 'Archivo';letter-spacing:.12em;cursor:pointer;text-transform:uppercase}
@@ -351,6 +359,11 @@
 <div id="tab-wins" class="tabpanel">
   <div id="winssummary"></div>
   <div id="winslist"></div>
+  <section class="panel" id="missedpanel">
+    <h2 style="color:var(--down)">MISSED WINNERS <span id="missedsummary"></span></h2>
+    <div class="panelhint">Every 5x+ from the last 48h the bot did NOT call — and whether the trade is still alive. Misses that still qualify are re-surfaced into the live pipeline automatically; check the watchlist for their live grade. Gate-kill misses feed the filter learner on their own.</div>
+    <div id="missedlist"></div>
+  </section>
 </div>
 
 <div id="tab-wallets" class="tabpanel">
@@ -615,7 +628,7 @@ const esc = s => (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'
 function showTab(name){
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.tabpanel').forEach(p => p.style.display = p.id === 'tab-'+name ? 'block' : 'none');
-  if (name === 'wins') loadWins();
+  if (name === 'wins') { loadWins(); loadMissed(); }
   if (name === 'wallets') loadAnalytics();
 }
 document.querySelectorAll('.tab').forEach(t => {
@@ -649,6 +662,23 @@ async function loadWins(){
 }
 loadWins();
 setInterval(() => { if (document.querySelector('.tab.active')?.dataset.tab === 'wins') loadWins(); }, 30000);
+
+// ---- MISSED WINNERS: the accountability board ----
+async function loadMissed(){
+  try {
+    const d = await (await fetch('/api/missed')).json();
+    $('missedsummary').textContent = d.summary ? '— ' + d.summary : '';
+    $('missedlist').innerHTML = (d.misses && d.misses.length)
+      ? d.misses.map(m => `<div class="miss">
+          <span class="mp">${esc(m.peak)}</span>
+          <span class="ms">$${esc(m.symbol)}</span>
+          <span class="mw">${esc(m.whyMissed)}</span>
+          <span class="mn ${m.now && m.now.startsWith('STILL ALIVE') ? 'alive' : ''}">${esc(m.now)}${m.reSurfaced ? ' <span class="rs">◆ RE-SURFACED → WATCHLIST</span>' : ''}</span>
+          <a href="https://dexscreener.com/solana/${m.pair || m.ca}" target="_blank" rel="noopener">chart</a>
+        </div>`).join('')
+      : '<div class="miss"><span class="mw">No 5x misses found in the last 48h — either the funnel is catching them or there\'s not enough outcome data yet.</span></div>';
+  } catch { $('missedlist').innerHTML = '<div class="miss"><span class="mw">missed-winners fetch failed</span></div>'; }
+}
 
 // ---- BEST BUYS: 3 organic sockets + 1 smart-money socket, brutally earned ----
 const BB_SLOTS = 3;   // organic slots; keep in sync with config bestbuys.max_shown

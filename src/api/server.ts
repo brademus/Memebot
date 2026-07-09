@@ -16,6 +16,7 @@ import { handleWebhook, webhookDiag } from '../wallets/webhook';
 import { prefilterDiag } from '../gates/prefilter';
 import { learningDiag } from '../tuning/filtertune';
 import { momentumDiag } from '../ingest/momentum';
+import { getMissedWinners } from '../outcomes/missed';
 import { fetchHistory, addSmartWallet, removeSmartWallet, listSmartWallets } from '../db';
 import { latestSuggestion } from '../tuning/autotune';
 import { TokenRecord } from '../types';
@@ -60,6 +61,11 @@ export function startServer() {
   app.post('/api/helius-webhook', (req, res) => {
     const code = handleWebhook(req.header('authorization'), req.body);
     res.status(code).end();
+  });
+
+  app.get('/api/missed', async (_req, res) => {
+    try { res.json(await getMissedWinners()); }
+    catch (e) { res.json({ misses: [], summary: 'missed-winners sweep failed: ' + (e as Error).message }); }
   });
 
   app.get('/api/tokens', (_req, res) => res.json(payload()));
