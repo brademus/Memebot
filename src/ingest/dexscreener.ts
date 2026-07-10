@@ -51,13 +51,18 @@ async function enrich(batch: TokenRecord[], onUpdated: (t: TokenRecord) => void)
       // (an unindexed pair), which previously wiped curve state and broke every
       // t.dex === 'pumpfun' code path (gating, persistence, scoring).
       if (p.dexId && p.dexId !== 'pumpfun') { t.dex = p.dexId; t.dexId = p.dexId; }
-      t.vol5m = p.volume?.m5 || 0;
-      t.buys5m = p.txns?.m5?.buys || 0;
-      t.sells5m = p.txns?.m5?.sells || 0;
       t.priceChange5m = p.priceChange?.m5 || 0;
       t.pairAddress = p.pairAddress || t.pairAddress;
-      t.uniqueBuyerSamples.push(t.buys5m);
-      if (t.uniqueBuyerSamples.length > 6) t.uniqueBuyerSamples.shift();
+      // 5m txn/volume counts: for on-curve tokens the pump.fun stream owns these
+      // (real curve trades); Dexscreener has no curve data and would clobber them
+      // with 0s. Only adopt Dexscreener's counts once the token has left the curve.
+      if (t.dex !== 'pumpfun') {
+        t.vol5m = p.volume?.m5 || 0;
+        t.buys5m = p.txns?.m5?.buys || 0;
+        t.sells5m = p.txns?.m5?.sells || 0;
+        t.uniqueBuyerSamples.push(t.buys5m);
+        if (t.uniqueBuyerSamples.length > 6) t.uniqueBuyerSamples.shift();
+      }
       onUpdated(t);
     }
   } catch (e) {

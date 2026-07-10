@@ -30,7 +30,13 @@ export const allTokens = () => [...tokens.values()];
 export const activeTokens = () =>
   allTokens().filter(t => t.gated === true && t.state !== 'DEAD');
 export const pendingGate = () => allTokens().filter(t => t.gated === null);
-export function removeToken(ca: string) { tokens.delete(ca); }
+// removal hooks: modules with per-token side state (gate attempt maps, etc.)
+// register here so eviction and janitor removal both clean everything up.
+const onRemove: ((ca: string) => void)[] = [];
+export function onTokenRemove(fn: (ca: string) => void) { onRemove.push(fn); }
+function fireRemove(ca: string) { for (const fn of onRemove) try { fn(ca); } catch {} }
+
+export function removeToken(ca: string) { if (tokens.delete(ca)) fireRemove(ca); }
 
 function evictOldest() {
   // eviction priority: killed first, then liquidity-less pending, then oldest of
@@ -43,7 +49,7 @@ function evictOldest() {
   const victim = pick(t => t.gated === false)
              || pick(t => t.gated === null)
              || pick(() => true);
-  if (victim) tokens.delete(victim.ca);
+  if (victim) { tokens.delete(victim.ca); fireRemove(victim.ca); }
 }
 
 // ---- scan feed: rolling log of gate verdicts for the dashboard ----

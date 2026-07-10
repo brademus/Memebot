@@ -9,6 +9,7 @@ import { fetchSocials } from './metadata';
 // rough constant is fine for gating thresholds (we care about magnitude, not cents).
 let SOL_USD = 150;
 export function setSolPrice(p: number) { if (p > 0) SOL_USD = p; }
+export const getSolPrice = () => SOL_USD;
 
 function seedCurve(t: any, msg: any) {
   const solInCurve = msg.vSolInBondingCurve || 0;
@@ -168,6 +169,14 @@ function connect(onNew: (ca: string) => void) {
 
 export function unsubscribeToken(ca: string) {
   try { ws?.send(JSON.stringify({ method: 'unsubscribeTokenTrade', keys: [ca] })); } catch {}
+}
+
+// Subscribe a token surfaced by another engine (wallet webhook / momentum scanner)
+// to the curve trade stream. Without this, surfaced pre-graduation tokens never
+// accumulated buy/sell counts or curve samples and scored ~0 organic forever.
+export function subscribeToken(ca: string) {
+  if (streamMode !== 'full') return;
+  try { ws?.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: [ca] })); } catch {}
 }
 
 function reconnect(onNew: (ca: string) => void) {

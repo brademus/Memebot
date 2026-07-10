@@ -1,7 +1,8 @@
 import { cfg } from '../config';
 import { TokenRecord } from '../types';
 import { walletsTracked, weightedSmartHits } from '../wallets/tracker';
-import { getStreamMode } from '../ingest/pumpfun';
+import { getStreamMode, getSolPrice } from '../ingest/pumpfun';
+import { CURVE_START_SOL, GRADUATION_SOL, GRADUATION_MCAP_USD, CURVE_SPAN_SOL } from '../constants';
 
 // SCORING v3 — research-ranked signal weights.
 // Evidence basis (2025-2026 academic + practitioner studies on pump.fun):
@@ -15,9 +16,6 @@ import { getStreamMode } from '../ingest/pumpfun';
 //      non-monotonic per research — smart wallets exit fast around graduation).
 //   DEV SELF-BUY: hazard ratio 4.51 positive at moderate size (commitment),
 //      but a large dev bag is structural dump risk — scored as a curve, not a line.
-
-const GRADUATION_SOL = 85;
-const CURVE_START_SOL = 30;
 
 export function scoreToken(t: TokenRecord): number {
   const w = cfg().weights;
@@ -33,9 +31,9 @@ export function scoreToken(t: TokenRecord): number {
   if (onCurve && lite) {
     // LITE: per-trade stream unavailable. Demand proxy = Dexscreener 5m volume
     // converted to SOL/min, progress = mcap fraction toward ~$69K graduation.
-    const solPerMin = t.vol5m > 0 ? (t.vol5m / 5) / 82 : 0;   // rough SOL conversion; magnitude is what matters
+    const solPerMin = t.vol5m > 0 ? (t.vol5m / 5) / getSolPrice() : 0;   // live SOL price, not a stale literal
     const vBase = clamp(solPerMin / 3);
-    const progress = clamp(t.mcapUsd / 69000);
+    const progress = clamp(t.mcapUsd / GRADUATION_MCAP_USD);
     velocity = 0.6 * vBase + 0.4 * progress;
   } else if (onCurve) {
     // sol-per-trade: 0.4+ SOL/trade = elite (50 SOL in ~50 trades), log-scaled
@@ -44,7 +42,7 @@ export function scoreToken(t: TokenRecord): number {
     // inflow acceleration: velocity now vs a minute ago (2nd derivative of curve)
     const accel = clamp(curveAccel(t) / 2 + 0.5);   // -2..+2 SOL/min² -> 0..1
     // progress toward graduation as accumulated proof
-    const progress = clamp(bonded / (GRADUATION_SOL - CURVE_START_SOL));
+    const progress = clamp(bonded / CURVE_SPAN_SOL);
     velocity = 0.5 * vBase + 0.3 * accel + 0.2 * progress;
   } else {
     // post-graduation: AMM liquidity health (ratio + depth)

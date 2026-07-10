@@ -24,7 +24,7 @@ async function tick() {
     // before any rung could fire. Ladder alerts were structurally unreachable.
     // Track "has ever triggered" instead, and measure multiples from trigger price
     // so the "since trigger" message is literally true.
-    if (!t.triggeredAt || t.insiderKilled) continue;
+    if (!t.triggeredAt || t.insiderKilled || t.state === 'DEAD') continue;
     const base = t.triggerPrice || t.firstScorePrice;
     if (!base || t.priceUsd <= 0) continue;
     const mult = t.priceUsd / base;

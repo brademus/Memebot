@@ -1,6 +1,7 @@
 import { cfg } from '../config';
 import { TokenRecord } from '../types';
 import { getStreamMode } from '../ingest/pumpfun';
+import { CURVE_FILLED_SOL } from '../constants';
 
 // Shared persistence check — the burst-vs-real discriminator. Applied to BOTH
 // Best Buys admission AND the TRIGGER state after the first trigger cohort went
@@ -22,7 +23,7 @@ export function passesPersistence(t: TokenRecord, now = Date.now()): boolean {
     const ref = t.curveSamples.filter(x => x.at <= now - bb.net_inflow_window_min * 60_000).pop();
     // require the reference to be genuinely recent, not the only sample we ever got
     if (ref && t.curveSamples.length >= 3 && t.curveSol < ref.sol) return false;
-    if (t.peakCurveSol > 34 && t.curveSol < t.peakCurveSol * 0.9) return false;
+    if (t.peakCurveSol > CURVE_FILLED_SOL && t.curveSol < t.peakCurveSol * 0.9) return false;
   }
   return true;
 }

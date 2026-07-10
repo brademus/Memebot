@@ -21,18 +21,22 @@ async function tick() {
            AND first_seen >  now() - interval '48 hours'
            AND first_score_price IS NOT NULL
            AND NOT EXISTS (SELECT 1 FROM outcomes o WHERE o.ca = tokens.ca AND o.snapshot_minutes = $2)
-         LIMIT 20`, [String(m), m]);
-      for (const row of due.rows) {
-        const snap = await fetchTokenSnapshot(row.ca);
-        if (!snap) {
-          // token vanished from Dexscreener = dead; log as zero so it counts as a loss, not a gap
-          await logOutcome(row.ca, m, 0, 0, 0, row.first_score_price);
-          continue;
-        }
-        await logOutcome(row.ca, m, snap.price, snap.liq, snap.mcap, row.first_score_price);
-        if (row.gate_result === 'passed' && row.first_score_price && snap.price < row.first_score_price * 0.05 && cfg().deployer.blacklist_auto) {
-          await markRug(row.ca);
-        }
+         LIMIT 200`, [String(m), m]);
+      // bounded-concurrency snapshot fetches — clears the backlog without
+      // hammering Dexscreener. 200/min/rung keeps up with peak mint volume.
+      const CONC = 8;
+      for (let i = 0; i < due.rows.length; i += CONC) {
+        await Promise.all(due.rows.slice(i, i + CONC).map(async (row: any) => {
+          const snap = await fetchTokenSnapshot(row.ca);
+          if (!snap) {
+            await logOutcome(row.ca, m, 0, 0, 0, row.first_score_price);
+            return;
+          }
+          await logOutcome(row.ca, m, snap.price, snap.liq, snap.mcap, row.first_score_price);
+          if (row.gate_result === 'passed' && row.first_score_price && snap.price < row.first_score_price * 0.05 && cfg().deployer.blacklist_auto) {
+            await markRug(row.ca);
+          }
+        }));
       }
     } catch (e) { console.error('[outcomes]', (e as Error).message); }
   }

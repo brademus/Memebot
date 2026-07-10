@@ -2,6 +2,7 @@ import { cfg } from '../config';
 import { TokenRecord } from '../types';
 import { getStreamMode } from '../ingest/pumpfun';
 import { passesPersistence } from './persistence';
+import { CURVE_FILLED_SOL } from '../constants';
 
 // State machine. Returns the new state if it changed, else null.
 // Order matters: kill conditions (EXTENDED/DYING/DEAD) evaluated before promotions.
@@ -26,7 +27,7 @@ function earlyRunner(t: TokenRecord, s: ReturnType<typeof cfg>['states']): boole
     ? (t.buys5m + t.sells5m) >= s.early_runner_min_trades
     : t.uniqueBuyers.length >= s.early_runner_min_buyers;
   // curve must not be actively bleeding (the one persistence check we keep)
-  const bleeding = t.dex === 'pumpfun' && t.peakCurveSol > 34 && t.curveSol < t.peakCurveSol * 0.9;
+  const bleeding = t.dex === 'pumpfun' && t.peakCurveSol > CURVE_FILLED_SOL && t.curveSol < t.peakCurveSol * 0.9;
   return breadth && !bleeding;
 }
 
@@ -54,7 +55,7 @@ export function updateState(t: TokenRecord): TokenRecord['state'] | null {
              (buyRatio <= s.dying_buy_ratio_max && ageMin > 10) ||
              // curve outflow: SOL leaving the curve = holders cashing out = distribution.
              // >15% off the high-water mark (once meaningfully filled) is a death signal.
-             (t.dex === 'pumpfun' && t.peakCurveSol > 34 && t.curveSol < t.peakCurveSol * 0.85)) {
+             (t.dex === 'pumpfun' && t.peakCurveSol > CURVE_FILLED_SOL && t.curveSol < t.peakCurveSol * 0.85)) {
     next = 'DYING';                                    // rollover — rotate attention away
   } else if (t.score >= s.trigger_score_min && buyRatio >= s.trigger_buy_ratio_min
              && evidenceFloor(t, s)

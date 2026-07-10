@@ -1,5 +1,5 @@
 import { initDb, upsertToken, markTrigger, markConviction } from './db';
-import { startPumpfunMonitor, setSolPrice, unsubscribeToken } from './ingest/pumpfun';
+import { startPumpfunMonitor, setSolPrice, unsubscribeToken, subscribeToken } from './ingest/pumpfun';
 import { startDexscreenerPoller } from './ingest/dexscreener';
 import { startMomentumScanner } from './ingest/momentum';
 import { runGates } from './gates';
@@ -18,7 +18,7 @@ import { startWalletDiscovery } from './wallets/discovery';
 import { startWalletTracker } from './wallets/tracker';
 import { startWalletWebhook } from './wallets/webhook';
 import { addToken } from './store';
-import { getToken, removeToken, allTokens, recordScan } from './store';
+import { getToken, removeToken, allTokens, recordScan, onTokenRemove } from './store';
 import { cfg } from './config';
 import { getStreamMode } from './ingest/pumpfun';
 import { TokenRecord } from './types';
@@ -48,6 +48,15 @@ async function main() {
   await initDb();
   startServer();
 
+  // one place cleans ALL per-token side state, whether a token is purged by the
+  // janitor OR evicted by the store cap — prevents slow map leaks on eviction.
+  onTokenRemove((ca) => {
+    gateAttempts.delete(ca);
+    lastGateAt.delete(ca);
+    bundleAttempts.delete(ca);
+    unsubscribeToken(ca);
+  });
+
   // keep a live SOL/USD price so curve SOL amounts convert to real USD for gating
   const refreshSol = async () => {
     try {
@@ -67,7 +76,10 @@ async function main() {
     // a tracked wallet bought a token we're not watching — pull it in for gating.
     // It rides the normal pipeline from here: gates, scoring, states, smart lane.
     const t = addToken({ ca, symbol: '?', name: '(wallet-surfaced)', creator: null, source: 'dexscreener' });
-    if (t) console.log(`[wallets] smart wallet surfaced new token ${ca}`);
+    if (t) {
+      subscribeToken(ca);   // curve tokens need the trade stream or they stay data-starved
+      console.log(`[wallets] smart wallet surfaced new token ${ca}`);
+    }
   };
   startWalletTracker(walletSurface);       // polling fallback (stands down when webhook is live)
   startWalletWebhook(walletSurface);       // primary: real-time push for ALL active wallets
@@ -75,7 +87,7 @@ async function main() {
     // second discovery engine: runners + non-pump.fun launches. Seeded with a
     // full pool snapshot, so gate immediately on the AMM path.
     const t = getToken(ca);
-    if (t) await tryGate(t);
+    if (t) { subscribeToken(ca); await tryGate(t); }   // if still on curve, stream its trades too
   });
   startAutotune();
   startFilterLearner();   // the closed loop: filters measure their own mistakes and adjust
@@ -204,9 +216,7 @@ async function main() {
     const killedCutoff = now - 30 * 60_000;    // killed: keep 30min for the seen feed
     const deadCutoff = now - 5 * 3600_000;     // DEAD (aged out): gone after 5h (durable copy is in Postgres)
     let purged = 0;
-    const drop = (ca: string) => {
-      removeToken(ca); gateAttempts.delete(ca); lastGateAt.delete(ca); bundleAttempts.delete(ca); unsubscribeToken(ca); purged++;
-    };
+    const drop = (ca: string) => { removeToken(ca); purged++; };   // side-map + unsub cleanup runs via onTokenRemove
     for (const t of allTokens()) {
       if (t.gated === null && t.firstSeen < pendingCutoff) drop(t.ca);
       else if (t.gated === false && t.firstSeen < killedCutoff) drop(t.ca);
