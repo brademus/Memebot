@@ -69,6 +69,9 @@ ai:                                   # needs GEMINI_API_KEY (aistudio.google.co
   enabled: true
   note_model: gemini-3-flash          # per-token TRIGGER notes: small, frequent -> Flash tier
   review_model: gemini-3.1-pro        # weekly bot-performance review: big context -> Pro tier
+  conviction_enabled: true            # AI reads name/ticker/description at TRIGGER for narrative quality (logged + measured)
+  conviction_model: gemini-3-flash    # narrative read is small + at-trigger volume -> Flash
+  conviction_max_delta: 6             # HARD bound on the AI score nudge; it can never create or block a trade alone
                                       # if a model 404s, check current names at ai.google.dev/gemini-api/docs/models
 
 bestbuys:                             # BEST BUYS panel — deliberately brutal filter.

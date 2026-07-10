@@ -322,6 +322,7 @@ function pick(t: TokenRecord) {
     socials: t.socials,
     devPct: +t.devBuyPct.toFixed(1),
     conviction: t.convictionAt !== null,
+    aiRead: t.aiConviction ? { verdict: t.aiConviction.verdict, delta: t.aiConviction.delta, reason: t.aiConviction.reason } : null,
     // for TRIGGER tokens that haven't confirmed yet: show exactly what's blocking
     // conviction, so threshold tuning is done from evidence instead of guesswork
     convictionMissing: t.state === 'TRIGGER' && t.convictionAt === null

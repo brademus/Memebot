@@ -26,6 +26,8 @@ export interface TokenRecord {
   earlyExited: string[];             // which of them have since SOLD
   peakCurveSol: number;              // high-water mark of SOL in curve (outflow detection)
   socials: { x: boolean; tg: boolean; web: boolean; fetched: boolean; tgMembers: number | null };  // 17x lift; tgMembers verifies the community is REAL
+  description: string | null;        // human-authored token description (narrative signal for AI read)
+  aiConviction: { verdict: string; delta: number; reason: string; at: number } | null;  // AI narrative read, logged + bounded
   playType: 'MOMENTUM' | 'GRADUATION' | 'DIP' | 'RUNNER' | null;
   laddersFired: number[];            // exit-ladder levels already alerted (2, 5, ...)
   triggeredAt: number | null;        // first time this token hit TRIGGER (in-memory; DB has triggered_at)
@@ -96,7 +98,7 @@ export interface AppConfig {
   };
   age: { max_token_age_minutes: number; freshness_half_life_minutes: number };
   weights: { velocity: number; organic: number; social: number; buy_pressure: number; freshness: number; smart_money: number };
-  ai: { enabled: boolean; note_model: string; review_model: string };
+  ai: { enabled: boolean; note_model: string; review_model: string; conviction_enabled: boolean; conviction_model: string; conviction_max_delta: number };
   wallets: {
     enabled: boolean;
     discovery_min_multiple: number;

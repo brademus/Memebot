@@ -21,6 +21,9 @@ export async function fetchSocials(t: TokenRecord, uri: string | undefined) {
       fetched: true,
       tgMembers: null,
     };
+    // capture the human-authored description — the narrative signal a number
+    // can't read (live meme vs low-effort clone). Consumed by the AI read at trigger.
+    if (m.description && typeof m.description === 'string') t.description = m.description.slice(0, 500);
     // COMMUNITY VERIFICATION — a TG that exists is worth little; a TG with real
     // members is the signal. Public t.me pages expose the count; a channel made
     // five minutes before deploy with 3 members is a manufactured shell and

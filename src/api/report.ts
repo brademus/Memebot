@@ -96,6 +96,18 @@ export async function buildReport(days = 7): Promise<any> {
     WHERE t.gate_result = 'passed' ${win}
     GROUP BY insider_band ORDER BY insider_band`);
 
+  // AI NARRATIVE READ scorecard: does the AI's verdict correlate with outcomes?
+  // This is the accountability for putting an LLM in the loop — if STRONG doesn't
+  // beat WEAK on avg_multiple, the read is noise and ai.conviction_enabled -> false.
+  const aiConvictionScorecard = await q(`
+    SELECT ac.verdict,
+           COUNT(*) AS n,
+           ROUND(AVG(o.multiple_from_first)::numeric, 2) AS avg_multiple,
+           ROUND((COUNT(*) FILTER (WHERE o.multiple_from_first >= 2))::numeric / NULLIF(COUNT(*),0) * 100, 1) AS pct_2x_plus
+    FROM ai_conviction ac JOIN outcomes o ON o.ca = ac.ca AND o.snapshot_minutes = 240
+    ${win ? "WHERE ac.at > now() - interval '7 days'" : ''}
+    GROUP BY ac.verdict ORDER BY avg_multiple DESC NULLS LAST`).catch(() => []);
+
   // filter learning: what the bot changed about its own filters, with evidence
   const filterLearning = {
     activeOverrides: await q(`SELECT path, value, reason, updated_at FROM filter_overrides ORDER BY updated_at DESC`).catch(() => []),
@@ -121,7 +133,8 @@ export async function buildReport(days = 7): Promise<any> {
     scoreCalibration: scoreBuckets,
     falseKills,
     filterLearning,
+    aiConvictionScorecard,
     insiderCorrelation: insiderCorr,
-    readme: 'Paste this whole object to Claude to tune config.yaml. triggerPerformance = did BUY calls go up. convictionPerformance = the confirmed-buy tier measured from its own entry price (must beat triggers or tighten conviction thresholds). scoreCalibration = are high scores earning their weight. componentCalibration = WHICH components carry signal (tercile 3 must beat tercile 1 or that weight is dead/anti-signal — reweight from this). falseKills = gates rejecting winners (loosen these). insiderCorrelation = is the bundle gate threshold right.',
+    readme: 'Paste this whole object to Claude to tune config.yaml. triggerPerformance = did BUY calls go up. convictionPerformance = the confirmed-buy tier measured from its own entry price (must beat triggers or tighten conviction thresholds). scoreCalibration = are high scores earning their weight. aiConvictionScorecard = does the AI narrative read predict (STRONG must beat WEAK on avg_multiple or disable it). componentCalibration = WHICH components carry signal (tercile 3 must beat tercile 1 or that weight is dead/anti-signal — reweight from this). falseKills = gates rejecting winners (loosen these). insiderCorrelation = is the bundle gate threshold right.',
   };
 }

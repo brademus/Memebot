@@ -92,3 +92,14 @@ CREATE TABLE IF NOT EXISTS filter_tuning_log (
   new_value DOUBLE PRECISION,
   evidence TEXT
 );
+
+-- AI narrative read (added 2026-07): logged per token so the weekly report can
+-- PROVE whether the AI's verdict correlates with outcomes. If it doesn't, disable it.
+CREATE TABLE IF NOT EXISTS ai_conviction (
+  ca TEXT PRIMARY KEY,
+  symbol TEXT,
+  verdict TEXT,
+  delta INTEGER,
+  reason TEXT,
+  at TIMESTAMPTZ DEFAULT now()
+);

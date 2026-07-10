@@ -13,6 +13,7 @@ import { startLadderMonitor } from './alerts/ladder';
 import { startAutotune } from './tuning/autotune';
 import { startFilterLearner } from './tuning/filtertune';
 import { generateNote } from './ai/analyst';
+import { aiConvictionRead } from './ai/conviction';
 import { startServer, broadcast } from './api/server';
 import { startWalletDiscovery } from './wallets/discovery';
 import { startWalletTracker } from './wallets/tracker';
@@ -176,6 +177,7 @@ async function main() {
         markTrigger(t.ca, t.priceUsd);
         alertTrigger(t);                        // alert fires IMMEDIATELY
         generateNote(t).catch(() => {});        // analyst note follows async, shows on dashboard
+        aiConvictionRead(t).catch(() => {});    // AI narrative read -> bounded, logged score nudge
         console.log(`[state] 🎯 TRIGGER $${t.symbol} score=${t.score}`);
       }
       // CONVICTION: evaluated every tick while a token holds TRIGGER. Fires at most

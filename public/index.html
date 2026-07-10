@@ -516,10 +516,12 @@ function render(data){
         <a href="https://jup.ag/swap/SOL-${t.ca}" target="_blank" rel="noopener">swap</a>
       </td>`;
     tb.appendChild(tr);
-    if (t.aiNote) {
+    if (t.aiNote || t.aiRead) {
       const nr = document.createElement('tr');
       nr.className = 'ainote ' + t.state;
-      nr.innerHTML = `<td></td><td colspan="10"><span class="ai-label">ANALYST</span> ${esc(t.aiNote)}</td>`;
+      const read = t.aiRead ? `<span style="color:${t.aiRead.delta>0?'var(--up)':t.aiRead.delta<0?'var(--down)':'var(--faint)'};font-weight:600">◆ ${esc(t.aiRead.verdict)} ${t.aiRead.delta>0?'+':''}${t.aiRead.delta}</span> <span style="color:var(--faint)">${esc(t.aiRead.reason)}</span>` : '';
+      const note = t.aiNote ? `<span class="ai-label">ANALYST</span> ${esc(t.aiNote)}` : '';
+      nr.innerHTML = `<td></td><td colspan="10">${note}${note&&read?' &nbsp;·&nbsp; ':''}${read}</td>`;
       tb.appendChild(nr);
     }
     prevStates[t.ca] = t.state;
