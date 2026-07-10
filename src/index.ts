@@ -28,7 +28,13 @@ const gateAttempts = new Map<string, number>();
 const lastGateAt = new Map<string, number>();
 const MAX_GATE_ATTEMPTS = 60;
 const GATE_COOLDOWN_MS = 45_000;   // efficiency: don't re-hit RugCheck/Helius every 10s poll
-const bundleRetried = new Set<string>();
+// bundle re-check attempts: Helius indexing lags unpredictably, so ONE attempt at
+// 3-8min left 99.93% of tokens permanently unverified (21/29k coverage) — and the
+// verified-clean signal (2.69x avg) is the strongest one we have. Retry at
+// expanding ages until data exists, capped, and only for tokens worth the calls.
+const bundleAttempts = new Map<string, number>();
+const BUNDLE_RETRY_AGES = [3, 12, 20, 30];   // minutes; one attempt per rung
+export const bundleCoverage = { attempts: 0, verified: 0 };
 
 async function main() {
   await initDb();
@@ -122,9 +128,13 @@ async function main() {
       // once at 3-8 min. Report data: insider-clean tokens averaged 2.69x vs 0.88x
       // unknown — this is the single strongest per-token signal we have.
       const ageMinB = (Date.now() - t.firstSeen) / 60000;
-      if (t.bundle === null && ageMinB >= 3 && ageMinB < 10 && !bundleRetried.has(t.ca)) {
-        bundleRetried.add(t.ca);
+      const rung = bundleAttempts.get(t.ca) || 0;
+      const worthIt = t.score >= 40 || t.state !== 'WATCHING';   // cap Helius spend on obvious junk
+      if (t.bundle === null && worthIt && rung < BUNDLE_RETRY_AGES.length && ageMinB >= BUNDLE_RETRY_AGES[rung]) {
+        bundleAttempts.set(t.ca, rung + 1);
+        bundleCoverage.attempts++;
         checkBundle(t).then(res => {
+          if (t.bundle !== null) bundleCoverage.verified++;
           if (!res.pass) {
             t.insiderKilled = true;   // sticky — state machine holds DYING from here
             t.state = 'DYING';        // insider structure found late — off the screen, slot-ejected
@@ -187,7 +197,7 @@ async function main() {
     const deadCutoff = now - 5 * 3600_000;     // DEAD (aged out): gone after 5h (durable copy is in Postgres)
     let purged = 0;
     const drop = (ca: string) => {
-      removeToken(ca); gateAttempts.delete(ca); lastGateAt.delete(ca); bundleRetried.delete(ca); unsubscribeToken(ca); purged++;
+      removeToken(ca); gateAttempts.delete(ca); lastGateAt.delete(ca); bundleAttempts.delete(ca); unsubscribeToken(ca); purged++;
     };
     for (const t of allTokens()) {
       if (t.gated === null && t.firstSeen < pendingCutoff) drop(t.ca);

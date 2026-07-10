@@ -148,7 +148,7 @@ launch_signals:                       # adversarial reads of the launch playbook
   graduation_curve_sol: 69            # pump.fun graduation threshold — VERIFY, pump.fun has changed this over time
   graduation_bonus_max: 6             # score bonus scaling 80% -> 100% of the curve: graduation is a known catalyst
   dead_hours_utc: [5, 6, 7, 8, 9, 10, 11]   # stealth/manipulation launch window; peak attention is 14-18 UTC
-  dead_hours_penalty: 3               # mild prior — the weekly report's hour cohort will prove or kill this
+  dead_hours_penalty: 0               # KILLED BY DATA 2026-07-10: hour cohort showed dead hours (0.83-1.04x) = peak hours (0.82-0.93x); prior not supported
   tg_shell_max_members: 25            # a TG this small at launch is a manufactured shell, not a community
   tg_real_min_members: 200            # at this size the 17.4x social signal is trustworthy at full weight
   early_runner_enabled: true          # let fast movers with real buyer breadth trigger before the full 4min age gate

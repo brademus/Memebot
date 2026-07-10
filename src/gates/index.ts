@@ -9,9 +9,13 @@ import { checkDeployer } from './deployer';
 export async function runGates(t: TokenRecord): Promise<string | null> {
   const g = cfg().gates;
 
-  // curve-stage tokens (dexId 'pumpfun') have liquidity locked in the bonding curve by
-  // the program itself — LP-lock doesn't apply, and the liquidity floor is lower
-  const onCurve = t.dex === 'pumpfun';
+  // curve-stage tokens have liquidity locked in the bonding curve by the program
+  // itself — LP-lock doesn't apply, and the liquidity floor is lower. IMPORTANT:
+  // wallet-surfaced pump.fun tokens gate before enrichment sets t.dex, and gating
+  // them as AMM counted the curve PDA as a 100% top holder — the report's largest
+  // false-kill class (top_holder_100pct: 26/49 kills went 3x+). The 'pump' mint
+  // suffix is pump.fun's vanity standard and identifies them regardless of t.dex.
+  const onCurve = t.dex === 'pumpfun' || t.ca.endsWith('pump');
 
   // liquidity floor. On-curve: compare native SOL (price-independent). Post-grad: USD.
   if (onCurve) {

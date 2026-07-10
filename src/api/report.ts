@@ -43,6 +43,25 @@ export async function buildReport(days = 7): Promise<any> {
     WHERE t.gate_result = 'passed' ${win}
     GROUP BY 1 ORDER BY 1`);
 
+  // 1d. COMPONENT calibration: the composite score anti-predicts (60-80 band 0.86x,
+  // 80+ band 0.52x — worse than junk). The question is WHICH components carry
+  // signal and which carry the anti-signal. Terciles per component: if tercile 3
+  // (highest values) doesn't beat tercile 1, that component's weight is buying
+  // nothing — or worse, selecting tops. Reweight cfg().weights from THIS table.
+  const componentCalibration: Record<string, any> = {};
+  for (const comp of ['freshness', 'liquidity', 'buyPressure', 'holderGrowth', 'smartMoney']) {
+    componentCalibration[comp] = await q(`
+      WITH s AS (
+        SELECT NTILE(3) OVER (ORDER BY (t.subs->>'${comp}')::float) AS tercile,
+               o.multiple_from_first AS m
+        FROM tokens t JOIN outcomes o ON o.ca = t.ca AND o.snapshot_minutes = 240
+        WHERE t.gate_result = 'passed' AND t.subs IS NOT NULL AND t.subs ? '${comp}' ${win})
+      SELECT tercile, COUNT(*) AS n,
+             ROUND(AVG(m)::numeric, 2) AS avg_multiple,
+             ROUND((COUNT(*) FILTER (WHERE m >= 2))::numeric / NULLIF(COUNT(*),0) * 100, 1) AS pct_2x_plus
+      FROM s GROUP BY tercile ORDER BY tercile`).catch(() => []);
+  }
+
   // 2. Score-bucket calibration: do higher scores actually predict bigger multiples? (4h)
   const scoreBuckets = await q(`
     SELECT width_bucket(GREATEST(t.peak_score, t.last_score), 0, 100, 5) * 20 AS score_band_top,
@@ -98,10 +117,11 @@ export async function buildReport(days = 7): Promise<any> {
     triggerPerformance: triggerPerf,
     convictionPerformance: convictionPerf,
     hourOfDay,
+    componentCalibration,
     scoreCalibration: scoreBuckets,
     falseKills,
     filterLearning,
     insiderCorrelation: insiderCorr,
-    readme: 'Paste this whole object to Claude to tune config.yaml. triggerPerformance = did BUY calls go up. convictionPerformance = the confirmed-buy tier measured from its own entry price (must beat triggers or tighten conviction thresholds). scoreCalibration = are high scores earning their weight. falseKills = gates rejecting winners (loosen these). insiderCorrelation = is the bundle gate threshold right.',
+    readme: 'Paste this whole object to Claude to tune config.yaml. triggerPerformance = did BUY calls go up. convictionPerformance = the confirmed-buy tier measured from its own entry price (must beat triggers or tighten conviction thresholds). scoreCalibration = are high scores earning their weight. componentCalibration = WHICH components carry signal (tercile 3 must beat tercile 1 or that weight is dead/anti-signal — reweight from this). falseKills = gates rejecting winners (loosen these). insiderCorrelation = is the bundle gate threshold right.',
   };
 }
