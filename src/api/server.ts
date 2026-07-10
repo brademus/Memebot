@@ -18,6 +18,7 @@ import { learningDiag } from '../tuning/filtertune';
 import { scorecalDiag } from '../tuning/scorecal';
 import { momentumDiag } from '../ingest/momentum';
 import { socialDiag } from '../ingest/social';
+import { heliusHealth } from '../helius';
 import { getMissedWinners } from '../outcomes/missed';
 import { fetchHistory, addSmartWallet, removeSmartWallet, listSmartWallets } from '../db';
 import { latestSuggestion } from '../tuning/autotune';
@@ -224,6 +225,7 @@ export function startServer() {
       calibration: scorecalDiag(),
       momentum: momentumDiag(),
       social: socialDiag(),
+      heliusHealth: heliusHealth(),
     });
   });
 

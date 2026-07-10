@@ -1,5 +1,34 @@
 import { env } from './config';
 
+// SHARED RATE LIMITER — every Helius call routes through this. Developer tier is
+// 50 RPS; the real failure mode with more headroom isn't sustained load, it's a
+// BURST — discovery, the bundle retry ladder, and the wallet quality analyzer all
+// firing at once and tripping 429s (which quietly capped insider verification
+// before). A leaky bucket at 40 RPS (safety margin under 50) serializes bursts
+// into a smooth stream so that never happens, no matter how many callers stack up.
+const RPS = 40;
+let tokens = RPS;
+let lastRefill = Date.now();
+const waiters: (() => void)[] = [];
+setInterval(() => {
+  const now = Date.now();
+  tokens = Math.min(RPS, tokens + (RPS * (now - lastRefill)) / 1000);
+  lastRefill = now;
+  while (tokens >= 1 && waiters.length) { tokens -= 1; waiters.shift()!(); }
+}, 25);
+let totalCalls = 0, throttledCalls = 0, got429 = 0;
+function rateLimit(): Promise<void> {
+  totalCalls++;
+  if (tokens >= 1) { tokens -= 1; return Promise.resolve(); }
+  throttledCalls++;
+  return new Promise(resolve => waiters.push(resolve));
+}
+export const heliusHealth = () => ({
+  rps: RPS, queued: waiters.length, totalCalls, throttledCalls, got429,
+  throttlePct: totalCalls ? Math.round((throttledCalls / totalCalls) * 100) : 0,
+});
+export const note429 = () => { got429++; };
+
 // Shared Helius helpers. Enhanced-transactions API returns parsed token/native transfers.
 export async function heliusTxs(address: string, limit = 100, before?: string): Promise<any[]> {
   if (!env.HELIUS_API_KEY) return [];
@@ -9,11 +38,13 @@ export async function heliusTxs(address: string, limit = 100, before?: string): 
   // 429 must not be silently swallowed as "no data" — that was quietly capping
   // insider verification, the strongest signal we have. Back off and retry.
   for (let attempt = 0; attempt < 3; attempt++) {
+    await rateLimit();                 // never burst past the tier ceiling
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 6000);
     try {
       const res = await fetch(url, { signal: ctrl.signal });
       if (res.status === 429) {
+        note429();
         const wait = 400 * (attempt + 1) + Math.random() * 200;
         await new Promise(r => setTimeout(r, wait));
         continue;

@@ -741,6 +741,7 @@ async function loadStatus(){
       row(s.telegram, 'Telegram', 'needs bot token + chat id') +
       row(s.tradeStream === 'full', 'Trade stream', 'LITE — fund PumpPortal key (0.02 SOL) + set PUMPPORTAL_API_KEY') +
       (s.walletTracking ? `<span class="ss"><b>${s.activeWallets}</b> wallets tracked</span>` : '') +
+      (s.heliusHealth ? `<span class="ss"><span class="d ${s.heliusHealth.got429>0?'off':'on'}"></span><b>Helius</b> ${s.heliusHealth.rps} RPS cap · ${s.heliusHealth.totalCalls} calls · ${s.heliusHealth.throttlePct}% queued${s.heliusHealth.got429?' · '+s.helius.got429+' × 429':''}</span>` : '') +
       (s.webhook ? `<span class="ss"><span class="d ${s.webhook.registered?'on':'off'}"></span><b>Webhook</b> ${s.webhook.registered ? s.webhook.addressCount + ' streaming' : esc(s.webhook.lastError || 'registering…')}</span>` : '') +
       (s.prefilter ? `<span class="ss"><b>Prefilter</b> ${Object.values(s.prefilter.kills||{}).reduce((a,b)=>a+b,0)} instant kills · ${s.prefilter.blacklistSize} blacklisted deployers cached</span>` : '') +
       (s.social ? `<span class="ss"><span class="d ${s.social.lastError?'off':'on'}"></span><b>Social edge</b> ${s.social.boostsSeen||0} boosts tracked · ${s.social.surfaced||0} surfaced</span>` : '') +

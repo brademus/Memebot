@@ -36,7 +36,7 @@ const GATE_COOLDOWN_MS = 45_000;   // efficiency: don't re-hit RugCheck/Helius e
 // verified-clean signal (2.69x avg) is the strongest one we have. Retry at
 // expanding ages until data exists, capped, and only for tokens worth the calls.
 const bundleAttempts = new Map<string, number>();
-const BUNDLE_RETRY_AGES = [3, 12, 20, 30];   // minutes; one attempt per rung
+const BUNDLE_RETRY_AGES = [2, 5, 10, 18, 28, 40];   // more rungs w/ Developer-tier headroom — chase 100% insider coverage (unlocks conviction)
 export const bundleCoverage = { attempts: 0, verified: 0 };
 
 // LAST-RESORT GUARDS: a stray rejection anywhere (a fetch we forgot to catch,
@@ -159,7 +159,7 @@ async function main() {
       // unknown — this is the single strongest per-token signal we have.
       const ageMinB = (Date.now() - t.firstSeen) / 60000;
       const rung = bundleAttempts.get(t.ca) || 0;
-      const worthIt = t.score >= 40 || t.state !== 'WATCHING';   // cap Helius spend on obvious junk
+      const worthIt = t.score >= 25 || t.state !== 'WATCHING';   // Developer tier: verify more of the funnel (lower bar, limiter guards RPS)
       if (t.bundle === null && worthIt && rung < BUNDLE_RETRY_AGES.length && ageMinB >= BUNDLE_RETRY_AGES[rung]) {
         bundleAttempts.set(t.ca, rung + 1);
         bundleCoverage.attempts++;

@@ -89,7 +89,7 @@ export async function runDiscovery(): Promise<Diag> {
       const toCheck = await pool.query(
         `SELECT wallet FROM smart_wallets
          WHERE active AND (quality_checked_at IS NULL OR quality_checked_at < now() - ($1 || ' days')::interval)
-         ORDER BY quality_checked_at NULLS FIRST, winners_hit DESC LIMIT 15`, [String(recheck)]);
+         ORDER BY quality_checked_at NULLS FIRST, winners_hit DESC LIMIT 30`, [String(recheck)]);
       for (const { wallet } of toCheck.rows) {
         const q = await analyzeWallet(wallet);
         await pool.query(
@@ -121,7 +121,7 @@ export async function runDiscovery(): Promise<Diag> {
          FROM winner_buyers
          WHERE wallet NOT IN (SELECT wallet FROM smart_wallets)
          GROUP BY wallet HAVING COUNT(DISTINCT ca) >= $2
-         ORDER BY 2 DESC LIMIT 10`, [w.discovery_min_multiple, shared]);
+         ORDER BY 2 DESC LIMIT 20`, [w.discovery_min_multiple, shared]);
       for (const { wallet, shared: sh } of cobuyers.rows) {
         const q = await analyzeWallet(wallet);
         if (!meetsBar(q.verdict)) continue;   // co-occurrence is a lead; the record decides
