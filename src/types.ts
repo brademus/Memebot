@@ -27,6 +27,9 @@ export interface TokenRecord {
   peakCurveSol: number;              // high-water mark of SOL in curve (outflow detection)
   socials: { x: boolean; tg: boolean; web: boolean; fetched: boolean; tgMembers: number | null };  // 17x lift; tgMembers verifies the community is REAL
   description: string | null;        // human-authored token description (narrative signal for AI read)
+  boostAmount: number;               // Dexscreener paid-boost total — money-backed attention signal
+  tgSamples: { n: number; at: number }[];   // Telegram member-count history -> growth velocity
+  tgGrowthPerMin: number;            // TG members gained per minute (pre-pump tell)
   aiConviction: { verdict: string; delta: number; reason: string; at: number } | null;  // AI narrative read, logged + bounded
   playType: 'MOMENTUM' | 'GRADUATION' | 'DIP' | 'RUNNER' | null;
   laddersFired: number[];            // exit-ladder levels already alerted (2, 5, ...)
@@ -176,6 +179,11 @@ export interface AppConfig {
     window_days: number;
     min_samples: number;
     loosen_false_kill_rate: number;
+  };
+  social: {
+    enabled: boolean;
+    boost_poll_seconds: number;
+    boost_surface_min: number;
   };
   calibration: {
     enabled: boolean;

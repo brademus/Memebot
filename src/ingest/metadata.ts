@@ -1,4 +1,5 @@
 import { TokenRecord } from '../types';
+import { recordTgSample } from './social';
 
 // SOCIAL PRESENCE DETECTOR — the highest-lift free signal in the research:
 // tokens with X + Telegram + website graduate at 17.4x the rate of bare launches
@@ -47,7 +48,10 @@ async function fetchTgMembers(t: TokenRecord, raw: string) {
     if (!res.ok) return;
     const html = await res.text();
     const m = html.match(/tgme_page_extra">\s*([\d\s\u00a0,\.]+)\s*(?:members|subscribers)/i);
-    if (m) t.socials.tgMembers = parseInt(m[1].replace(/[^\d]/g, ''), 10) || null;
+    if (m) {
+      t.socials.tgMembers = parseInt(m[1].replace(/[^\d]/g, ''), 10) || null;
+      if (t.socials.tgMembers) recordTgSample(t, t.socials.tgMembers);   // -> growth velocity
+    }
   } catch { /* fail-neutral */ }
   finally { clearTimeout(timer); }
 }

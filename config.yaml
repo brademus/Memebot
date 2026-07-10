@@ -174,3 +174,8 @@ calibration:                          # closed-loop scoring — the score fits o
   learning_rate: 0.34                 # move current weights this fraction toward target each cycle (smooth, not lurching)
   min_weight: 3                       # no fitted component drops below this...
   max_weight: 45                      # ...or above this — bounds live in config, movement is bounded per cycle
+
+social:                               # free social edge — Dexscreener boosts + TG velocity (NOT X scraping)
+  enabled: true
+  boost_poll_seconds: 90              # boosts feed poll (public, no auth, generous limits)
+  boost_surface_min: 30               # an UNSEEN coin needs this much paid-boost total to be pulled in

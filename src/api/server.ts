@@ -17,6 +17,7 @@ import { prefilterDiag } from '../gates/prefilter';
 import { learningDiag } from '../tuning/filtertune';
 import { scorecalDiag } from '../tuning/scorecal';
 import { momentumDiag } from '../ingest/momentum';
+import { socialDiag } from '../ingest/social';
 import { getMissedWinners } from '../outcomes/missed';
 import { fetchHistory, addSmartWallet, removeSmartWallet, listSmartWallets } from '../db';
 import { latestSuggestion } from '../tuning/autotune';
@@ -222,6 +223,7 @@ export function startServer() {
       learning: learningDiag(),
       calibration: scorecalDiag(),
       momentum: momentumDiag(),
+      social: socialDiag(),
     });
   });
 
@@ -325,6 +327,8 @@ function pick(t: TokenRecord) {
     devPct: +t.devBuyPct.toFixed(1),
     conviction: t.convictionAt !== null,
     aiRead: t.aiConviction ? { verdict: t.aiConviction.verdict, delta: t.aiConviction.delta, reason: t.aiConviction.reason } : null,
+    boost: t.boostAmount || 0,
+    tgGrowth: t.tgGrowthPerMin || 0,
     // for TRIGGER tokens that haven't confirmed yet: show exactly what's blocking
     // conviction, so threshold tuning is done from evidence instead of guesswork
     convictionMissing: t.state === 'TRIGGER' && t.convictionAt === null

@@ -500,7 +500,7 @@ function render(data){
     tr.innerHTML = `
       <td><span class="grade grade-${g.grade.replace('+','plus')}" title="${esc(g.label||'')} · confidence: ${g.confidence}">${g.grade}</span><div class="timing t-${g.timing}">${g.timing}${t.play ? ' · '+t.play : ''}</div></td>
       <td><span class="chip ${t.conviction ? 'CONVICTION' : t.state}">${t.conviction ? 'CONVICTION' : t.state}</span>${needs}</td>
-      <td><span class="sym">$${esc(t.symbol)}</span> <span class="socials">${t.socials ? (t.socials.tg?'✆':'')+(t.socials.x?'𝕏':'')+(t.socials.web?'◍':'') : ''}</span> <span class="name">${esc(t.name).slice(0,20)}</span>
+      <td><span class="sym">$${esc(t.symbol)}</span> <span class="socials">${t.socials ? (t.socials.tg?'✆':'')+(t.socials.x?'𝕏':'')+(t.socials.web?'◍':'') : ''}</span>${t.boost>0?`<span style="color:var(--amber);font-size:10px" title="Dexscreener paid boost $${t.boost}">⚡${t.boost}</span>`:''}${t.tgGrowth>0?`<span style="color:var(--up);font-size:10px" title="Telegram members/min">↗${t.tgGrowth}/m</span>`:''} <span class="name">${esc(t.name).slice(0,20)}</span>
           <div class="fuse" title="${MAX_AGE - t.ageMin}m left in window"><i style="width:${fusePct}%"></i></div></td>
       <td class="num">${t.ageMin}m</td>
       <td class="num"><span class="score" title="fresh ${t.subs.freshness} | liq ${t.subs.liquidity} | buy ${t.subs.buyPressure} | hold ${t.subs.holderGrowth}">${t.score}</span></td>
@@ -743,6 +743,7 @@ async function loadStatus(){
       (s.walletTracking ? `<span class="ss"><b>${s.activeWallets}</b> wallets tracked</span>` : '') +
       (s.webhook ? `<span class="ss"><span class="d ${s.webhook.registered?'on':'off'}"></span><b>Webhook</b> ${s.webhook.registered ? s.webhook.addressCount + ' streaming' : esc(s.webhook.lastError || 'registering…')}</span>` : '') +
       (s.prefilter ? `<span class="ss"><b>Prefilter</b> ${Object.values(s.prefilter.kills||{}).reduce((a,b)=>a+b,0)} instant kills · ${s.prefilter.blacklistSize} blacklisted deployers cached</span>` : '') +
+      (s.social ? `<span class="ss"><span class="d ${s.social.lastError?'off':'on'}"></span><b>Social edge</b> ${s.social.boostsSeen||0} boosts tracked · ${s.social.surfaced||0} surfaced</span>` : '') +
       (s.momentum ? `<span class="ss"><span class="d ${s.momentum.lastError?'off':'on'}"></span><b>Momentum scan</b> ${s.momentum.lastError ? esc(s.momentum.lastError) : (s.momentum.surfaced + ' surfaced · ' + s.momentum.scanned + ' pools last sweep')}</span>` : '') +
       (s.calibration ? `<span class="ss"><span class="d ${s.calibration.lastError?'off':s.calibration.status==='applied'?'on':'off'}"></span><b>Score calibrator</b> ${esc(s.calibration.status)}${s.calibration.samples?' · '+s.calibration.samples+' samples/'+s.calibration.winners+' winners':''}${s.calibration.floor?' · floor '+s.calibration.floor:''}</span>` : '') +
       (s.learning ? `<span class="ss"><span class="d ${s.learning.lastError?'off':'on'}"></span><b>Learning</b> ${s.learning.activeOverrides} learned overrides${s.learning.decisions && s.learning.decisions.length ? ' · latest: ' + esc(s.learning.decisions[0].path.split('.').pop() + ' ' + s.learning.decisions[0].from + '→' + s.learning.decisions[0].to) : ' · no changes yet — needs measured kills'}</span>` : '');

@@ -2,6 +2,7 @@ import { initDb, upsertToken, markTrigger, markConviction, freezeEarlySubs } fro
 import { startPumpfunMonitor, setSolPrice, unsubscribeToken, subscribeToken } from './ingest/pumpfun';
 import { startDexscreenerPoller } from './ingest/dexscreener';
 import { startMomentumScanner } from './ingest/momentum';
+import { startSocialScanner } from './ingest/social';
 import { runGates } from './gates';
 import { checkBundle } from './gates/bundle';
 import { scoreToken } from './scoring/score';
@@ -90,6 +91,12 @@ async function main() {
     // full pool snapshot, so gate immediately on the AMM path.
     const t = getToken(ca);
     if (t) { subscribeToken(ca); await tryGate(t); }   // if still on curve, stream its trades too
+  });
+  startSocialScanner(async (ca) => {
+    // paid-boost discovery: real money promoting a coin = attention lead. Still
+    // rides every gate — paid promotion is not a safety pass.
+    const t = getToken(ca);
+    if (t) { subscribeToken(ca); await tryGate(t); }
   });
   startAutotune();
   startFilterLearner();   // the closed loop: filters measure their own mistakes and adjust
