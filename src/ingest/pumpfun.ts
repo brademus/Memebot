@@ -1,5 +1,5 @@
 import WebSocket from 'ws';
-import { addToken, getToken, recordScan } from '../store';
+import { addToken, getToken, allTokens, recordScan } from '../store';
 import { bumpDeployer, upsertToken } from '../db';
 import { prefilter } from '../gates/prefilter';
 import { env } from '../config';
@@ -93,7 +93,21 @@ function connect(onNew: (ca: string) => void) {
     backoff = 1000;
     ws!.send(JSON.stringify({ method: 'subscribeNewToken' }));
     ws!.send(JSON.stringify({ method: 'subscribeMigration' }));
-    console.log('[pumpfun] connected, subscribed to new tokens + migrations');
+    // CRITICAL: re-subscribe the per-token trade streams for everything we're
+    // already tracking. Without this, any ws drop (constant on public feeds)
+    // silently starved every live token: buys5m decayed to zero in 5 minutes,
+    // scores collapsed, and nothing could trigger — while the feed LOOKED alive
+    // because new mints kept arriving.
+    if (streamMode === 'full') {
+      const live = allTokens()
+        .filter(t => t.gated !== false && t.dex === 'pumpfun' && t.state !== 'DEAD')
+        .map(t => t.ca);
+      for (let i = 0; i < live.length; i += 50)   // batch keys to keep frames small
+        ws!.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: live.slice(i, i + 50) }));
+      console.log(`[pumpfun] connected — resubscribed ${live.length} live token streams`);
+    } else {
+      console.log('[pumpfun] connected, subscribed to new tokens + migrations');
+    }
   });
 
   ws.on('message', (raw: WebSocket.RawData) => {

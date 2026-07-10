@@ -3,14 +3,29 @@ import { env } from './config';
 // Shared Helius helpers. Enhanced-transactions API returns parsed token/native transfers.
 export async function heliusTxs(address: string, limit = 100, before?: string): Promise<any[]> {
   if (!env.HELIUS_API_KEY) return [];
-  try {
-    const url = `https://api.helius.xyz/v0/addresses/${address}/transactions?api-key=${env.HELIUS_API_KEY}&limit=${limit}`
-      + (before ? `&before=${before}` : '');
-    const res = await fetch(url);
-    if (!res.ok) return [];
-    const data = await res.json();
-    return Array.isArray(data) ? data : [];
-  } catch { return []; }
+  const url = `https://api.helius.xyz/v0/addresses/${address}/transactions?api-key=${env.HELIUS_API_KEY}&limit=${limit}`
+    + (before ? `&before=${before}` : '');
+  // up to 3 attempts: a hung request must not stall the caller (6s timeout), and a
+  // 429 must not be silently swallowed as "no data" — that was quietly capping
+  // insider verification, the strongest signal we have. Back off and retry.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 6000);
+    try {
+      const res = await fetch(url, { signal: ctrl.signal });
+      if (res.status === 429) {
+        const wait = 400 * (attempt + 1) + Math.random() * 200;
+        await new Promise(r => setTimeout(r, wait));
+        continue;
+      }
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
+    } catch {
+      if (attempt === 2) return [];    // timeout/network — give up after last try
+    } finally { clearTimeout(timer); }
+  }
+  return [];
 }
 
 // Walk a token's history back toward creation (newest-first pages). Busy winners

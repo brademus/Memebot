@@ -45,15 +45,17 @@ async function enrich(batch: TokenRecord[], onUpdated: (t: TokenRecord) => void)
       if (dexPrice > 0) t.priceUsd = dexPrice;
       const dexMcap = p.fdv || p.marketCap || 0;
       if (dexMcap > 0) t.mcapUsd = dexMcap;
-      // mark graduation: if it now has an AMM pair, it's off the curve
+      // graduation detection: a token gets a REAL AMM pair only after it leaves
+      // the curve. Only transition off 'pumpfun' when Dexscreener names a
+      // different, real dex — never overwrite with 'pumpfun' or with null/undefined
+      // (an unindexed pair), which previously wiped curve state and broke every
+      // t.dex === 'pumpfun' code path (gating, persistence, scoring).
       if (p.dexId && p.dexId !== 'pumpfun') { t.dex = p.dexId; t.dexId = p.dexId; }
       t.vol5m = p.volume?.m5 || 0;
       t.buys5m = p.txns?.m5?.buys || 0;
       t.sells5m = p.txns?.m5?.sells || 0;
       t.priceChange5m = p.priceChange?.m5 || 0;
-      t.pairAddress = p.pairAddress || null;
-      t.dex = p.dexId || null;
-      t.dexId = p.dexId || null;
+      t.pairAddress = p.pairAddress || t.pairAddress;
       t.uniqueBuyerSamples.push(t.buys5m);
       if (t.uniqueBuyerSamples.length > 6) t.uniqueBuyerSamples.shift();
       onUpdated(t);

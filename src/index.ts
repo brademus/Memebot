@@ -36,6 +36,14 @@ const bundleAttempts = new Map<string, number>();
 const BUNDLE_RETRY_AGES = [3, 12, 20, 30];   // minutes; one attempt per rung
 export const bundleCoverage = { attempts: 0, verified: 0 };
 
+// LAST-RESORT GUARDS: a stray rejection anywhere (a fetch we forgot to catch,
+// a webhook parse edge) must not take down a process holding live market state.
+process.on('unhandledRejection', (e) => console.error('[fatal-guard] unhandled rejection:', (e as Error)?.message || e));
+process.on('uncaughtException', (e) => {
+  console.error('[fatal-guard] uncaught exception, exiting for clean restart:', e.message, e.stack);
+  process.exit(1);   // Railway restarts us; a clean death beats corrupt state
+});
+
 async function main() {
   await initDb();
   startServer();

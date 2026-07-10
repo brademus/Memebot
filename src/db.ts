@@ -17,6 +17,12 @@ export const pool = env.DATABASE_URL
   ? new Pool({ connectionString: env.DATABASE_URL, ssl: sslFor(env.DATABASE_URL) })
   : null;
 
+// CRITICAL: without an error listener, an idle client losing its connection
+// (routine on managed Postgres) emits an unhandled 'error' event and CRASHES the
+// whole process — wiping the in-memory watchlist. The pool replaces dead clients
+// on its own; our only job is to not die.
+pool?.on('error', (e) => console.error('[db] pool error (recovered):', e.message));
+
 export async function initDb() {
   if (!pool) { console.warn('[db] no DATABASE_URL — running memory-only (outcomes will NOT be logged)'); return; }
   const schema = fs.readFileSync(path.join(process.cwd(), 'schema.sql'), 'utf8');
