@@ -10,8 +10,15 @@ const CONFIG_PATH = path.join(process.cwd(), 'config.yaml');
 // with every deploy). They overlay the yaml baseline here; yaml stays the human's
 // document, the DB holds what the bot learned.
 let overrides: Record<string, number> = {};
+let weightOverrides: Record<string, number> = {};
 export function setConfigOverrides(o: Record<string, number>) {
   overrides = o;
+  try { current = withOverrides(load()); } catch {}
+}
+// learned scoring weights (component -> value), applied under weights.* — kept
+// separate from filter overrides so the two learners never clobber each other.
+export function setWeightOverrides(o: Record<string, number>) {
+  weightOverrides = o;
   try { current = withOverrides(load()); } catch {}
 }
 function withOverrides(base: AppConfig): AppConfig {
@@ -21,6 +28,9 @@ function withOverrides(base: AppConfig): AppConfig {
     for (let i = 0; i < keys.length - 1 && node; i++) node = node[keys[i]];
     if (node && typeof node[keys[keys.length - 1]] === 'number') node[keys[keys.length - 1]] = v;
   }
+  const wnode: any = (base as any).weights;
+  if (wnode) for (const [k, v] of Object.entries(weightOverrides))
+    if (typeof wnode[k] === 'number') wnode[k] = v;
   return base;
 }
 

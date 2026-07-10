@@ -127,3 +127,12 @@ export async function markConviction(ca: string, price: number) {
     [ca, price]
   ).catch(() => {});
 }
+
+export async function freezeEarlySubs(ca: string, subs: any) {
+  if (!pool) return;
+  await pool.query(
+    `UPDATE tokens SET early_subs = $2, early_subs_at = now()
+     WHERE ca = $1 AND early_subs IS NULL`,
+    [ca, JSON.stringify(subs)]
+  ).catch(() => {});
+}

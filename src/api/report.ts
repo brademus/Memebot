@@ -109,6 +109,12 @@ export async function buildReport(days = 7): Promise<any> {
     GROUP BY ac.verdict ORDER BY avg_multiple DESC NULLS LAST`).catch(() => []);
 
   // filter learning: what the bot changed about its own filters, with evidence
+  const scoreCalibration_learned = {
+    currentWeights: await q(`SELECT component, weight, updated_at FROM learned_weights WHERE component NOT LIKE '\_%' ORDER BY weight DESC`).catch(() => []),
+    triggerFloor: await q(`SELECT weight FROM learned_weights WHERE component = '_trigger_floor'`).catch(() => []),
+    recentChanges: await q(`SELECT at, component, old_weight, new_weight, evidence FROM weight_tuning_log ORDER BY at DESC LIMIT 20`).catch(() => []),
+  };
+
   const filterLearning = {
     activeOverrides: await q(`SELECT path, value, reason, updated_at FROM filter_overrides ORDER BY updated_at DESC`).catch(() => []),
     recentDecisions: await q(`SELECT at, path, old_value, new_value, evidence FROM filter_tuning_log ORDER BY at DESC LIMIT 20`).catch(() => []),
@@ -133,6 +139,7 @@ export async function buildReport(days = 7): Promise<any> {
     scoreCalibration: scoreBuckets,
     falseKills,
     filterLearning,
+    scoreCalibrationLearned: scoreCalibration_learned,
     aiConvictionScorecard,
     insiderCorrelation: insiderCorr,
     readme: 'Paste this whole object to Claude to tune config.yaml. triggerPerformance = did BUY calls go up. convictionPerformance = the confirmed-buy tier measured from its own entry price (must beat triggers or tighten conviction thresholds). scoreCalibration = are high scores earning their weight. aiConvictionScorecard = does the AI narrative read predict (STRONG must beat WEAK on avg_multiple or disable it). componentCalibration = WHICH components carry signal (tercile 3 must beat tercile 1 or that weight is dead/anti-signal — reweight from this). falseKills = gates rejecting winners (loosen these). insiderCorrelation = is the bundle gate threshold right.',

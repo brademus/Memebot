@@ -163,3 +163,14 @@ launch_signals:                       # adversarial reads of the launch playbook
   early_runner_min_age: 2             # still a floor (dodges the worst of the snipe burst), just lower
   early_runner_min_buyers: 20         # full-stream: distinct buyers proving it's breadth, not a 2-wallet pump
   early_runner_min_trades: 25         # lite-stream proxy: heavier trade count since we can't see uniqueness
+
+calibration:                          # closed-loop scoring — the score fits outcomes over time
+  enabled: true                       # kill switch; learned weights persist in Postgres, survive redeploys
+  freeze_age_min: 3                   # snapshot each token's sub-scores at this age = what predicts BEFORE the run
+  window_days: 21                     # rolling training window
+  min_samples: 60                     # labeled tokens needed before any reweight
+  min_winners: 12                     # winners needed (a fit with too few winners is noise)
+  win_multiple: 3                     # label winner = best realized multiple >= this
+  learning_rate: 0.34                 # move current weights this fraction toward target each cycle (smooth, not lurching)
+  min_weight: 3                       # no fitted component drops below this...
+  max_weight: 45                      # ...or above this — bounds live in config, movement is bounded per cycle

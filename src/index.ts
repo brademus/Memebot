@@ -1,4 +1,4 @@
-import { initDb, upsertToken, markTrigger, markConviction } from './db';
+import { initDb, upsertToken, markTrigger, markConviction, freezeEarlySubs } from './db';
 import { startPumpfunMonitor, setSolPrice, unsubscribeToken, subscribeToken } from './ingest/pumpfun';
 import { startDexscreenerPoller } from './ingest/dexscreener';
 import { startMomentumScanner } from './ingest/momentum';
@@ -12,6 +12,7 @@ import { startOutcomeLogger } from './outcomes/logger';
 import { startLadderMonitor } from './alerts/ladder';
 import { startAutotune } from './tuning/autotune';
 import { startFilterLearner } from './tuning/filtertune';
+import { startScoreCalibrator } from './tuning/scorecal';
 import { generateNote } from './ai/analyst';
 import { aiConvictionRead } from './ai/conviction';
 import { startServer, broadcast } from './api/server';
@@ -92,6 +93,7 @@ async function main() {
   });
   startAutotune();
   startFilterLearner();   // the closed loop: filters measure their own mistakes and adjust
+  startScoreCalibrator();  // the closed loop: the SCORE fits itself to outcomes over time
 
   // shared gate runner — called from BOTH the create event (curve-seeded liquidity)
   // and the Dexscreener poller (AMM liquidity). Handles cooldown + retry + verdict.
@@ -165,6 +167,15 @@ async function main() {
         }).catch(() => {});
       }
       scoreToken(t);
+      // FREEZE early sub-scores ONCE at a fixed young age. The live `subs` column
+      // is overwritten as a token matures, so training on it teaches the model
+      // what mature winners look like (too late). early_subs captures what a coin
+      // looked like WHILE STILL YOUNG — the only snapshot that can predict.
+      const ageMinF = (Date.now() - t.firstSeen) / 60000;
+      if (t.gated === true && !(t as any).earlyFrozen && ageMinF >= cfg().calibration.freeze_age_min) {
+        (t as any).earlyFrozen = true;
+        freezeEarlySubs(t.ca, t.subs).catch(() => {});
+      }
       // keep DB labels fresh — scores were only written on state changes, so
       // never-transitioned tokens carried stale near-zero labels into the report
       if (!('lastUpsertAt' in (t as any)) || Date.now() - (t as any).lastUpsertAt > 10 * 60_000) {

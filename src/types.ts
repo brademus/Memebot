@@ -177,6 +177,17 @@ export interface AppConfig {
     min_samples: number;
     loosen_false_kill_rate: number;
   };
+  calibration: {
+    enabled: boolean;
+    freeze_age_min: number;
+    window_days: number;
+    min_samples: number;
+    min_winners: number;
+    win_multiple: number;
+    learning_rate: number;
+    min_weight: number;
+    max_weight: number;
+  };
   conviction: {
     enabled: boolean;
     min_score: number;

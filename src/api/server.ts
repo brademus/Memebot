@@ -15,6 +15,7 @@ import { discoveryDiag, runDiscovery } from '../wallets/discovery';
 import { handleWebhook, webhookDiag } from '../wallets/webhook';
 import { prefilterDiag } from '../gates/prefilter';
 import { learningDiag } from '../tuning/filtertune';
+import { scorecalDiag } from '../tuning/scorecal';
 import { momentumDiag } from '../ingest/momentum';
 import { getMissedWinners } from '../outcomes/missed';
 import { fetchHistory, addSmartWallet, removeSmartWallet, listSmartWallets } from '../db';
@@ -219,6 +220,7 @@ export function startServer() {
       webhook: webhookDiag(),
       prefilter: prefilterDiag(),
       learning: learningDiag(),
+      calibration: scorecalDiag(),
       momentum: momentumDiag(),
     });
   });

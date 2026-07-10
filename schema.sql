@@ -110,3 +110,24 @@ ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS quality_verdict TEXT;
 ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS win_rate NUMERIC;
 ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS round_trips INT;
 ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS quality_checked_at TIMESTAMPTZ;
+
+-- SCORING CALIBRATION (added 2026-07): the closed loop that makes the score
+-- fit outcomes over time. early_subs = sub-scores frozen at a fixed young age,
+-- so we learn what predicted winners BEFORE they ran (the live subs column gets
+-- overwritten as a token matures and is useless for prediction). learned_weights
+-- persists the fitted weights across redeploys (Railway wipes config.yaml).
+ALTER TABLE tokens ADD COLUMN IF NOT EXISTS early_subs JSONB;
+ALTER TABLE tokens ADD COLUMN IF NOT EXISTS early_subs_at TIMESTAMPTZ;
+CREATE TABLE IF NOT EXISTS learned_weights (
+  component TEXT PRIMARY KEY,
+  weight DOUBLE PRECISION NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS weight_tuning_log (
+  id SERIAL PRIMARY KEY,
+  at TIMESTAMPTZ DEFAULT now(),
+  component TEXT,
+  old_weight DOUBLE PRECISION,
+  new_weight DOUBLE PRECISION,
+  evidence TEXT
+);
