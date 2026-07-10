@@ -2,6 +2,10 @@ import { cfg, env } from '../config';
 import { pool } from '../db';
 import { earlyBuyers } from '../helius';
 import { syncWebhook } from './webhook';
+import { analyzeWallet } from './quality';
+
+const VERDICT_RANK: Record<string, number> = { REJECT: 0, MARGINAL: 1, GOOD: 2, ELITE: 3 };
+const meetsBar = (v: string) => VERDICT_RANK[v] >= (VERDICT_RANK[cfg().wallets.quality_min_verdict] ?? 1);
 
 // WALLET DISCOVERY v2.
 // Fixes from v1: (a) winners were re-mined EVERY hour with no processed-marker, so a
@@ -74,6 +78,61 @@ export async function runDiscovery(): Promise<Diag> {
       await pool.query(`UPDATE tokens SET mined_at = now() WHERE ca = $1`, [row.ca]);
     }
     diag.walletsCredited = credited;
+
+    // ---- QUALITY VALIDATION: judge candidates on their OWN record ----
+    // Overlap with one of our winners earns a look, not a slot. Analyze each
+    // unvalidated active wallet's independent Helius P&L; demote those that don't
+    // clear the quality bar even if their winners_hit count is high (one lucky
+    // early buy on our winner ≠ a good trader).
+    if (env.HELIUS_API_KEY && cfg().wallets.quality_validation) {
+      const recheck = cfg().wallets.quality_recheck_days;
+      const toCheck = await pool.query(
+        `SELECT wallet FROM smart_wallets
+         WHERE active AND (quality_checked_at IS NULL OR quality_checked_at < now() - ($1 || ' days')::interval)
+         ORDER BY quality_checked_at NULLS FIRST, winners_hit DESC LIMIT 15`, [String(recheck)]);
+      for (const { wallet } of toCheck.rows) {
+        const q = await analyzeWallet(wallet);
+        await pool.query(
+          `UPDATE smart_wallets SET quality_verdict=$2, win_rate=$3, round_trips=$4,
+             quality_checked_at=now(), active = active AND $5
+           WHERE wallet=$1`,
+          [wallet, q.verdict, +q.winRate.toFixed(3), q.roundTrips, meetsBar(q.verdict)]);
+        if (!meetsBar(q.verdict))
+          console.log(`[wallets] demoted ${wallet.slice(0, 6)} — quality ${q.verdict} (${q.roundTrips} round-trips, ${(q.winRate * 100).toFixed(0)}% win)`);
+      }
+    }
+
+    // ---- CO-BUYER EXPANSION: escape the self-winner blind spot ----
+    // Wallets in the early-buyer cohort of MULTIPLE distinct winners that haven't
+    // earned a slot yet. Mines `early_buyers` (captured per winner, mostly UNtracked
+    // wallets) — NOT wallet_hits, which only holds tracked wallets and would just
+    // re-find ourselves. (Scope note: early_buyers is the first-15 cohort, so this
+    // widens toward recurring early snipers of winners; a wallet recurring across
+    // 2+ winners is a strong lead, and its own record then decides.)
+    if (env.HELIUS_API_KEY && cfg().wallets.cobuyer_expansion) {
+      const shared = cfg().wallets.cobuyer_min_shared;
+      const cobuyers = await pool.query(
+        `WITH winner_buyers AS (
+           SELECT DISTINCT t.ca, unnest(t.early_buyers) AS wallet
+           FROM tokens t JOIN outcomes o ON o.ca = t.ca AND o.snapshot_minutes = 240
+           WHERE o.multiple_from_first >= $1 AND t.first_seen > now() - interval '14 days'
+         )
+         SELECT wallet, COUNT(DISTINCT ca)::int shared
+         FROM winner_buyers
+         WHERE wallet NOT IN (SELECT wallet FROM smart_wallets)
+         GROUP BY wallet HAVING COUNT(DISTINCT ca) >= $2
+         ORDER BY 2 DESC LIMIT 10`, [w.discovery_min_multiple, shared]);
+      for (const { wallet, shared: sh } of cobuyers.rows) {
+        const q = await analyzeWallet(wallet);
+        if (!meetsBar(q.verdict)) continue;   // co-occurrence is a lead; the record decides
+        await pool.query(
+          `INSERT INTO smart_wallets (wallet, type, winners_hit, discovered_from, active, last_validated, quality_verdict, win_rate, round_trips, quality_checked_at)
+           VALUES ($1, 'cobuyer', $2, 'cobuyer_expansion', true, now(), $3, $4, $5, now())
+           ON CONFLICT (wallet) DO NOTHING`,
+          [wallet, sh, q.verdict, +q.winRate.toFixed(3), q.roundTrips]);
+        console.log(`[wallets] +co-buyer ${wallet.slice(0, 6)} — shared ${sh} winners, own record ${q.verdict} (${(q.winRate * 100).toFixed(0)}% win)`);
+      }
+    }
 
     await pool.query(
       `UPDATE smart_wallets SET active = false

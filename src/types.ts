@@ -111,6 +111,11 @@ export interface AppConfig {
     prune_max_2x_rate: number;
     elite_min_winners: number;
     elite_weight: number;
+    quality_validation: boolean;
+    quality_min_verdict: string;
+    quality_recheck_days: number;
+    cobuyer_expansion: boolean;
+    cobuyer_min_shared: number;
   };
   states: {
     heating_score_min: number;

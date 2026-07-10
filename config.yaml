@@ -116,6 +116,11 @@ wallets:                              # smart-money discovery + tracking (needs 
   prune_max_2x_rate: 0.08             # below this 2x hit-rate on measured buys = deactivated (cold wallet)
   elite_min_winners: 10               # wallets with this many logged winners are ELITE — their buys move the pipeline alone
   elite_weight: 3                     # one elite buy counts as this many standard buys in all confluence math
+  quality_validation: true            # judge candidates on their OWN Helius P&L, not just overlap with our winners
+  quality_min_verdict: MARGINAL       # ELITE|GOOD|MARGINAL|REJECT — floor to earn/keep a tracking slot
+  quality_recheck_days: 5             # re-analyze a tracked wallet's independent record this often
+  cobuyer_expansion: true             # mine co-buyers of proven winners to escape the self-winner blind spot
+  cobuyer_min_shared: 2               # a candidate must co-buy with our winners on >= this many DISTINCT coins
 
 limits:
   max_tracked_tokens: 400             # in-memory watchlist cap

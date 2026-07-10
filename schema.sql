@@ -103,3 +103,10 @@ CREATE TABLE IF NOT EXISTS ai_conviction (
   reason TEXT,
   at TIMESTAMPTZ DEFAULT now()
 );
+
+-- wallet quality (added 2026-07): independent P&L judgment, breaks the circular
+-- "only wallets from our own winners" limitation.
+ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS quality_verdict TEXT;
+ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS win_rate NUMERIC;
+ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS round_trips INT;
+ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS quality_checked_at TIMESTAMPTZ;

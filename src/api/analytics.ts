@@ -20,16 +20,16 @@ export async function buildAnalytics(): Promise<any> {
   // top wallets by measured performance: of the tokens each tracked wallet bought,
   // how many actually 2x'd by the 4h snapshot
   const topWallets = await q(`
-    SELECT w.wallet, w.winners_hit, w.active,
+    SELECT w.wallet, w.winners_hit, w.active, w.quality_verdict, w.win_rate, w.round_trips, w.discovered_from,
            COUNT(h.ca) AS buys_tracked,
            COUNT(o.ca) FILTER (WHERE o.multiple_from_first >= 2) AS wins_2x,
            ROUND(AVG(o.multiple_from_first)::numeric, 2) AS avg_multiple
     FROM smart_wallets w
     LEFT JOIN wallet_hits h ON h.wallet = w.wallet
     LEFT JOIN outcomes o ON o.ca = h.ca AND o.snapshot_minutes = 240
-    WHERE w.winners_hit > 0
-    GROUP BY w.wallet, w.winners_hit, w.active
-    ORDER BY w.active DESC, wins_2x DESC NULLS LAST, w.winners_hit DESC
+    WHERE w.winners_hit > 0 OR w.discovered_from = 'cobuyer_expansion'
+    GROUP BY w.wallet, w.winners_hit, w.active, w.quality_verdict, w.win_rate, w.round_trips, w.discovered_from
+    ORDER BY w.active DESC, (w.quality_verdict='ELITE') DESC, wins_2x DESC NULLS LAST, w.winners_hit DESC
     LIMIT 25`);
 
   // top coins today by best realized multiple across any snapshot

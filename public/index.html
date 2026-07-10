@@ -781,8 +781,11 @@ async function loadAnalytics(){
       wl.innerHTML = d.topWallets.slice(0,15).map(r => {
         const short = r.wallet.slice(0,4) + '…' + r.wallet.slice(-4);
         const rate = r.buys_tracked > 0 ? Math.round((r.wins_2x / r.buys_tracked) * 100) + '% hit' : 'no buys yet';
-        const elite = (r.winners_hit || 0) >= 10;
-        return `<div class="wal">${elite ? '<span style="color:var(--amber);font-family:Archivo;font-weight:800;font-size:9px;letter-spacing:.12em">◆ ELITE</span>' : ''}<span class="wn">${r.winners_hit}× winners</span><span class="ad">${short}</span><span class="ty">${rate}</span><a href="https://solscan.io/account/${r.wallet}" target="_blank" rel="noopener">solscan</a><span class="st ${r.active?'on':'off'}">${r.active?'TRACKING':'watching'}</span></div>`;
+        const elite = (r.winners_hit || 0) >= 10 || r.quality_verdict === 'ELITE';
+        const qv = r.quality_verdict && r.quality_verdict !== 'REJECT'
+          ? `<span style="color:${r.quality_verdict==='ELITE'?'var(--amber)':r.quality_verdict==='GOOD'?'var(--up)':'var(--dim)'};font-size:10px" title="independent record: ${r.round_trips||0} round-trips, ${Math.round((r.win_rate||0)*100)}% win rate">${esc(r.quality_verdict)} ${Math.round((r.win_rate||0)*100)}%</span>` : '';
+        const cob = r.discovered_from === 'cobuyer_expansion' ? '<span style="color:var(--dim);font-size:9px" title="found by co-buyer expansion, not from our own winners">↗co-buyer</span>' : '';
+        return `<div class="wal">${elite ? '<span style="color:var(--amber);font-family:Archivo;font-weight:800;font-size:9px;letter-spacing:.12em">◆ ELITE</span>' : ''}<span class="wn">${r.winners_hit}× winners</span><span class="ad">${short}</span>${qv}${cob}<span class="ty">${rate}</span><a href="https://solscan.io/account/${r.wallet}" target="_blank" rel="noopener">solscan</a><span class="st ${r.active?'on':'off'}">${r.active?'TRACKING':'watching'}</span></div>`;
       }).join('');
     }
     const tc = $('topcoins');
