@@ -43,15 +43,21 @@ export function recordSmartBuy(wallet: string, ca: string, onDiscovery: (ca: str
   const w = walletWeight(wallet);
   const existing = getToken(ca);
   if (existing) {
-    if (!existing.smartHits.some(h => h.wallet === wallet)) {
+    // update-or-append, keeping the array deduped by wallet (latest timestamp
+    // wins) and bounded — a wallet re-buying over hours previously appended
+    // forever. Confluence math dedupes at read time; this bounds memory.
+    const prior = existing.smartHits.find(h => h.wallet === wallet);
+    if (prior) { prior.at = Date.now(); prior.w = w; }
+    else {
       existing.smartHits.push({ wallet, at: Date.now(), w });
+      if (existing.smartHits.length > 100) existing.smartHits.shift();
       if (w > 1) console.log(`[wallets] ◆ ELITE buy: ${wallet.slice(0, 4)}…(${walletWinners.get(wallet)} winners) -> $${existing.symbol}`);
     }
   } else {
     onDiscovery(ca);
     // the surfaced token exists after onDiscovery — credit the hit that surfaced it
     const t = getToken(ca);
-    if (t) t.smartHits.push({ wallet, at: Date.now(), w });
+    if (t && !t.smartHits.some(h => h.wallet === wallet)) t.smartHits.push({ wallet, at: Date.now(), w });
     if (w > 1) console.log(`[wallets] ◆ ELITE wallet surfaced ${ca}`);
   }
 }
