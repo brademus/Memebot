@@ -12,9 +12,9 @@ export async function buildReport(days = 7): Promise<any> {
   const triggerPerf = await q(`
     SELECT o.snapshot_minutes AS mins,
            COUNT(*) AS n,
-           ROUND(AVG(o.multiple_from_first)::numeric, 2) AS avg_multiple,
-           ROUND((COUNT(*) FILTER (WHERE o.multiple_from_first >= 2))::numeric / NULLIF(COUNT(*),0) * 100, 1) AS pct_2x_plus,
-           ROUND((COUNT(*) FILTER (WHERE o.multiple_from_first < 1))::numeric / NULLIF(COUNT(*),0) * 100, 1) AS pct_down
+           ROUND(AVG(o.price_usd / NULLIF(t.trigger_price,0))::numeric, 2) AS avg_multiple,
+           ROUND((COUNT(*) FILTER (WHERE o.price_usd / NULLIF(t.trigger_price,0) >= 2))::numeric / NULLIF(COUNT(*),0) * 100, 1) AS pct_2x_plus,
+           ROUND((COUNT(*) FILTER (WHERE o.price_usd / NULLIF(t.trigger_price,0) < 1))::numeric / NULLIF(COUNT(*),0) * 100, 1) AS pct_down
     FROM tokens t JOIN outcomes o ON o.ca = t.ca
     WHERE t.triggered_at IS NOT NULL AND t.trigger_price > 0 ${win}
     GROUP BY o.snapshot_minutes ORDER BY o.snapshot_minutes`);
@@ -48,18 +48,27 @@ export async function buildReport(days = 7): Promise<any> {
   // signal and which carry the anti-signal. Terciles per component: if tercile 3
   // (highest values) doesn't beat tercile 1, that component's weight is buying
   // nothing — or worse, selecting tops. Reweight cfg().weights from THIS table.
-  const componentCalibration: Record<string, any> = {};
-  for (const comp of ['freshness', 'liquidity', 'buyPressure', 'holderGrowth', 'smartMoney']) {
-    componentCalibration[comp] = await q(`
+  // componentCalibration is built from early_subs — the SAME snapshot the scoring
+  // calibrator trains on (frozen young). Reading mature `subs` here would put the
+  // human and the machine on different evidence AND is confounded by survival
+  // (winners live longer, so their final freshness is mechanically low — a
+  // measurement artifact, not market truth). The mature version is kept as
+  // componentCalibrationMature purely for the contrast.
+  const tercileQuery = (col: string, comp: string) => `
       WITH s AS (
-        SELECT NTILE(3) OVER (ORDER BY (t.subs->>'${comp}')::float) AS tercile,
+        SELECT NTILE(3) OVER (ORDER BY (t.${col}->>'${comp}')::float) AS tercile,
                o.multiple_from_first AS m
         FROM tokens t JOIN outcomes o ON o.ca = t.ca AND o.snapshot_minutes = 240
-        WHERE t.gate_result = 'passed' AND t.subs IS NOT NULL AND t.subs ? '${comp}' ${win})
+        WHERE t.gate_result = 'passed' AND t.${col} IS NOT NULL AND t.${col} ? '${comp}' ${win})
       SELECT tercile, COUNT(*) AS n,
              ROUND(AVG(m)::numeric, 2) AS avg_multiple,
              ROUND((COUNT(*) FILTER (WHERE m >= 2))::numeric / NULLIF(COUNT(*),0) * 100, 1) AS pct_2x_plus
-      FROM s GROUP BY tercile ORDER BY tercile`).catch(() => []);
+      FROM s GROUP BY tercile ORDER BY tercile`;
+  const componentCalibration: Record<string, any> = {};
+  const componentCalibrationMature: Record<string, any> = {};
+  for (const comp of ['freshness', 'liquidity', 'buyPressure', 'holderGrowth', 'smartMoney']) {
+    componentCalibration[comp] = await q(tercileQuery('early_subs', comp)).catch(() => []);
+    componentCalibrationMature[comp] = await q(tercileQuery('subs', comp)).catch(() => []);
   }
 
   // 2. Score-bucket calibration: do higher scores actually predict bigger multiples? (4h)
@@ -105,7 +114,7 @@ export async function buildReport(days = 7): Promise<any> {
            ROUND(AVG(o.multiple_from_first)::numeric, 2) AS avg_multiple,
            ROUND((COUNT(*) FILTER (WHERE o.multiple_from_first >= 2))::numeric / NULLIF(COUNT(*),0) * 100, 1) AS pct_2x_plus
     FROM ai_conviction ac JOIN outcomes o ON o.ca = ac.ca AND o.snapshot_minutes = 240
-    ${win ? "WHERE ac.at > now() - interval '7 days'" : ''}
+    WHERE ac.at > now() - interval '${Math.max(1, Math.min(days, 90))} days'
     GROUP BY ac.verdict ORDER BY avg_multiple DESC NULLS LAST`).catch(() => []);
 
   // filter learning: what the bot changed about its own filters, with evidence
@@ -136,6 +145,7 @@ export async function buildReport(days = 7): Promise<any> {
     convictionPerformance: convictionPerf,
     hourOfDay,
     componentCalibration,
+    componentCalibrationMature,
     scoreCalibration: scoreBuckets,
     falseKills,
     filterLearning,
