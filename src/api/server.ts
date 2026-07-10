@@ -238,6 +238,23 @@ export function startServer() {
       triggers: all.filter(t => t.state === 'TRIGGER').length,
       convictionsToday: convictionFiredToday(),
       convictionBudget: cfg().conviction?.max_alerts_per_day ?? 5,
+      // FUNNEL DIAGNOSTIC: of gated tokens NOT triggering, what's the top blocker?
+      // Lets you see WHERE the funnel chokes instead of guessing.
+      funnel: (() => {
+        const s = cfg().states;
+        const gated = all.filter(t => t.gated === true && !['DEAD','DYING','EXTENDED'].includes(t.state));
+        const blocked = { lowScore: 0, lowRatio: 0, fewTrades: 0, tooYoung: 0, triggering: 0 };
+        for (const t of gated) {
+          const ageMin = (Date.now() - t.firstSeen) / 60000;
+          const ratio = t.sells5m > 0 ? t.buys5m / t.sells5m : (t.buys5m > 0 ? 3 : 1);
+          if (t.state === 'TRIGGER') { blocked.triggering++; continue; }
+          if (t.score < s.trigger_score_min) blocked.lowScore++;
+          else if (ratio < s.trigger_buy_ratio_min) blocked.lowRatio++;
+          else if ((t.buys5m + t.sells5m) < s.trigger_min_trades) blocked.fewTrades++;
+          else if (ageMin < s.early_runner_min_age) blocked.tooYoung++;
+        }
+        return { gatedActive: gated.length, ...blocked };
+      })(),
     });
   });
 

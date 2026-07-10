@@ -547,6 +547,13 @@ setInterval(async () => {
     lastConvCount = s.convictionsToday || 0;
     $('sConv').textContent = lastConvCount;
     $('sConvB').textContent = s.convictionBudget ? ' /' + s.convictionBudget : '';
+    // funnel choke indicator: if nothing's triggering, show the dominant blocker
+    if (s.funnel && s.triggers === 0 && s.funnel.gatedActive > 0) {
+      const f = s.funnel;
+      const top = [['score<'+65,f.lowScore],['buy ratio low',f.lowRatio],['thin trades',f.fewTrades],['too young',f.tooYoung]]
+        .sort((a,b)=>b[1]-a[1])[0];
+      $('connTxt').innerHTML = 'live · <span style="color:var(--amber)">funnel: '+f.gatedActive+' active, top blocker = '+top[0]+' ('+top[1]+')</span>';
+    }
   } catch {}
 }, 5000);
 

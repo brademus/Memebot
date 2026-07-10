@@ -115,6 +115,10 @@ export interface AppConfig {
     trigger_score_min: number;
     trigger_min_trades: number;
     trigger_min_unique_buyers: number;
+    early_runner_enabled: boolean;
+    early_runner_min_age: number;
+    early_runner_min_buyers: number;
+    early_runner_min_trades: number;
     trigger_buy_ratio_min: number;
     extended_pct: number;
     dying_score_drop: number;

@@ -151,3 +151,7 @@ launch_signals:                       # adversarial reads of the launch playbook
   dead_hours_penalty: 3               # mild prior — the weekly report's hour cohort will prove or kill this
   tg_shell_max_members: 25            # a TG this small at launch is a manufactured shell, not a community
   tg_real_min_members: 200            # at this size the 17.4x social signal is trustworthy at full weight
+  early_runner_enabled: true          # let fast movers with real buyer breadth trigger before the full 4min age gate
+  early_runner_min_age: 2             # still a floor (dodges the worst of the snipe burst), just lower
+  early_runner_min_buyers: 20         # full-stream: distinct buyers proving it's breadth, not a 2-wallet pump
+  early_runner_min_trades: 25         # lite-stream proxy: heavier trade count since we can't see uniqueness

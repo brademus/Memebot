@@ -118,7 +118,7 @@ export function scoreToken(t: TokenRecord): number {
   // and a known catalyst — reward a curve at 80-100% of the threshold that's
   // still taking inflow, scaled linearly into the graduation.
   let gradBonus = 0;
-  if (t.dex === 'pumpfun' && ls) {
+  if (t.dex === 'pumpfun' && ls && t.curveSol > 0) {
     const grad = ls.graduation_curve_sol;
     if (t.curveSol >= grad * 0.8 && t.curveSol <= grad * 1.02) {
       const ref = t.curveSamples.find(cs => Date.now() - cs.at >= 3 * 60_000);
