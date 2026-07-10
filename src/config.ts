@@ -17,6 +17,12 @@ export function setConfigOverrides(o: Record<string, number>) {
 }
 // learned scoring weights (component -> value), applied under weights.* — kept
 // separate from filter overrides so the two learners never clobber each other.
+let directions: Record<string, number> = {};
+// which score components are INVERTED (winners score LOW on them). The score
+// reads this to flip a component's contribution. Learned by the calibrator.
+export function setDirections(d: Record<string, number>) { directions = d; }
+export function getDirection(key: string): number { return directions[key] ?? 1; }
+
 export function setWeightOverrides(o: Record<string, number>) {
   weightOverrides = o;
   try { current = withOverrides(load()); } catch {}

@@ -1,4 +1,4 @@
-import { cfg, setWeightOverrides, setConfigOverrides } from '../config';
+import { cfg, setWeightOverrides, setConfigOverrides, setDirections } from '../config';
 import { pool } from '../db';
 
 // SCORING CALIBRATOR — the closed loop that makes the score fit outcomes over time.
@@ -34,14 +34,42 @@ const WEIGHT_KEYS: Record<string, string> = {
   holderGrowth: 'organic', smartMoney: 'smart_money',
 };
 
-const diag = { lastRun: null as string | null, lastError: null as string | null, samples: 0, winners: 0, status: 'not_run', target: {} as Record<string, number>, applied: {} as Record<string, number>, floor: 0 };
+const diag = { lastRun: null as string | null, lastError: null as string | null, samples: 0, winners: 0, status: 'not_run', target: {} as Record<string, number>, applied: {} as Record<string, number>, floor: 0, direction: {} as Record<string, number> };
 export const scorecalDiag = () => diag;
 
 export function startScoreCalibrator() {
   if (!pool) return;
+  seedFromReport().catch(() => {});   // apply the proven 30k-sample finding immediately
   loadWeights().catch(() => {});
   setTimeout(() => run().catch(() => {}), 4 * 60_000);
   setInterval(() => run().catch(() => {}), 6 * 3600_000);
+}
+
+// SEED — the 2026-07-10 report (30k+ samples) decisively showed the direction of
+// each signal. Rather than wait for the calibrator's sample floor to rediscover
+// it, seed those directions ONCE (only if unset), so the score is fixed on next
+// boot. The calibrator then keeps adapting from here — this is just the starting
+// point, not a hardcode: any future run overwrites these.
+async function seedFromReport() {
+  if (!pool) return;
+  const existing = await pool.query(`SELECT 1 FROM learned_weights WHERE component LIKE '\_dir\_%' LIMIT 1`).catch(() => null);
+  if (existing && existing.rows.length) return;   // already learned — don't clobber
+  // componentCalibration terciles: freshness & buyPressure INVERTED (t1>t3),
+  // holderGrowth CORRECT (t3 best), liquidity & smartMoney peak mid (treat as
+  // weak-positive, the calibrator will refine). organic feeds holderGrowth.
+  const seed: Record<string, number> = {
+    _dir_freshness: -1, _dir_buy_pressure: -1,
+    _dir_velocity: 1, _dir_organic: 1, _dir_smart_money: 1,
+    freshness: 8, buy_pressure: 8, velocity: 14, organic: 34, smart_money: 21, social: 15,
+    _trigger_floor: 45,
+  };
+  for (const [k, v] of Object.entries(seed))
+    await pool.query(
+      `INSERT INTO learned_weights (component, weight) VALUES ($1,$2) ON CONFLICT (component) DO NOTHING`, [k, v]);
+  await pool.query(
+    `INSERT INTO weight_tuning_log (component, old_weight, new_weight, evidence) VALUES ('_seed',0,1,$1)`,
+    ['seeded from 2026-07-10 report: freshness/buyPressure inverted, holderGrowth dominant, floor 65->45']).catch(() => {});
+  console.log('[scorecal] seeded weights+directions from report; floor -> 45');
 }
 
 async function loadWeights() {
@@ -57,6 +85,13 @@ async function loadWeights() {
   // load a persisted trigger floor if we've learned one
   const f = await pool.query(`SELECT weight FROM learned_weights WHERE component = '_trigger_floor'`).catch(() => null);
   if (f && f.rows.length) setConfigOverrides({ 'states.trigger_score_min': Number(f.rows[0].weight) });
+  // load learned directions (which signals are inverted)
+  const d = await pool.query(`SELECT component, weight FROM learned_weights WHERE component LIKE '\_dir\_%'`).catch(() => null);
+  if (d && d.rows.length) {
+    const dirs: Record<string, number> = {};
+    for (const row of d.rows) dirs[row.component.replace('_dir_', '')] = Number(row.weight);
+    setDirections(dirs);
+  }
 }
 
 // choose the trigger floor that best separates winners from losers under the new
@@ -117,13 +152,20 @@ export async function run() {
     diag.winners = win.length;
     if (win.length < c.min_winners) { diag.status = `need ${c.min_winners} winners, have ${win.length}`; return; }
 
-    // signal-to-noise separation per component
+    // signal-to-noise separation per component — now DIRECTION-AWARE. A signal
+    // where winners score LOWER (freshness, buyPressure per the report) is not
+    // noise, it's INVERTED: we learn direction = -1 and the score flips it. |SNR|
+    // is the magnitude of the edge regardless of sign, so inverted signals earn
+    // weight too instead of being thrown away.
     const mean = (a: number[][], i: number) => a.reduce((s, v) => s + v[i], 0) / (a.length || 1);
     const varc = (a: number[][], i: number, m: number) => a.reduce((s, v) => s + (v[i] - m) ** 2, 0) / (a.length || 1);
-    const sep = COMPONENTS.map((_, i) => {
+    const direction: Record<string, number> = {};
+    const sep = COMPONENTS.map((k, i) => {
       const mw = mean(win, i), ml = mean(lose, i);
       const pooled = Math.sqrt((varc(win, i, mw) + varc(lose, i, ml)) / 2) || 1;
-      return Math.max(0, (mw - ml) / pooled);          // only positive predictors earn weight
+      const snr = (mw - ml) / pooled;
+      direction[WEIGHT_KEYS[k]] = snr >= 0 ? 1 : -1;    // -1 = inverted, score flips it
+      return Math.abs(snr);                              // magnitude of edge, either direction
     });
     const totalSep = sep.reduce((s, x) => s + x, 0);
     if (totalSep <= 0) { diag.status = 'no separating signal yet'; return; }
@@ -148,17 +190,24 @@ export async function run() {
     for (const k of Object.keys(next)) next[k] = round1(next[k] / sumFit * scaleTo);
     next.social = socialFixed;
 
-    // persist + log only the meaningful moves
+    // persist + log meaningful weight moves, and persist directions
     for (const [k, v] of Object.entries(next)) {
       const before = round1(cur[k] ?? 0);
-      if (Math.abs(before - v) < 0.5) continue;
+      if (Math.abs(before - v) >= 0.5) {
+        await pool.query(
+          `INSERT INTO learned_weights (component, weight) VALUES ($1,$2)
+           ON CONFLICT (component) DO UPDATE SET weight=$2, updated_at=now()`, [k, v]);
+        await pool.query(
+          `INSERT INTO weight_tuning_log (component, old_weight, new_weight, evidence) VALUES ($1,$2,$3,$4)`,
+          [k, before, v, `${diag.samples} samples / ${diag.winners} winners @ ${c.win_multiple}x; |SNR|-fit dir=${direction[k]}, lr=${lr}`]);
+      }
+    }
+    for (const [wk, d] of Object.entries(direction)) {
       await pool.query(
         `INSERT INTO learned_weights (component, weight) VALUES ($1,$2)
-         ON CONFLICT (component) DO UPDATE SET weight=$2, updated_at=now()`, [k, v]);
-      await pool.query(
-        `INSERT INTO weight_tuning_log (component, old_weight, new_weight, evidence) VALUES ($1,$2,$3,$4)`,
-        [k, before, v, `${diag.samples} samples / ${diag.winners} winners @ ${c.win_multiple}x; SNR-fit, lr=${lr}`]);
+         ON CONFLICT (component) DO UPDATE SET weight=$2, updated_at=now()`, [`_dir_${wk}`, d]);
     }
+    diag.direction = direction;
     // ---- ADAPTIVE TRIGGER FLOOR ----
     // The fixed floor (65) is exactly what killed the 10,000x/200x winners that
     // peaked at 19-46. Recompute scores under the NEW weights for the labeled set,

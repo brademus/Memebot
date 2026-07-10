@@ -2,6 +2,7 @@ import { cfg } from '../config';
 import { TokenRecord } from '../types';
 import { walletsTracked, weightedSmartHits } from '../wallets/tracker';
 import { getStreamMode, getSolPrice } from '../ingest/pumpfun';
+import { getDirection } from '../config';
 import { CURVE_START_SOL, GRADUATION_SOL, GRADUATION_MCAP_USD, CURVE_SPAN_SOL } from '../constants';
 
 // SCORING v3 — research-ranked signal weights.
@@ -104,12 +105,24 @@ export function scoreToken(t: TokenRecord): number {
   const walletsLive = walletsTracked();
   const scale = walletsLive ? 1 : 100 / (100 - w.smart_money);
 
+  // Apply LEARNED DIRECTION: a component the calibrator found INVERTED (winners
+  // score low on it — the report proved freshness & buyPressure are backwards)
+  // contributes (1 - value) so a low raw value ADDS points. dir defaults to +1
+  // (normal) until the calibrator learns otherwise, so behavior is unchanged at
+  // cold start. Raw components are 0..1 here, pre-weighting.
+  const dir = (key: string, v: number) => getDirection(key) < 0 ? (1 - v) : v;
+  const freshnessD = dir('freshness', freshness);
+  const velocityD = dir('velocity', velocity);
+  const buyPressureD = dir('buy_pressure', buyPressure);
+  const organicD = dir('organic', organic);
+  const smartMoneyD = dir('smart_money', smartMoney);
+
   t.subs = {
-    freshness: round1(freshness * w.freshness * scale),
-    liquidity: round1(velocity * w.velocity * scale),          // 'liquidity' key kept for dashboard compat
-    buyPressure: round1(buyPressure * w.buy_pressure * scale),
-    holderGrowth: round1((0.6 * organic + 0.4 * social) * (w.organic + w.social) * scale), // combined for compat
-    smartMoney: round1(smartMoney * w.smart_money * (walletsLive ? 1 : 0)),
+    freshness: round1(freshnessD * w.freshness * scale),
+    liquidity: round1(velocityD * w.velocity * scale),          // 'liquidity' key kept for dashboard compat
+    buyPressure: round1(buyPressureD * w.buy_pressure * scale),
+    holderGrowth: round1((0.6 * organicD + 0.4 * social) * (w.organic + w.social) * scale), // combined for compat
+    smartMoney: round1(smartMoneyD * w.smart_money * (walletsLive ? 1 : 0)),
   };
   // ---- launch-signal priors (adversarial reads of the launch playbook) ----
   // GRADUATION PROXIMITY: the final curve push is a coordinated community event
