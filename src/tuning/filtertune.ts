@@ -55,9 +55,21 @@ export const learningDiag = () => ({ ...diag, decisions: diag.decisions.slice(0,
 
 export function startFilterLearner() {
   if (!pool) return;
-  loadOverrides().catch(() => {});                 // learned state applies from boot
+  resetPoisonedOverrides().then(() => loadOverrides()).catch(() => {});   // reset poisoned state, THEN apply learned state from boot
   setTimeout(() => run().catch(() => {}), 3 * 60_000);
   setInterval(() => run().catch(() => {}), 12 * 3600_000);
+}
+
+async function resetPoisonedOverrides() {
+  if (!pool) return;
+  const r = await pool.query(
+    `UPDATE filter_overrides SET value = 50, reason = 'reset 2026-07-11: prior 50->60 ratchet was driven by curve-as-holder miscounts + a boot clobber loop; hardened learner will re-derive from fresh evidence'
+     WHERE path = 'gates.hard_reject_top_holder_pct' AND value > 50 AND reason LIKE 'loosen single-holder%'
+     RETURNING value`).catch(() => null);
+  if (r && r.rowCount) {
+    await pool.query(`INSERT INTO filter_tuning_log (path, old_value, new_value, evidence) VALUES ('gates.hard_reject_top_holder_pct', 60, 50, 'one-time reset: poisoned-evidence ratchet unwound')`).catch(() => {});
+    console.log('[learning] RESET gates.hard_reject_top_holder_pct -> 50 (poisoned ratchet unwound)');
+  }
 }
 
 async function loadOverrides() {
@@ -86,28 +98,48 @@ export async function run() {
     diag.lastError = null;
 
     // best measured multiple per killed token (any snapshot) within the window,
-    // attributed to the rule that killed it
+    // attributed to the rule that killed it. first_seen rides along so evidence
+    // can be limited to kills NEWER than the last change (see below).
     const kills = await pool.query(`
-      SELECT t.gate_fail_reason AS reason, MAX(o.multiple_from_first) AS best
+      SELECT t.gate_fail_reason AS reason, MAX(o.multiple_from_first) AS best,
+             MAX(t.first_seen) AS seen
       FROM tokens t JOIN outcomes o ON o.ca = t.ca
       WHERE t.gate_result = 'failed'
         AND t.first_seen > now() - ($1 || ' days')::interval
         AND o.multiple_from_first IS NOT NULL
       GROUP BY t.ca, t.gate_fail_reason`, [String(L.window_days)]);
 
+    // LEARNER DISCIPLINE (added after a live pathology: 12 loosening decisions in
+    // ~24h, bursts minutes apart, two resets — the learner ran on every crash/boot,
+    // read yaml when the stored override wasn't loaded, and re-loosened on the SAME
+    // rolling evidence it had already acted on).
+    // (a) the authoritative current value is the STORED override, never cfg-at-boot
+    //     (kills the clobber/reset), (b) a per-path cooldown persisted in
+    //     filter_tuning_log survives restarts, (c) evidence must be FRESH — only
+    //     kills first seen AFTER the last change on that path count. Each loosening
+    //     step now requires new bodies, not a re-read of old ones.
+    const ovRows = await pool.query(`SELECT path, value FROM filter_overrides`).catch(() => ({ rows: [] as any[] }));
+    const ovMap = new Map<string, number>(ovRows.rows.map((r: any) => [r.path, Number(r.value)]));
+    const logRows = await pool.query(`SELECT path, MAX(at) AS last FROM filter_tuning_log GROUP BY path`).catch(() => ({ rows: [] as any[] }));
+    const lastChange = new Map<string, number>(logRows.rows.map((r: any) => [r.path, new Date(r.last).getTime()]));
+    const cooldownMs = (L.min_hours_between_changes ?? 12) * 3600_000;
+
     for (const tn of TUNABLES) {
-      const rows = kills.rows.filter((r: any) => (r.reason || '').startsWith(tn.prefix));
+      const last = lastChange.get(tn.path) || 0;
+      if (Date.now() - last < cooldownMs) continue;              // persisted cooldown — boots can't stack decisions
+      const rows = kills.rows.filter((r: any) => (r.reason || '').startsWith(tn.prefix)
+        && (!last || new Date(r.seen).getTime() > last));        // FRESH evidence only
       const n = rows.length;
       if (n < L.min_samples) continue;
       const fk = rows.filter((r: any) => Number(r.best) >= 3).length;
       const rate = fk / n;
       if (rate <= L.loosen_false_kill_rate) continue;
 
-      const cur = getByPath(tn.path);
+      const cur = ovMap.has(tn.path) ? ovMap.get(tn.path)! : getByPath(tn.path);
       const next = clamp(cur + tn.loosenDir * tn.step, tn.bounds);
       if (next === cur) continue;   // already at the bound — the contract holds
       await apply(tn.path, cur, next,
-        `loosen ${tn.label}: ${fk}/${n} kills went 3x+ (${(rate * 100).toFixed(1)}% false-kill rate over ${L.window_days}d)`);
+        `loosen ${tn.label}: ${fk}/${n} FRESH kills (since last change) went 3x+ (${(rate * 100).toFixed(1)}% false-kill rate)`);
     }
 
     // TIGHTEN (pass-side evidence): the marginal insider band. insider_pct is

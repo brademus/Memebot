@@ -187,6 +187,7 @@ export interface AppConfig {
     window_days: number;
     min_samples: number;
     loosen_false_kill_rate: number;
+    min_hours_between_changes: number;
   };
   social: {
     enabled: boolean;

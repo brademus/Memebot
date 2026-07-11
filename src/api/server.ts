@@ -132,7 +132,8 @@ export function startServer() {
           // score distribution vs the EFFECTIVE floor: how close is the pipeline
           // to triggering? "0 triggers" with maxScore 44 vs floor 45 is a very
           // different story from maxScore 20.
-          effectiveFloor: cfg().states.trigger_score_min,
+          uptimeMin: Math.round(process.uptime() / 60),
+      effectiveFloor: cfg().states.trigger_score_min,
           scoresNearFloor: all.filter(t => t.gated === true && t.score >= cfg().states.trigger_score_min - 10).length,
           maxScoreNow: Math.max(0, ...all.filter(t => t.gated === true).map(t => t.score)),
         },

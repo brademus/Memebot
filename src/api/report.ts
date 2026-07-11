@@ -94,7 +94,11 @@ export async function buildReport(days = 7): Promise<any> {
     ORDER BY would_have_3x DESC LIMIT 15`);
 
   // 4. Insider-pct correlation: does lower insider% actually mean better outcomes?
-  const insiderCorr = await q(`
+  // Two cohorts: all-time, and last-24h only. The bundle pagination fix (creation-
+  // walk instead of newest-100) deployed 2026-07-11 — verdicts before it could mark
+  // busy tokens FALSELY CLEAN. Verification happens within ~40min of first_seen, so
+  // the 24h cohort is the trustworthy read on the clean-band premium.
+  const insiderQ = (extra: string) => `
     SELECT CASE WHEN insider_pct IS NULL THEN 'unknown'
                 WHEN insider_pct < 10 THEN '0-10%'
                 WHEN insider_pct < 20 THEN '10-20%'
@@ -102,8 +106,10 @@ export async function buildReport(days = 7): Promise<any> {
            COUNT(*) AS n,
            ROUND(AVG(o.multiple_from_first)::numeric, 2) AS avg_multiple_4h
     FROM tokens t JOIN outcomes o ON o.ca = t.ca AND o.snapshot_minutes = 240
-    WHERE t.gate_result = 'passed' ${win}
-    GROUP BY insider_band ORDER BY insider_band`);
+    WHERE t.gate_result = 'passed' ${win} ${extra}
+    GROUP BY insider_band ORDER BY insider_band`;
+  const insiderCorr = await q(insiderQ(''));
+  const insiderCorr24h = await q(insiderQ(`AND t.first_seen > now() - interval '24 hours'`)).catch(() => []);
 
   // AI NARRATIVE READ scorecard: does the AI's verdict correlate with outcomes?
   // This is the accountability for putting an LLM in the loop — if STRONG doesn't
@@ -119,7 +125,7 @@ export async function buildReport(days = 7): Promise<any> {
 
   // filter learning: what the bot changed about its own filters, with evidence
   const scoreCalibration_learned = {
-    currentWeights: await q(`SELECT component, weight, updated_at FROM learned_weights WHERE component NOT LIKE '\_%' ORDER BY weight DESC`).catch(() => []),
+    currentWeights: await q(`SELECT component, weight, updated_at FROM learned_weights WHERE LEFT(component, 1) <> '_' ORDER BY weight DESC`).catch(() => []),
     triggerFloor: await q(`SELECT weight FROM learned_weights WHERE component = '_trigger_floor'`).catch(() => []),
     recentChanges: await q(`SELECT at, component, old_weight, new_weight, evidence FROM weight_tuning_log ORDER BY at DESC LIMIT 20`).catch(() => []),
   };
@@ -149,9 +155,15 @@ export async function buildReport(days = 7): Promise<any> {
 
   // ---- WALLET SOURCE performance: are winner-mined / co-buyer wallets good? ----
   const walletSourcePerformance = await q(`
-    SELECT COALESCE(discovered_from, 'original') AS source, COUNT(*) AS wallets,
+    SELECT CASE
+             WHEN discovered_from IN ('winner_mining', 'cobuyer_expansion') THEN discovered_from
+             WHEN discovered_from IS NULL THEN 'original'
+             WHEN LENGTH(discovered_from) >= 32 THEN 'own_winner_mining'   -- stores the winner MINT it was mined from
+             ELSE discovered_from END AS source,
+           COUNT(*) AS wallets,
            COUNT(*) FILTER (WHERE active) AS active,
            ROUND(AVG(win_rate)::numeric, 3) AS avg_win_rate,
+           COUNT(*) FILTER (WHERE win_rate IS NOT NULL) AS measured,
            COUNT(*) FILTER (WHERE quality_verdict = 'ELITE') AS elite,
            COUNT(*) FILTER (WHERE last_active > now() - interval '24 hours') AS active_today
     FROM smart_wallets GROUP BY 1 ORDER BY wallets DESC`).catch(() => []);
@@ -164,12 +176,12 @@ export async function buildReport(days = 7): Promise<any> {
       COUNT(*) FILTER (WHERE gate_result = 'failed') AS killed_gates,
       COUNT(*) FILTER (WHERE triggered_at IS NOT NULL) AS triggered,
       COUNT(*) FILTER (WHERE conviction_at IS NOT NULL) AS conviction
-    FROM tokens WHERE 1=1 ${win}`).catch(() => []);
+    FROM tokens t WHERE 1=1 ${win}`).catch(() => []);
 
   // ---- top gate-kill reasons overall (not just false-kills) ----
   const gateKillReasons = await q(`
     SELECT gate_fail_reason AS reason, COUNT(*) AS n
-    FROM tokens WHERE gate_result = 'failed' AND gate_fail_reason IS NOT NULL ${win}
+    FROM tokens t WHERE t.gate_result = 'failed' AND t.gate_fail_reason IS NOT NULL ${win}
     GROUP BY 1 ORDER BY 2 DESC LIMIT 12`).catch(() => []);
 
   return {
@@ -191,6 +203,7 @@ export async function buildReport(days = 7): Promise<any> {
     scoreCalibrationLearned: scoreCalibration_learned,
     aiConvictionScorecard,
     insiderCorrelation: insiderCorr,
-    readme: 'Paste this whole object to Claude to tune config.yaml. triggerPerformance = did BUY calls go up. convictionPerformance = the confirmed-buy tier measured from its own entry price (must beat triggers or tighten conviction thresholds). scoreCalibration = are high scores earning their weight. aiConvictionScorecard = does the AI narrative read predict (STRONG must beat WEAK on avg_multiple or disable it). componentCalibration = WHICH components carry signal (tercile 3 must beat tercile 1 or that weight is dead/anti-signal — reweight from this). falseKills = gates rejecting winners (loosen these). insiderCorrelation = is the bundle gate threshold right. sourcePerformance = which DISCOVERY ENGINE (pumpfun/momentum/wallet/winner_miner) finds winners — kill or boost engines from this. walletSourcePerformance = are winner-mined/co-buyer wallets actually good (avg_win_rate) or noise. funnelHealth = the seen->passed->triggered->conviction pipeline. gateKillReasons = what the gates kill most (overall, not just false-kills).',
+    insiderCorrelationLast24h: insiderCorr24h,
+    readme: 'Paste this whole object to Claude to tune config.yaml. triggerPerformance = did BUY calls go up. convictionPerformance = the confirmed-buy tier measured from its own entry price (must beat triggers or tighten conviction thresholds). scoreCalibration = are high scores earning their weight. aiConvictionScorecard = does the AI narrative read predict (STRONG must beat WEAK on avg_multiple or disable it). componentCalibration = WHICH components carry signal (tercile 3 must beat tercile 1 or that weight is dead/anti-signal — reweight from this). falseKills = gates rejecting winners (loosen these). insiderCorrelation = is the bundle gate threshold right (all-time — MIXES pre-fix verdicts). insiderCorrelationLast24h = verified after the 2026-07-11 pagination fix; TRUST THIS ONE for the clean-band premium. insiderCorrelationLast24h = SAME but only tokens verified after the 2026-07-11 pagination fix — TRUST THIS ONE for the clean-band premium; the all-time version mixes in pre-fix verdicts that could be falsely clean. sourcePerformance = which DISCOVERY ENGINE (pumpfun/momentum/wallet/winner_miner) finds winners — kill or boost engines from this. walletSourcePerformance = are winner-mined/co-buyer wallets actually good (avg_win_rate) or noise. funnelHealth = the seen->passed->triggered->conviction pipeline. gateKillReasons = what the gates kill most (overall, not just false-kills).',
   };
 }

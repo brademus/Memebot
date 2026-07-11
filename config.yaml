@@ -147,6 +147,7 @@ learning:                             # closed-loop filter tuning — the bot ad
   enabled: true                       # kill switch; overrides persist in Postgres and survive redeploys
   window_days: 14                     # rolling evidence window
   min_samples: 8                      # measured kills a rule needs before it's allowed to move
+  min_hours_between_changes: 12       # per-path cooldown, persisted in the log — restarts can't stack decisions
   loosen_false_kill_rate: 0.05        # a rule killing >5% future-3x winners loosens ONE bounded step per cycle
 
 momentum:                             # second discovery engine — catches runners + non-pump.fun launches
