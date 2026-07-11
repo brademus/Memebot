@@ -122,6 +122,11 @@ wallets:                              # smart-money discovery + tracking (needs 
   cobuyer_expansion: true             # mine co-buyers of proven winners to escape the self-winner blind spot
   cobuyer_min_shared: 2               # a candidate must co-buy with our winners on >= this many DISTINCT coins
   idle_deactivate_days: 7             # a proven wallet silent this long is deactivated (copy-trading needs ACTIVE wallets); re-activates if it trades again
+  winner_mining_enabled: true         # find traders proven by the market's biggest movers (not a curated famous-names list)
+  winner_mining_hours: 3              # how often to mine the day's top movers for their early buyers
+  winner_mining_min_pct: 300          # a mover must be up >= this % (24h) to mine its early buyers — real winners only
+  winner_mining_max_mints: 15         # cap how many movers we pull early-buyers for per run (Helius budget)
+  winner_mining_max_vet: 25           # cap how many candidate wallets we deep-vet per run (Helius budget)
 
 limits:
   max_tracked_tokens: 400             # in-memory watchlist cap

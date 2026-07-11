@@ -14,6 +14,7 @@ import { startLadderMonitor } from './alerts/ladder';
 import { startAutotune } from './tuning/autotune';
 import { startFilterLearner } from './tuning/filtertune';
 import { startScoreCalibrator } from './tuning/scorecal';
+import { startWinnerWalletMiner } from './wallets/winnerminer';
 import { generateNote } from './ai/analyst';
 import { aiConvictionRead } from './ai/conviction';
 import { startServer, broadcast } from './api/server';
@@ -101,6 +102,7 @@ async function main() {
   startAutotune();
   startFilterLearner();   // the closed loop: filters measure their own mistakes and adjust
   startScoreCalibrator();  // the closed loop: the SCORE fits itself to outcomes over time
+  startWinnerWalletMiner();  // find traders proven by the market's biggest movers, vet them, track the good ones
 
   // shared gate runner — called from BOTH the create event (curve-seeded liquidity)
   // and the Dexscreener poller (AMM liquidity). Handles cooldown + retry + verdict.

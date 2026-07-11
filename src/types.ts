@@ -120,6 +120,11 @@ export interface AppConfig {
     cobuyer_expansion: boolean;
     cobuyer_min_shared: number;
     idle_deactivate_days: number;
+    winner_mining_enabled: boolean;
+    winner_mining_hours: number;
+    winner_mining_min_pct: number;
+    winner_mining_max_mints: number;
+    winner_mining_max_vet: number;
   };
   states: {
     heating_score_min: number;
