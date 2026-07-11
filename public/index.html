@@ -697,9 +697,12 @@ const SOCKET_REQS = [
   'score 68+ · real socials · clean dev · no insider cluster',
 ];
 function bbCard(b){
+  const tag = b.lane === 'smart' ? '<span class="lane-tag">◆ SMART MONEY LANE</span>'
+    : b.lane === 'pregrad' ? '<span class="lane-tag" style="color:var(--amber)">🎓 PRE-GRADUATION LANE</span>'
+    : '';
   return `
       <div class="bb">
-        ${b.lane === 'smart' ? '<span class="lane-tag">◆ SMART MONEY LANE</span>' : ''}
+        ${tag}
         <div class="top"><span class="bbg">${b.grade}</span><span class="bbs">$${esc(b.symbol)}</span><span class="bbsc">score ${b.score}${b.peakScore>b.score?' (pk '+b.peakScore+')':''}<br>held ${b.heldMin}m · ${b.confidence} conf</span></div>
         <div class="bblabel">${esc(b.label||'')}</div>
         ${b.cautions && b.cautions.length ? `<div class="bbcaut">⚠ ${b.cautions.map(esc).join(' · ')}</div>` : ''}
@@ -711,16 +714,19 @@ async function loadBestBuys(){
     const d = await (await fetch('/api/bestbuys')).json();
     const el = $('bblist');
     const buys = d.buys || [];
-    const organic = buys.filter(b => b.lane !== 'smart');
+    const organic = buys.filter(b => b.lane === 'organic');
     const smart = buys.find(b => b.lane === 'smart');
+    const pregrad = buys.find(b => b.lane === 'pregrad');
     $('bbnote').textContent =
-      `${organic.length} of ${BB_SLOTS} slots earned · smart lane ${smart ? 'FILLED' : 'open'} · ${d.watching||0} watched · a slot holds until it stops qualifying`;
+      `${organic.length} of ${BB_SLOTS} slots earned · smart lane ${smart ? 'FILLED' : 'open'} · pre-grad ${pregrad ? 'FILLED' : 'open'} · ${d.watching||0} watched`;
     let html = organic.map(bbCard).join('');
     for (let i = organic.length; i < BB_SLOTS; i++) {
       html += `<div class="bb socket"><div class="eyebrow">Slot open</div><p>${SOCKET_REQS[i] || SOCKET_REQS[2]}</p></div>`;
     }
     html += smart ? bbCard(smart)
       : `<div class="bb socket"><div class="eyebrow" style="color:var(--amber)">◆ Smart money lane</div><p>fills when 2+ proven-winner wallets buy the same fresh coin — gates and insider checks still apply</p></div>`;
+    html += pregrad ? bbCard(pregrad)
+      : `<div class="bb socket"><div class="eyebrow" style="color:var(--amber)">🎓 Pre-graduation lane</div><p>fills when a coin hits 80%+ of the bonding curve with active inflow — catch the run into graduation, not the retrace after</p></div>`;
     el.innerHTML = html;
   } catch (e) {
     $('bblist').innerHTML = '<div class="bb socket" style="border-color:var(--down)"><p>best-buys fetch failed</p></div>';

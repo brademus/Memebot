@@ -5,6 +5,7 @@ import { rankToken } from '../scoring/rank';
 import { TokenRecord } from '../types';
 import { getStreamMode } from '../ingest/pumpfun';
 import { weightedSmartHits } from '../wallets/tracker';
+import { GRADUATION_SOL } from '../constants';
 
 // STICKY BEST BUYS — a coin EARNS a slot (strict entry bar), then HOLDS it until
 // it genuinely stops looking good (hysteresis: enter at min_score, exit only below
@@ -23,7 +24,7 @@ function smartStats(t: TokenRecord, bb: ReturnType<typeof cfg>['bestbuys']) {
   return weightedSmartHits(t.smartHits, bb.smart_lane_window_min * 60_000);
 }
 
-interface Slot { ca: string; enteredAt: number; peakScore: number; lane: 'organic' | 'smart' }
+interface Slot { ca: string; enteredAt: number; peakScore: number; lane: 'organic' | 'smart' | 'pregrad' }
 const slots: Slot[] = [];
 const droppedAt = new Map<string, number>();   // ca -> when dropped (re-entry cooldown)
 
@@ -57,6 +58,8 @@ export function currentBestBuys() {
       else if (slot.lane === 'organic' && (r.grade === 'C' || r.grade === 'D')) dropReason = `degraded to ${r.grade}`;
       else if (slot.lane === 'organic' && (r.timing === 'LATE' || r.timing === 'STALE')) dropReason = 'entry window closed';
       else if (slot.lane === 'smart' && smartCount(t, bb) === 0) dropReason = 'smart wallets exited window';
+      else if (slot.lane === 'pregrad' && t.dex !== 'pumpfun') dropReason = 'graduated — catalyst played out';
+      else if (slot.lane === 'pregrad' && t.peakCurveSol > 34 && t.curveSol < t.peakCurveSol * 0.85) dropReason = 'curve reversed before graduation';
       else if (t.devBuyPct > bb.max_dev_pct) dropReason = 'dev bag grew';
       else if (t.dex === 'pumpfun' && t.earlyBuyers.length >= 5
                && (1 - t.earlyExited.length / t.earlyBuyers.length) < bb.min_retention)
@@ -140,7 +143,39 @@ export function currentBestBuys() {
     }
   }
 
-  // ---- 3. serialize, stable order (longest-held first — rows don't jump) ----
+  // ---- 2c. PRE-GRADUATION LANE: catch the run INTO graduation, not the retrace
+  // after. Graduation is one of the few SCHEDULED catalysts in this market — a
+  // coin at 80-100% of the bonding curve with sustained inflow is about to migrate,
+  // and being in before that beats chasing the post-grad pump (which the smart
+  // lane's own caution warns retraces hard). Same safety bar as every lane: gates
+  // passed, no insider structure, dev bag capped. Requires REAL inflow (not just
+  // proximity) so we don't buy a stalled curve.
+  if (bb.pregrad_lane && !slots.some(s => s.lane === 'pregrad')) {
+    const near = activeTokens()
+      .filter(t => !inSlots.has(t.ca))
+      .filter(t => (droppedAt.get(t.ca) || 0) < now - cooldownMs)
+      .filter(t => t.gated === true && !t.insiderKilled)
+      .filter(t => t.dex === 'pumpfun' && t.curveSol > 0)
+      .filter(t => !['DYING', 'DEAD'].includes(t.state))
+      .filter(t => (!t.bundle || t.bundle.fundedSnipers === 0))
+      .filter(t => t.devBuyPct <= bb.max_dev_pct)
+      // in the graduation zone: 80-100% of the real curve threshold
+      .filter(t => t.curveSol >= GRADUATION_SOL * bb.pregrad_min_pct && t.curveSol < GRADUATION_SOL * 1.0)
+      // REAL inflow — curve is still climbing, not stalled at the threshold
+      .map(t => {
+        const ref = t.curveSamples.find(cs => now - cs.at >= 3 * 60_000);
+        const climbing = !ref || t.curveSol > ref.sol;
+        const pct = Math.round((t.curveSol / GRADUATION_SOL) * 100);
+        return { t, climbing, pct };
+      })
+      .filter(({ climbing }) => climbing)
+      .sort((a, b) => b.pct - a.pct);
+    if (near.length) {
+      const { t } = near[0];
+      slots.push({ ca: t.ca, enteredAt: now, peakScore: t.score, lane: 'pregrad' });
+    }
+  }
+
   return slots
     .slice()
     .sort((a, b) => a.enteredAt - b.enteredAt)
@@ -153,6 +188,8 @@ export function currentBestBuys() {
         lane: s.lane,
         label: s.lane === 'smart'
           ? `${st.elite ? st.elite + ' ELITE + ' : ''}${st.wallets - st.elite} proven-winner wallet${st.wallets !== 1 ? 's' : ''} bought this within ${bb.smart_lane_window_min}m (confluence weight ${st.weight}). ` + (r.label || '')
+          : s.lane === 'pregrad'
+          ? `${Math.round((t.curveSol / GRADUATION_SOL) * 100)}% to graduation with active inflow — catch the run in, not the retrace after. ` + (r.label || '')
           : r.label,
         confidence: r.confidence, score: t.score, peakScore: s.peakScore,
         heldMin: Math.round((now - s.enteredAt) / 60000),

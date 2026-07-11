@@ -130,7 +130,9 @@ export function scoreToken(t: TokenRecord): number {
   // still taking inflow, scaled linearly into the graduation.
   let gradBonus = 0;
   if (t.dex === 'pumpfun' && ls && t.curveSol > 0) {
-    const grad = ls.graduation_curve_sol;
+    // measure against the REAL graduation point (GRADUATION_SOL), not the stale
+    // config value — the bonus was firing ~15 SOL too early against 69.
+    const grad = GRADUATION_SOL;
     if (t.curveSol >= grad * 0.8 && t.curveSol <= grad * 1.02) {
       const ref = t.curveSamples.find(cs => Date.now() - cs.at >= 3 * 60_000);
       const inflow = !ref || t.curveSol >= ref.sol;

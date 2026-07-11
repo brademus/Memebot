@@ -185,3 +185,5 @@ social:                               # free social edge — Dexscreener boosts 
   enabled: true
   boost_poll_seconds: 90              # boosts feed poll (public, no auth, generous limits)
   boost_surface_min: 30               # an UNSEEN coin needs this much paid-boost total to be pulled in
+  pregrad_lane: true                  # dedicated Best Buys socket for coins about to graduate (catch the run IN, not the post-grad retrace)
+  pregrad_min_pct: 0.8                # coin must be >= this fraction of the graduation curve (0.8 = 80%)

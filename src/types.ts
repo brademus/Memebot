@@ -157,6 +157,8 @@ export interface AppConfig {
     net_inflow_window_min: number;
     smart_lane: boolean;
     smart_lane_min_wallets: number;
+    pregrad_lane: boolean;
+    pregrad_min_pct: number;
     smart_lane_window_min: number;
     smart_lane_min_score: number;
     smart_lane_min_age_min: number;
