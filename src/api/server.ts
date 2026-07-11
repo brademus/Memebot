@@ -129,6 +129,12 @@ export function startServer() {
           gatedOut: all.filter(t => t.gated === false).length,
           watching: all.filter(t => t.gated === true && t.state !== 'DEAD').length,
           triggers: all.filter(t => t.state === 'TRIGGER').length,
+          // score distribution vs the EFFECTIVE floor: how close is the pipeline
+          // to triggering? "0 triggers" with maxScore 44 vs floor 45 is a very
+          // different story from maxScore 20.
+          effectiveFloor: cfg().states.trigger_score_min,
+          scoresNearFloor: all.filter(t => t.gated === true && t.score >= cfg().states.trigger_score_min - 10).length,
+          maxScoreNow: Math.max(0, ...all.filter(t => t.gated === true).map(t => t.score)),
         },
         subsystems: {
           webhook: webhookDiag ? webhookDiag() : undefined,

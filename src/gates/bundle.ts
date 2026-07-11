@@ -1,6 +1,6 @@
 import { cfg, env } from '../config';
 import { TokenRecord } from '../types';
-import { heliusTxs } from '../helius';
+import { heliusTxs, heliusTxsToCreation } from '../helius';
 
 // Bundle / insider detection.
 // Research basis: >50% of pump.fun launches are sniped in the creation block, and
@@ -26,7 +26,11 @@ export async function checkBundle(t: TokenRecord): Promise<BundleCheck> {
 
   try {
     // 1. earliest txs on the mint (fresh tokens: 100 covers back to creation)
-    const mintTxs = await heliusTxs(t.ca, 100, undefined, 'bg');
+    // MUST reach creation-era txs: insiders/snipers act in the first slots. A
+    // single newest-100 page on a busy token never sees creation — the check was
+    // verifying the WRONG transactions and could mark bundled tokens falsely
+    // clean (corrupting the one proven edge, insider-verified-clean 2.69x).
+    const mintTxs = await heliusTxsToCreation(t.ca, 5, 'bg');
     if (!mintTxs.length) return NEUTRAL;
 
     const minSlot = Math.min(...mintTxs.map((x: any) => x.slot));

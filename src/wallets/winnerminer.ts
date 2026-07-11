@@ -22,7 +22,7 @@ import { syncWebhook } from './webhook';
 
 const GT = 'https://api.geckoterminal.com/api/v2/networks/solana';
 
-const diag = { lastRun: null as string | null, lastError: null as string | null, moversScanned: 0, candidatesfound: 0, tracked: 0 };
+const diag = { lastRun: null as string | null, lastError: null as string | null, moversScanned: 0, candidatesfound: 0, tracked: 0, vetted: 0, rejected: 0, marginal: 0 };
 export const winnerMinerDiag = () => ({ ...diag });
 
 export function startWinnerWalletMiner() {
@@ -72,9 +72,12 @@ async function run() {
   //    analyzer decides. Only wallets clearing the quality bar get tracked.
   let added = 0;
   const ranked = [...candidates.entries()].sort((a, b) => b[1] - a[1]).slice(0, w.winner_mining_max_vet);
+  diag.vetted = 0; diag.rejected = 0; diag.marginal = 0;
   for (const [wallet, moverPct] of ranked) {
     const q = await analyzeWallet(wallet);
-    if (q.verdict === 'REJECT' || q.verdict === 'MARGINAL') continue;   // only GOOD/ELITE from cold discovery
+    diag.vetted++;
+    if (q.verdict === 'REJECT') { diag.rejected++; continue; }
+    if (q.verdict === 'MARGINAL') { diag.marginal++; continue; }   // only GOOD/ELITE from cold discovery
     await pool.query(
       `INSERT INTO smart_wallets (wallet, type, winners_hit, discovered_from, active, last_validated, quality_verdict, win_rate, round_trips, quality_checked_at)
        VALUES ($1, 'winner_miner', 1, 'winner_mining', true, now(), $2, $3, $4, now())

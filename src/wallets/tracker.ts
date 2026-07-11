@@ -35,14 +35,18 @@ export function weightedSmartHits(hits: { wallet: string; at: number; w: number 
 }
 
 // shared hit recorder — used by BOTH the poller and the webhook
-export function recordSmartBuy(wallet: string, ca: string, onDiscovery: (ca: string) => void) {
-  recentHits.set(ca, Date.now());
+export function recordSmartBuy(wallet: string, ca: string, onDiscovery: (ca: string) => void, signal = true) {
+  if (signal) recentHits.set(ca, Date.now());
   if (pool) {
     pool.query(`INSERT INTO wallet_hits (ca, wallet) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [ca, wallet]).catch(() => {});
     // stamp activity — this wallet bought something RIGHT NOW. Ranking + copy-trade
     // surfacing use this so idle historical wallets fall off the top.
     pool.query(`UPDATE smart_wallets SET last_active = now() WHERE wallet = $1`, [wallet]).catch(() => {});
   }
+  // OBSERVATION wallets (unproven, streamed to build evidence) record hits +
+  // activity above but do NOT emit signal: no smartHits, no surfacing. Signal is
+  // earned by activation, evidence is free for everyone.
+  if (!signal) return;
   const w = walletWeight(wallet);
   const existing = getToken(ca);
   if (existing) {
@@ -87,12 +91,14 @@ async function pollOnce(onDiscovery: (ca: string) => void) {
     setWalletWeights(active.rows);
     for (const { wallet } of active.rows) {
       const txs = await heliusTxs(wallet, 10);
+      const QUOTES = new Set(['So11111111111111111111111111111111111111112','EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v','Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB']);
       for (const tx of txs) {
         const age = Date.now() - (tx.timestamp ? tx.timestamp * 1000 : Date.now());
         if (age > 10 * 60_000) continue;
         if (tx.type && tx.type !== 'SWAP') continue;   // anti-dust: only real swaps, not transfers
         for (const tt of tx.tokenTransfers || []) {
           if (tt.toUserAccount !== wallet || !tt.mint) continue;
+          if (QUOTES.has(tt.mint)) continue;   // receiving WSOL/USDC = a SELL, not a buy
           recordSmartBuy(wallet, tt.mint, onDiscovery);
         }
       }

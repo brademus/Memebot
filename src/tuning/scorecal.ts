@@ -93,6 +93,24 @@ async function loadWeights() {
     console.log(`[scorecal] applied ${Object.keys(o).length} learned weights`);
   }
   // load a persisted trigger floor if we've learned one
+  // UNSTICK MIGRATION: if the floor row sits at the old yaml default (>=60) but
+  // the calibrator has NEVER legitimately computed a floor (no '_trigger_floor'
+  // entries in weight_tuning_log — tuneFloor always logs when it writes), it's a
+  // trapped pre-fix row that the seed's ON CONFLICT DO NOTHING preserves forever.
+  // Force it to the seeded 45 once. The moment tuneFloor computes a real floor
+  // (needs 12+ winners) it logs, and this guard can never fire again.
+  const stuck = await pool.query(`SELECT weight FROM learned_weights WHERE component = '_trigger_floor'`).catch(() => null);
+  if (stuck && stuck.rows.length && Number(stuck.rows[0].weight) >= 60) {
+    const computed = await pool.query(
+      `SELECT 1 FROM weight_tuning_log WHERE component = '_trigger_floor' LIMIT 1`).catch(() => ({ rows: [] as any[] }));
+    if (!computed.rows.length) {
+      await pool.query(`UPDATE learned_weights SET weight = 45, updated_at = now() WHERE component = '_trigger_floor'`);
+      await pool.query(
+        `INSERT INTO weight_tuning_log (component, old_weight, new_weight, evidence) VALUES ('_trigger_floor',$1,45,'unstick migration: floor was trapped at pre-fix default with no computed history')`,
+        [Number(stuck.rows[0].weight)]).catch(() => {});
+      console.log(`[scorecal] UNSTUCK trigger floor ${stuck.rows[0].weight} -> 45 (trapped pre-fix row, never computed)`);
+    }
+  }
   const f = await pool.query(`SELECT weight FROM learned_weights WHERE component = '_trigger_floor'`).catch(() => null);
   if (f && f.rows.length) setConfigOverrides({ 'states.trigger_score_min': Number(f.rows[0].weight) });
   // load learned directions (which signals are inverted)

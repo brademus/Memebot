@@ -44,7 +44,17 @@ export function startWalletWebhook(onDiscovery: (ca: string) => void) {
 }
 
 let discoveryHook: ((ca: string) => void) | null = null;
-const trackedSet = new Set<string>();   // membership check for incoming deliveries
+const trackedSet = new Set<string>();   // ALL streamed wallets (observation)
+const signalSet = new Set<string>();    // ACTIVE wallets only — their buys emit signal
+
+// quote/routing mints — receiving these is the SELL side of a swap (wallet sold a
+// coin and got SOL/USDC back), NOT a buy. Recording them as buys was polluting
+// wallet_hits and every win-rate measure with phantom WSOL/USDC "buys".
+const QUOTE_MINTS = new Set([
+  'So11111111111111111111111111111111111111112',  // WSOL
+  'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',  // USDC
+  'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',  // USDT
+]);
 
 export async function syncWebhook() {
   if (!pool || !env.HELIUS_API_KEY) return;
@@ -52,13 +62,22 @@ export async function syncWebhook() {
   if (!url) return;
   const hookUrl = `${url}/api/helius-webhook`;
   try {
+    // OBSERVATION vs SIGNAL: stream EVERY non-REJECT wallet (Helius webhooks are
+    // push-based and allow 100k addresses — observation is free), but only ACTIVE
+    // wallets emit signal (smartHits, surfacing). Previously only active wallets
+    // were streamed, which was a catch-22: a watch-list wallet could never record
+    // a buy, so it could never earn activation — 18 of 19 wallets were
+    // structurally invisible and "never changed".
     const active = await pool.query(
-      `SELECT wallet, winners_hit FROM smart_wallets WHERE active ORDER BY winners_hit DESC LIMIT $1`,
+      `SELECT wallet, winners_hit, active FROM smart_wallets
+       WHERE quality_verdict IS DISTINCT FROM 'REJECT'
+       ORDER BY active DESC, winners_hit DESC LIMIT $1`,
       [cfg().wallets.max_tracked_wallets]);
     const addresses: string[] = active.rows.map((r: any) => r.wallet);
     if (!addresses.length) { lastError = 'no active wallets yet'; return; }
     trackedSet.clear();
-    for (const a of addresses) trackedSet.add(a);
+    signalSet.clear();
+    for (const r of active.rows) { trackedSet.add(r.wallet); if (r.active) signalSet.add(r.wallet); }
     setWalletWeights(active.rows);   // tier weights refresh with every sync
 
     const base = `https://api.helius.xyz/v0/webhooks?api-key=${env.HELIUS_API_KEY}`;
@@ -98,10 +117,11 @@ export function handleWebhook(authHeader: string | undefined, payload: any): num
     if (!tx || (tx.type && tx.type !== 'SWAP')) continue;   // anti-dust: only real swaps
     for (const tt of tx.tokenTransfers || []) {
       if (!tt.mint || !tt.toUserAccount) continue;
+      if (QUOTE_MINTS.has(tt.mint)) continue;   // receiving WSOL/USDC = the SELL side, not a buy
       // credit ONLY wallets we actually track — deliveries also contain the
       // counterparty side of every swap
       if (trackedSet.has(tt.toUserAccount))
-        recordSmartBuy(tt.toUserAccount, tt.mint, discoveryHook || (() => {}));
+        recordSmartBuy(tt.toUserAccount, tt.mint, discoveryHook || (() => {}), signalSet.has(tt.toUserAccount));
     }
   }
   return 200;
