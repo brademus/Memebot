@@ -322,6 +322,7 @@
   <div class="actions">
     <button id="report">Weekly report</button>
     <button id="aireview">AI review</button>
+    <button id="sysmon">System monitor</button>
     <button id="mute" aria-pressed="false">Sound off</button>
   </div>
 </header>
@@ -613,6 +614,21 @@ $('aireview').onclick = async () => {
     out.textContent = 'Review failed: ' + (e && e.message ? e.message : 'network error') + ' — check Railway logs for [gemini] lines.';
   }
   $('aireview').textContent = 'AI review';
+};
+
+$('sysmon').onclick = async () => {
+  const out = $('reviewout');
+  out.style.display = 'block';
+  out.textContent = 'AI reading the live system state — funnel, subsystems, anomalies…';
+  out.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  $('sysmon').textContent = 'Reading…';
+  try {
+    const d = await (await fetch('/api/system-monitor')).json();
+    out.textContent = d.read || d.note || d.error || 'No output — check GEMINI_API_KEY.';
+  } catch (e) {
+    out.textContent = 'Monitor failed: ' + (e && e.message ? e.message : 'network error');
+  }
+  $('sysmon').textContent = 'System monitor';
 };
 
 let histOffset = 0;

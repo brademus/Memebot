@@ -67,10 +67,10 @@ states:
 
 ai:                                   # needs GEMINI_API_KEY (aistudio.google.com/apikey); skipped if absent
   enabled: true
-  note_model: gemini-3-flash          # per-token TRIGGER notes: small, frequent -> Flash tier
-  review_model: gemini-3.1-pro        # weekly bot-performance review: big context -> Pro tier
+  note_model: gemini-3.5-flash         # per-token TRIGGER notes: small, frequent -> Flash tier (updated 2026-07 to current name)
+  review_model: gemini-3.5-flash       # weekly review (updated 2026-07: gemini-3.1-pro was retired/renamed)
   conviction_enabled: true            # AI reads name/ticker/description at TRIGGER for narrative quality (logged + measured)
-  conviction_model: gemini-3-flash    # narrative read is small + at-trigger volume -> Flash
+  conviction_model: gemini-3.5-flash   # narrative read (updated 2026-07 to current name)
   conviction_max_delta: 6             # HARD bound on the AI score nudge; it can never create or block a trade alone
                                       # if a model 404s, check current names at ai.google.dev/gemini-api/docs/models
 

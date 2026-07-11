@@ -137,10 +137,49 @@ export async function buildReport(days = 7): Promise<any> {
      COUNT(*) FILTER (WHERE conviction_at IS NOT NULL) AS convictions
      FROM tokens`))[0];
 
+  // ---- DISCOVERY SOURCE performance: which engine finds winners? ----
+  const sourcePerformance = await q(`
+    SELECT t.source, COUNT(*) AS n,
+           ROUND(AVG(o.multiple_from_first)::numeric, 2) AS avg_multiple,
+           ROUND((COUNT(*) FILTER (WHERE o.multiple_from_first >= 2))::numeric / NULLIF(COUNT(*),0) * 100, 1) AS pct_2x_plus,
+           MAX(o.multiple_from_first) AS best
+    FROM tokens t JOIN outcomes o ON o.ca = t.ca AND o.snapshot_minutes = 240
+    WHERE t.gate_result = 'passed' ${win}
+    GROUP BY t.source ORDER BY avg_multiple DESC NULLS LAST`).catch(() => []);
+
+  // ---- WALLET SOURCE performance: are winner-mined / co-buyer wallets good? ----
+  const walletSourcePerformance = await q(`
+    SELECT COALESCE(discovered_from, 'original') AS source, COUNT(*) AS wallets,
+           COUNT(*) FILTER (WHERE active) AS active,
+           ROUND(AVG(win_rate)::numeric, 3) AS avg_win_rate,
+           COUNT(*) FILTER (WHERE quality_verdict = 'ELITE') AS elite,
+           COUNT(*) FILTER (WHERE last_active > now() - interval '24 hours') AS active_today
+    FROM smart_wallets GROUP BY 1 ORDER BY wallets DESC`).catch(() => []);
+
+  // ---- FUNNEL health: where do coins die? (the live pipeline picture) ----
+  const funnelHealth = await q(`
+    SELECT
+      COUNT(*) AS total_seen,
+      COUNT(*) FILTER (WHERE gate_result = 'passed') AS passed_gates,
+      COUNT(*) FILTER (WHERE gate_result = 'failed') AS killed_gates,
+      COUNT(*) FILTER (WHERE triggered_at IS NOT NULL) AS triggered,
+      COUNT(*) FILTER (WHERE conviction_at IS NOT NULL) AS conviction
+    FROM tokens WHERE 1=1 ${win}`).catch(() => []);
+
+  // ---- top gate-kill reasons overall (not just false-kills) ----
+  const gateKillReasons = await q(`
+    SELECT gate_fail_reason AS reason, COUNT(*) AS n
+    FROM tokens WHERE gate_result = 'failed' AND gate_fail_reason IS NOT NULL ${win}
+    GROUP BY 1 ORDER BY 2 DESC LIMIT 12`).catch(() => []);
+
   return {
     generated: new Date().toISOString(),
     window: `last ${days} days`,
     totals,
+    funnelHealth,
+    sourcePerformance,
+    walletSourcePerformance,
+    gateKillReasons,
     triggerPerformance: triggerPerf,
     convictionPerformance: convictionPerf,
     hourOfDay,
@@ -152,6 +191,6 @@ export async function buildReport(days = 7): Promise<any> {
     scoreCalibrationLearned: scoreCalibration_learned,
     aiConvictionScorecard,
     insiderCorrelation: insiderCorr,
-    readme: 'Paste this whole object to Claude to tune config.yaml. triggerPerformance = did BUY calls go up. convictionPerformance = the confirmed-buy tier measured from its own entry price (must beat triggers or tighten conviction thresholds). scoreCalibration = are high scores earning their weight. aiConvictionScorecard = does the AI narrative read predict (STRONG must beat WEAK on avg_multiple or disable it). componentCalibration = WHICH components carry signal (tercile 3 must beat tercile 1 or that weight is dead/anti-signal — reweight from this). falseKills = gates rejecting winners (loosen these). insiderCorrelation = is the bundle gate threshold right.',
+    readme: 'Paste this whole object to Claude to tune config.yaml. triggerPerformance = did BUY calls go up. convictionPerformance = the confirmed-buy tier measured from its own entry price (must beat triggers or tighten conviction thresholds). scoreCalibration = are high scores earning their weight. aiConvictionScorecard = does the AI narrative read predict (STRONG must beat WEAK on avg_multiple or disable it). componentCalibration = WHICH components carry signal (tercile 3 must beat tercile 1 or that weight is dead/anti-signal — reweight from this). falseKills = gates rejecting winners (loosen these). insiderCorrelation = is the bundle gate threshold right. sourcePerformance = which DISCOVERY ENGINE (pumpfun/momentum/wallet/winner_miner) finds winners — kill or boost engines from this. walletSourcePerformance = are winner-mined/co-buyer wallets actually good (avg_win_rate) or noise. funnelHealth = the seen->passed->triggered->conviction pipeline. gateKillReasons = what the gates kill most (overall, not just false-kills).',
   };
 }

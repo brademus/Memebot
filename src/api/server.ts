@@ -6,6 +6,8 @@ import { checkConviction, convictionFiredToday } from '../scoring/conviction';
 import { pool } from '../db';
 import { buildReport } from './report';
 import { runAiReview } from '../ai/reviewer';
+import { geminiLastError, geminiConfigured } from '../ai/gemini';
+import { runSystemMonitor } from '../ai/monitor';
 import { buildAnalytics } from './analytics';
 import { rankToken } from '../scoring/rank';
 import { currentBestBuys } from './bestbuys';
@@ -117,10 +119,44 @@ export function startServer() {
   });
 
   // on-demand AI review: Pro model analyzes the bot's own performance, suggests config changes
+  app.get('/api/system-monitor', async (_req, res) => {
+    try {
+      const all = allTokens();
+      // assemble the live operational snapshot the AI reads
+      const snapshot = {
+        funnel: {
+          seen: all.length,
+          gatedOut: all.filter(t => t.gated === false).length,
+          watching: all.filter(t => t.gated === true && t.state !== 'DEAD').length,
+          triggers: all.filter(t => t.state === 'TRIGGER').length,
+        },
+        subsystems: {
+          webhook: webhookDiag ? webhookDiag() : undefined,
+          helius: heliusHealth(),
+          calibration: scorecalDiag(),
+          learning: learningDiag(),
+          momentum: momentumDiag(),
+          social: socialDiag(),
+          winnerMiner: winnerMinerDiag(),
+          discovery: discoveryDiag ? discoveryDiag() : undefined,
+          gemini: { configured: geminiConfigured(), lastError: geminiLastError() },
+          streamMode: getStreamMode(),
+        },
+      };
+      const r = await runSystemMonitor(snapshot);
+      res.json(r.read ? { read: r.read, snapshot } : { note: r.note, snapshot });
+    } catch (e) { res.status(500).json({ error: (e as Error).message }); }
+  });
+
   app.get('/api/ai-review', async (_req, res) => {
     try {
       const r = await runAiReview();
-      res.json(r.review ? { review: r.review } : { note: 'GEMINI_API_KEY not set — review unavailable' });
+      if (r.review) { res.json({ review: r.review }); return; }
+      // real diagnostic instead of a blanket message
+      const reason = !geminiConfigured()
+        ? 'GEMINI_API_KEY is not set in the deployment environment (Railway variables)'
+        : (geminiLastError() || 'the Gemini call returned no content — check the model name and quota');
+      res.json({ note: `AI review unavailable: ${reason}` });
     } catch (e) { res.status(500).json({ error: (e as Error).message }); }
   });
 
@@ -214,6 +250,7 @@ export function startServer() {
       db: !!pool,
       helius: !!env.HELIUS_API_KEY,
       gemini: !!env.GEMINI_API_KEY,
+      geminiError: geminiLastError(),
       telegram: !!(env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID),
       walletTracking: !!pool && !!env.HELIUS_API_KEY,
       tradeStream: getStreamMode(),
