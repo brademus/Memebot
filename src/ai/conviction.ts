@@ -57,8 +57,8 @@ Token: ${JSON.stringify(facts)}`;
       reason: String(j.reason || '').slice(0, 100),
       at: Date.now(),
     };
-    // apply the bounded nudge to the live score, and remember it so re-scores are stable
-    t.score = Math.max(0, Math.min(100, t.score + delta));
+    // scoreToken() applies the delta on every rebuild (score.ts) — no one-shot
+    // mutation here, or it would double-count until the next rescore.
     if (pool) pool.query(
       `INSERT INTO ai_conviction (ca, symbol, verdict, delta, reason) VALUES ($1,$2,$3,$4,$5)
        ON CONFLICT (ca) DO NOTHING`,

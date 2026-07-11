@@ -151,7 +151,9 @@ learning:                             # closed-loop filter tuning — the bot ad
   loosen_false_kill_rate: 0.05        # a rule killing >5% future-3x winners loosens ONE bounded step per cycle
 
 momentum:                             # second discovery engine — catches runners + non-pump.fun launches
-  enabled: true
+  enabled: false                      # DISABLED 2026-07-11 on outcome data: n=32 (>=30 bar met), avg 0.03x, best 0.83x —
+                                      # every coin it surfaced lost from surface price. Buying 24h-trending = buying the top.
+                                      # Re-enable ONLY with entry discipline (e.g. surface on pullback, not strength).
   poll_seconds: 180                   # GeckoTerminal trending + new pools (free tier: 30 req/min; we use ~1/90s)
   min_liquidity_usd: 30000            # a runner worth a late entry has real liquidity
   min_vol24h_usd: 150000              # and real volume behind the move

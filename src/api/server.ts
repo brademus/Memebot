@@ -23,7 +23,7 @@ import { momentumDiag } from '../ingest/momentum';
 import { socialDiag } from '../ingest/social';
 import { heliusHealth } from '../helius';
 import { getMissedWinners } from '../outcomes/missed';
-import { fetchHistory, addSmartWallet, removeSmartWallet, listSmartWallets } from '../db';
+import { addSmartWallet, removeSmartWallet, listSmartWallets } from '../db';
 import { latestSuggestion } from '../tuning/autotune';
 import { TokenRecord } from '../types';
 
@@ -35,12 +35,6 @@ export function startServer() {
   app.use(express.static(path.join(process.cwd(), 'public')));
 
   // full history from Postgres (everything ever seen), cursor-paged
-  app.get('/api/history', async (req, res) => {
-    const before = (req.query.before as string) || null;
-    const rows = await fetchHistory(before, parseInt((req.query.limit as string) || '100', 10));
-    res.json(rows);
-  });
-
   // autotune's latest weight suggestion (apply manually in config.yaml)
   app.get('/api/tuning', (_req, res) => res.json(latestSuggestion()));
 
@@ -219,7 +213,7 @@ export function startServer() {
     await step('winners_unmined', async () =>
       (await pool!.query(`SELECT COUNT(DISTINCT t.ca)::int c FROM tokens t JOIN outcomes o ON o.ca=t.ca
         WHERE o.multiple_from_first >= 3 AND t.first_seen > now() - interval '7 days'
-        AND NOT COALESCE(t.wallets_mined,false)`)).rows[0].c);
+        AND t.mined_at IS NULL`)).rows[0].c);
     await step('sample_winner_and_its_early_buyers', async () => {
       const r = await pool!.query(`SELECT t.ca, MAX(o.multiple_from_first) m FROM tokens t JOIN outcomes o ON o.ca=t.ca
         WHERE o.multiple_from_first >= 3 AND t.first_seen > now() - interval '7 days'
