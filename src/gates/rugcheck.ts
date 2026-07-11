@@ -27,12 +27,20 @@ export async function fetchRugReport(ca: string, onCurve = false): Promise<RugRe
     const mintAuthorityRevoked = r.token?.mintAuthority == null;
     const freezeAuthorityInactive = r.token?.freezeAuthority == null;
 
-    // holders: rugcheck returns topHolders with pct; exclude entries flagged as LP/AMM where marked
-    const holders: any[] = (r.topHolders || []).filter((h: any) => !h.insider || true);
+    // holders: rugcheck returns topHolders with pct. Exclude LP/pool accounts.
+    // Pools are matched by the token-ACCOUNT address (liquidityA/B are token accounts),
+    // not the owner wallet — the old owner-only match let pool accounts slip through
+    // on graduated AMM runners, reading the pool as a "90% holder" and false-killing
+    // established movers. Match on BOTH address and owner to catch either shape.
+    const holders: any[] = r.topHolders || [];
+    const marketAccts = new Set<string>();
+    for (const m of r.markets || [])
+      for (const a of [m.liquidityA, m.liquidityB, m.lp?.lpMint, m.pubkey].filter(Boolean))
+        marketAccts.add(String(a).toLowerCase());
     const nonLp = holders.filter((h: any) => {
+      const addr = (h.address || '').toLowerCase();
       const owner = (h.owner || '').toLowerCase();
-      return !(r.markets || []).some((m: any) =>
-        [m.liquidityA, m.liquidityB, m.lp?.lpMint].filter(Boolean).map((x: string) => x.toLowerCase()).includes(owner));
+      return !marketAccts.has(addr) && !marketAccts.has(owner);
     });
     // On the bonding curve, the curve PDA is normally the largest "holder" — that's
     // protocol-held unsold supply, not a dumper. The old markets-empty heuristic never

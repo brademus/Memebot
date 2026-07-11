@@ -77,10 +77,13 @@ async function loadWeights() {
   const r = await pool.query(`SELECT component, weight FROM learned_weights`).catch(() => null);
   if (r && r.rows.length) {
     const o: Record<string, number> = {};
-    for (const row of r.rows) o[row.component] = Number(row.weight);
+    // only REAL component weights belong in the weight overlay — skip the
+    // underscore-prefixed bookkeeping rows (_dir_*, _trigger_floor, _seed), which
+    // are applied through their own channels below, not as score weights.
+    for (const row of r.rows) if (!row.component.startsWith('_')) o[row.component] = Number(row.weight);
     setWeightOverrides(o);
     diag.applied = o;
-    console.log(`[scorecal] applied ${r.rows.length} learned weights`);
+    console.log(`[scorecal] applied ${Object.keys(o).length} learned weights`);
   }
   // load a persisted trigger floor if we've learned one
   const f = await pool.query(`SELECT weight FROM learned_weights WHERE component = '_trigger_floor'`).catch(() => null);

@@ -12,7 +12,12 @@ const CONFIG_PATH = path.join(process.cwd(), 'config.yaml');
 let overrides: Record<string, number> = {};
 let weightOverrides: Record<string, number> = {};
 export function setConfigOverrides(o: Record<string, number>) {
-  overrides = o;
+  // MERGE, don't replace. Both the filter learner and the scoring calibrator call
+  // this with their OWN paths; a wholesale `overrides = o` meant whichever ran last
+  // wiped the other's keys — in practice the filter learner (gates.*) kept erasing
+  // the calibrator's states.trigger_score_min, snapping the trigger floor back to
+  // the yaml default of 65 and silently blocking every trigger. Merge per key.
+  overrides = { ...overrides, ...o };
   try { current = withOverrides(load()); } catch {}
 }
 // learned scoring weights (component -> value), applied under weights.* — kept
