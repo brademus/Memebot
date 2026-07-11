@@ -37,9 +37,12 @@ export function weightedSmartHits(hits: { wallet: string; at: number; w: number 
 // shared hit recorder — used by BOTH the poller and the webhook
 export function recordSmartBuy(wallet: string, ca: string, onDiscovery: (ca: string) => void) {
   recentHits.set(ca, Date.now());
-  if (pool) pool.query(
-    `INSERT INTO wallet_hits (ca, wallet) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
-    [ca, wallet]).catch(() => {});
+  if (pool) {
+    pool.query(`INSERT INTO wallet_hits (ca, wallet) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [ca, wallet]).catch(() => {});
+    // stamp activity — this wallet bought something RIGHT NOW. Ranking + copy-trade
+    // surfacing use this so idle historical wallets fall off the top.
+    pool.query(`UPDATE smart_wallets SET last_active = now() WHERE wallet = $1`, [wallet]).catch(() => {});
+  }
   const w = walletWeight(wallet);
   const existing = getToken(ca);
   if (existing) {

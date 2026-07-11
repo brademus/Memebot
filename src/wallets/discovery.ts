@@ -89,7 +89,8 @@ export async function runDiscovery(): Promise<Diag> {
       const toCheck = await pool.query(
         `SELECT wallet FROM smart_wallets
          WHERE active AND (quality_checked_at IS NULL OR quality_checked_at < now() - ($1 || ' days')::interval)
-         ORDER BY quality_checked_at NULLS FIRST, winners_hit DESC LIMIT 30`, [String(recheck)]);
+         ORDER BY (last_active > now() - interval '24 hours') DESC,  -- vet active wallets first
+                  quality_checked_at NULLS FIRST, winners_hit DESC LIMIT 30`, [String(recheck)]);
       for (const { wallet } of toCheck.rows) {
         const q = await analyzeWallet(wallet);
         await pool.query(
@@ -99,6 +100,18 @@ export async function runDiscovery(): Promise<Diag> {
           [wallet, q.verdict, +q.winRate.toFixed(3), q.roundTrips, meetsBar(q.verdict)]);
         if (!meetsBar(q.verdict))
           console.log(`[wallets] demoted ${wallet.slice(0, 6)} — quality ${q.verdict} (${q.roundTrips} round-trips, ${(q.winRate * 100).toFixed(0)}% win)`);
+      }
+      // IDLE DEMOTION: a proven wallet that has gone silent for the cutoff is not a
+      // copy-trade target anymore. Deactivate wallets with no activity in the window
+      // (they stay in the DB and re-activate if they start trading again via the
+      // webhook stamp). Keeps the tracked set to wallets actually moving NOW.
+      const idleDays = cfg().wallets.idle_deactivate_days;
+      if (idleDays > 0) {
+        const demoted = await pool.query(
+          `UPDATE smart_wallets SET active = false
+           WHERE active AND last_active IS NOT NULL AND last_active < now() - ($1 || ' days')::interval
+           RETURNING wallet`, [String(idleDays)]);
+        if (demoted.rowCount) console.log(`[wallets] deactivated ${demoted.rowCount} idle wallets (>${idleDays}d silent)`);
       }
     }
 

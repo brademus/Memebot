@@ -52,24 +52,31 @@ export function startScoreCalibrator() {
 // point, not a hardcode: any future run overwrites these.
 async function seedFromReport() {
   if (!pool) return;
-  const existing = await pool.query(`SELECT 1 FROM learned_weights WHERE component LIKE '\_dir\_%' LIMIT 1`).catch(() => null);
-  if (existing && existing.rows.length) return;   // already learned — don't clobber
-  // componentCalibration terciles: freshness & buyPressure INVERTED (t1>t3),
-  // holderGrowth CORRECT (t3 best), liquidity & smartMoney peak mid (treat as
-  // weak-positive, the calibrator will refine). organic feeds holderGrowth.
+  // Seed the report's proven findings. Each row is written with ON CONFLICT DO
+  // NOTHING, so anything the calibrator has already LEARNED is preserved — but a
+  // key that was never written (e.g. _trigger_floor missing from an earlier
+  // deploy that only wrote directions) still gets seeded. The previous all-or-
+  // nothing guard on _dir_ existing left the floor stuck at the yaml default (65)
+  // whenever dirs existed but the floor didn't — the exact bug that kept the
+  // score at 65 and blocked every 10x+ coin from triggering.
   const seed: Record<string, number> = {
     _dir_freshness: -1, _dir_buy_pressure: -1,
     _dir_velocity: 1, _dir_organic: 1, _dir_smart_money: 1,
     freshness: 8, buy_pressure: 8, velocity: 14, organic: 34, smart_money: 21, social: 15,
     _trigger_floor: 45,
   };
-  for (const [k, v] of Object.entries(seed))
-    await pool.query(
+  let wrote = 0;
+  for (const [k, v] of Object.entries(seed)) {
+    const r = await pool.query(
       `INSERT INTO learned_weights (component, weight) VALUES ($1,$2) ON CONFLICT (component) DO NOTHING`, [k, v]);
-  await pool.query(
-    `INSERT INTO weight_tuning_log (component, old_weight, new_weight, evidence) VALUES ('_seed',0,1,$1)`,
-    ['seeded from 2026-07-10 report: freshness/buyPressure inverted, holderGrowth dominant, floor 65->45']).catch(() => {});
-  console.log('[scorecal] seeded weights+directions from report; floor -> 45');
+    wrote += (r as any).rowCount || 0;
+  }
+  if (wrote > 0) {
+    await pool.query(
+      `INSERT INTO weight_tuning_log (component, old_weight, new_weight, evidence) VALUES ('_seed',0,1,$1)`,
+      [`seeded ${wrote} missing keys from report: freshness/buyPressure inverted, holderGrowth dominant, floor->45`]).catch(() => {});
+    console.log(`[scorecal] seeded ${wrote} missing report findings (floor->45 if it was unset)`);
+  }
 }
 
 async function loadWeights() {

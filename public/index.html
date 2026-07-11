@@ -788,7 +788,12 @@ async function loadAnalytics(){
         const qv = r.quality_verdict && r.quality_verdict !== 'REJECT'
           ? `<span style="color:${r.quality_verdict==='ELITE'?'var(--amber)':r.quality_verdict==='GOOD'?'var(--up)':'var(--dim)'};font-size:10px" title="independent record: ${r.round_trips||0} round-trips, ${Math.round((r.win_rate||0)*100)}% win rate">${esc(r.quality_verdict)} ${Math.round((r.win_rate||0)*100)}%</span>` : '';
         const cob = r.discovered_from === 'cobuyer_expansion' ? '<span style="color:var(--dim);font-size:9px" title="found by co-buyer expansion, not from our own winners">↗co-buyer</span>' : '';
-        return `<div class="wal">${elite ? '<span style="color:var(--amber);font-family:Archivo;font-weight:800;font-size:9px;letter-spacing:.12em">◆ ELITE</span>' : ''}<span class="wn">${r.winners_hit}× winners</span><span class="ad">${short}</span>${qv}${cob}<span class="ty">${rate}</span><a href="https://solscan.io/account/${r.wallet}" target="_blank" rel="noopener">solscan</a><span class="st ${r.active?'on':'off'}">${r.active?'TRACKING':'watching'}</span></div>`;
+        const hrs = r.hours_since_active;
+        const act = hrs == null ? '<span style="color:var(--faint);font-size:9px">no activity logged</span>'
+          : hrs < 1 ? '<span style="color:var(--up);font-size:9px;font-weight:700">● ACTIVE NOW</span>'
+          : hrs < 24 ? `<span style="color:var(--up);font-size:9px">active ${Math.round(hrs)}h ago</span>`
+          : `<span style="color:var(--faint);font-size:9px">idle ${Math.round(hrs/24)}d</span>`;
+        return `<div class="wal" style="${hrs!=null&&hrs<24?'':'opacity:.55'}">${elite ? '<span style="color:var(--amber);font-family:Archivo;font-weight:800;font-size:9px;letter-spacing:.12em">◆ ELITE</span>' : ''}<span class="wn">${r.winners_hit}× winners</span><span class="ad">${short}</span>${act}${qv}${cob}<span class="ty">${rate}</span><a href="https://solscan.io/account/${r.wallet}" target="_blank" rel="noopener">solscan</a><span class="st ${r.active?'on':'off'}">${r.active?'TRACKING':'watching'}</span></div>`;
       }).join('');
     }
     const tc = $('topcoins');

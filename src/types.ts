@@ -119,6 +119,7 @@ export interface AppConfig {
     quality_recheck_days: number;
     cobuyer_expansion: boolean;
     cobuyer_min_shared: number;
+    idle_deactivate_days: number;
   };
   states: {
     heating_score_min: number;

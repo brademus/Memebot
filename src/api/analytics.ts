@@ -21,6 +21,8 @@ export async function buildAnalytics(): Promise<any> {
   // how many actually 2x'd by the 4h snapshot
   const topWallets = await q(`
     SELECT w.wallet, w.winners_hit, w.active, w.quality_verdict, w.win_rate, w.round_trips, w.discovered_from,
+           w.last_active,
+           EXTRACT(EPOCH FROM (now() - w.last_active))/3600 AS hours_since_active,
            COUNT(h.ca) AS buys_tracked,
            COUNT(o.ca) FILTER (WHERE o.multiple_from_first >= 2) AS wins_2x,
            ROUND(AVG(o.multiple_from_first)::numeric, 2) AS avg_multiple
@@ -28,8 +30,10 @@ export async function buildAnalytics(): Promise<any> {
     LEFT JOIN wallet_hits h ON h.wallet = w.wallet
     LEFT JOIN outcomes o ON o.ca = h.ca AND o.snapshot_minutes = 240
     WHERE w.winners_hit > 0 OR w.discovered_from = 'cobuyer_expansion'
-    GROUP BY w.wallet, w.winners_hit, w.active, w.quality_verdict, w.win_rate, w.round_trips, w.discovered_from
-    ORDER BY w.active DESC, (w.quality_verdict='ELITE') DESC, wins_2x DESC NULLS LAST, w.winners_hit DESC
+    GROUP BY w.wallet, w.winners_hit, w.active, w.quality_verdict, w.win_rate, w.round_trips, w.discovered_from, w.last_active
+    ORDER BY
+      (w.last_active > now() - interval '24 hours') DESC,   -- ACTIVE TODAY floats to the top
+      w.active DESC, (w.quality_verdict='ELITE') DESC, wins_2x DESC NULLS LAST, w.winners_hit DESC
     LIMIT 25`);
 
   // top coins today by best realized multiple across any snapshot

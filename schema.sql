@@ -131,3 +131,8 @@ CREATE TABLE IF NOT EXISTS weight_tuning_log (
   new_weight DOUBLE PRECISION,
   evidence TEXT
 );
+
+-- wallet activity recency (added 2026-07): copy-trading needs wallets ACTIVE TODAY,
+-- not historical qualifiers sitting idle. last_active updates every time a tracked
+-- wallet's buy hits the webhook; ranking + surfacing gate on it.
+ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS last_active TIMESTAMPTZ;
