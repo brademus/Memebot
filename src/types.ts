@@ -5,6 +5,12 @@ export interface TokenRecord {
   creator: string | null;
   source: 'pumpfun' | 'dexscreener' | 'wallet' | 'momentum';
   firstSeen: number;                 // epoch ms
+  deployerRep: { cls: string; launches: number; winners: number; delta: number } | null;
+  gradAt: number | null;             // graduation timestamp (epoch ms)
+  gradPeak: number;                  // post-graduation peak price
+  gradTrough: number;                // post-graduation trough price
+  fillMinutes: number | null;        // creation -> graduation duration
+  secondWaveAt: number | null;       // second-wave lane entry stamp
   // enrichment (Dexscreener)
   priceUsd: number;
   liquidityUsd: number;
@@ -48,7 +54,7 @@ export interface TokenRecord {
   subs: { freshness: number; liquidity: number; buyPressure: number; holderGrowth: number; smartMoney: number };
   // holder proxy tracking
   uniqueBuyerSamples: number[];      // rolling buys5m samples for growth calc
-  bundle: { insiderPct: number; slot0Buyers: number; fundedSnipers: number } | null;
+  bundle: { insiderPct: number; slot0Buyers: number; fundedSnipers: number; clusterPct?: number } | null;
   aiNote: string | null;             // analyst thesis, generated once on TRIGGER
   smartHits: { wallet: string; at: number; w: number }[];   // w = confluence weight (elite wallets > 1)
   ai: { verdict: string; confidence: number; thesis: string; risks: string } | null;
@@ -88,12 +94,17 @@ export interface AppConfig {
   };
   deployer: {
     enabled: boolean;
+    rep_enabled: boolean;
+    rep_max_delta: number;
+    rep_serial_min: number;
     min_wallet_age_hours: number;
     max_prior_tokens_24h: number;
     blacklist_auto: boolean;
   };
   bundle: {
     enabled: boolean;
+    cluster_merge_enabled: boolean;
+    cluster_max_buyers: number;
     max_insider_supply_pct: number;
     max_funded_snipers: number;
     count_all_slot0_as_insider: boolean;

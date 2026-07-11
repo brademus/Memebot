@@ -108,6 +108,23 @@ export async function buildReport(days = 7): Promise<any> {
     FROM tokens t JOIN outcomes o ON o.ca = t.ca AND o.snapshot_minutes = 240
     WHERE t.gate_result = 'passed' ${win} ${extra}
     GROUP BY insider_band ORDER BY insider_band`;
+  // NEW research signals — measured on OUR outcomes before being trusted (laws).
+  const deployerRepPerformance = await q(`
+    SELECT COALESCE(deployer_rep,'unlabeled') AS rep, COUNT(*) AS n,
+           ROUND(AVG(o.multiple_from_first)::numeric, 2) AS avg_multiple,
+           ROUND((COUNT(*) FILTER (WHERE o.multiple_from_first >= 2))::numeric / NULLIF(COUNT(*),0) * 100, 1) AS pct_2x_plus
+    FROM tokens t JOIN outcomes o ON o.ca = t.ca AND o.snapshot_minutes = 240
+    WHERE t.gate_result = 'passed' ${win}
+    GROUP BY 1 ORDER BY avg_multiple DESC NULLS LAST`).catch(() => []);
+  const clusterVsRaw = await q(`
+    SELECT CASE WHEN insider_cluster_pct IS NULL THEN 'unmeasured'
+                WHEN insider_cluster_pct > insider_pct + 5 THEN 'cluster_caught_more'
+                ELSE 'cluster_matched_raw' END AS bucket,
+           COUNT(*) AS n,
+           ROUND(AVG(o.multiple_from_first)::numeric, 2) AS avg_multiple
+    FROM tokens t JOIN outcomes o ON o.ca = t.ca AND o.snapshot_minutes = 240
+    WHERE t.gate_result = 'passed' AND t.insider_pct IS NOT NULL ${win}
+    GROUP BY 1 ORDER BY 1`).catch(() => []);
   const insiderCorr = await q(insiderQ(''));
   const insiderCorr24h = await q(insiderQ(`AND t.first_seen > now() - interval '24 hours'`)).catch(() => []);
 
@@ -202,8 +219,10 @@ export async function buildReport(days = 7): Promise<any> {
     filterLearning,
     scoreCalibrationLearned: scoreCalibration_learned,
     aiConvictionScorecard,
+    deployerRepPerformance,
+    clusterVsRaw,
     insiderCorrelation: insiderCorr,
     insiderCorrelationLast24h: insiderCorr24h,
-    readme: 'Paste this whole object to Claude to tune config.yaml. triggerPerformance = did BUY calls go up. convictionPerformance = the confirmed-buy tier measured from its own entry price (must beat triggers or tighten conviction thresholds). scoreCalibration = are high scores earning their weight. aiConvictionScorecard = does the AI narrative read predict (STRONG must beat WEAK on avg_multiple or disable it). componentCalibration = WHICH components carry signal (tercile 3 must beat tercile 1 or that weight is dead/anti-signal — reweight from this). falseKills = gates rejecting winners (loosen these). insiderCorrelation = is the bundle gate threshold right (all-time — MIXES pre-fix verdicts). insiderCorrelationLast24h = verified after the 2026-07-11 pagination fix; TRUST THIS ONE for the clean-band premium. insiderCorrelationLast24h = SAME but only tokens verified after the 2026-07-11 pagination fix — TRUST THIS ONE for the clean-band premium; the all-time version mixes in pre-fix verdicts that could be falsely clean. sourcePerformance = which DISCOVERY ENGINE (pumpfun/momentum/wallet/winner_miner) finds winners — kill or boost engines from this. walletSourcePerformance = are winner-mined/co-buyer wallets actually good (avg_win_rate) or noise. funnelHealth = the seen->passed->triggered->conviction pipeline. gateKillReasons = what the gates kill most (overall, not just false-kills).',
+    readme: 'Paste this whole object to Claude to tune config.yaml. triggerPerformance = did BUY calls go up. convictionPerformance = the confirmed-buy tier measured from its own entry price (must beat triggers or tighten conviction thresholds). scoreCalibration = are high scores earning their weight. aiConvictionScorecard = does the AI narrative read predict (STRONG must beat WEAK on avg_multiple or disable it). componentCalibration = WHICH components carry signal (tercile 3 must beat tercile 1 or that weight is dead/anti-signal — reweight from this). falseKills = gates rejecting winners (loosen these). insiderCorrelation = is the bundle gate threshold right (all-time — MIXES pre-fix verdicts). insiderCorrelationLast24h = verified after the 2026-07-11 pagination fix; TRUST THIS ONE for the clean-band premium. insiderCorrelationLast24h = SAME but only tokens verified after the 2026-07-11 pagination fix — TRUST THIS ONE for the clean-band premium; the all-time version mixes in pre-fix verdicts that could be falsely clean. sourcePerformance = which DISCOVERY ENGINE (pumpfun/momentum/wallet/winner_miner) finds winners — kill or boost engines from this. walletSourcePerformance = are winner-mined/co-buyer wallets actually good (avg_win_rate) or noise. funnelHealth = the seen->passed->triggered->conviction pipeline. gateKillReasons = what the gates kill most (overall, not just false-kills). deployerRepPerformance = does our deployer reputation label (FRESH/KNOWN/SERIAL/SERIAL_DEAD) predict — FRESH must beat SERIAL or the signal is dead. clusterVsRaw = when cluster-merge caught MORE hidden supply than raw insider%, were those tokens actually worse (validates the MELT shared-funder heuristic on our outcomes).',
   };
 }

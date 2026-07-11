@@ -4,6 +4,7 @@ import { startDexscreenerPoller } from './ingest/dexscreener';
 import { startMomentumScanner } from './ingest/momentum';
 import { startSocialScanner } from './ingest/social';
 import { runGates } from './gates';
+import { deployerRep } from './gates/deployer';
 import { checkBundle } from './gates/bundle';
 import { scoreToken } from './scoring/score';
 import { updateState } from './scoring/states';
@@ -126,6 +127,7 @@ async function main() {
     const fail = await runGates(t);
     if (fail === null) {
       t.gated = true; t.state = 'WATCHING'; gateAttempts.delete(t.ca);
+      if (!t.deployerRep) deployerRep(t.creator).then(r => { if (r) t.deployerRep = r; }).catch(() => {});
       recordScan({ ca: t.ca, symbol: t.symbol, verdict: 'PASS', reason: null, at: Date.now() });
       console.log(`[gate] PASS  $${t.symbol} ${t.ca}`);
     } else if (isTerminalFail(fail) || attempts >= MAX_GATE_ATTEMPTS) {

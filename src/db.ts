@@ -33,15 +33,17 @@ export async function initDb() {
 export async function upsertToken(t: TokenRecord) {
   if (!pool) return;
   await pool.query(
-    `INSERT INTO tokens (ca, symbol, name, creator, source, first_seen, gate_result, gate_fail_reason, first_score_price, peak_score, last_state, last_score, subs, insider_pct, early_buyers)
-     VALUES ($1,$2,$3,$4,$5,to_timestamp($6/1000.0),$7,$8,$9,$10,$11,$12,$13,$14,$15::text[])
-     ON CONFLICT (ca) DO UPDATE SET gate_result=$7, gate_fail_reason=$8, first_score_price=COALESCE(tokens.first_score_price,$9), peak_score=GREATEST(tokens.peak_score,$10), last_state=$11, last_score=$12, subs=COALESCE($13, tokens.subs), insider_pct=COALESCE($14, tokens.insider_pct), early_buyers=CASE WHEN cardinality($15::text[]) > 0 THEN $15::text[] ELSE tokens.early_buyers END`,
+    `INSERT INTO tokens (ca, symbol, name, creator, source, first_seen, gate_result, gate_fail_reason, first_score_price, peak_score, last_state, last_score, subs, insider_pct, early_buyers, deployer_rep, insider_cluster_pct)
+     VALUES ($1,$2,$3,$4,$5,to_timestamp($6/1000.0),$7,$8,$9,$10,$11,$12,$13,$14,$15::text[],$16,$17)
+     ON CONFLICT (ca) DO UPDATE SET gate_result=$7, gate_fail_reason=$8, first_score_price=COALESCE(tokens.first_score_price,$9), peak_score=GREATEST(tokens.peak_score,$10), last_state=$11, last_score=$12, subs=COALESCE($13, tokens.subs), insider_pct=COALESCE($14, tokens.insider_pct), early_buyers=CASE WHEN cardinality($15::text[]) > 0 THEN $15::text[] ELSE tokens.early_buyers END, deployer_rep=COALESCE($16, tokens.deployer_rep), insider_cluster_pct=COALESCE($17, tokens.insider_cluster_pct)`,
     [t.ca, t.symbol, t.name, t.creator, t.source, t.firstSeen,
      t.gated === null ? null : t.gated ? 'passed' : 'failed',
      t.gateFailReason, t.firstScorePrice, t.peakScore, t.state, t.score,
      t.gated === true ? JSON.stringify(t.subs) : null,
      t.bundle ? t.bundle.insiderPct : null,
-     t.earlyBuyers || []]
+     t.earlyBuyers || [],
+     t.deployerRep ? t.deployerRep.cls : null,
+     t.bundle && (t.bundle as any).clusterPct != null ? (t.bundle as any).clusterPct : null]
   ).catch(e => console.error('[db] upsert', e.message));
 }
 

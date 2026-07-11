@@ -136,3 +136,10 @@ CREATE TABLE IF NOT EXISTS weight_tuning_log (
 -- not historical qualifiers sitting idle. last_active updates every time a tracked
 -- wallet's buy hits the webhook; ranking + surfacing gate on it.
 ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS last_active TIMESTAMPTZ;
+
+-- research-driven features 2026-07 (deployer reputation, cluster merge, second wave)
+CREATE INDEX IF NOT EXISTS idx_tokens_creator ON tokens(creator);
+ALTER TABLE tokens ADD COLUMN IF NOT EXISTS deployer_rep TEXT;
+ALTER TABLE tokens ADD COLUMN IF NOT EXISTS insider_cluster_pct NUMERIC;
+ALTER TABLE tokens ADD COLUMN IF NOT EXISTS secondwave_at TIMESTAMPTZ;
+ALTER TABLE tokens ADD COLUMN IF NOT EXISTS secondwave_price NUMERIC;

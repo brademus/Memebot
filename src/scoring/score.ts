@@ -149,7 +149,8 @@ export function scoreToken(t: TokenRecord): number {
   // one-shot mutation and then WIPED by the next rescore (every 5s) — the scorecard
   // was measuring a nudge that never persisted. Now the delta lives in the total.
   const aiDelta = t.aiConviction?.delta || 0;
-  const total = t.subs.freshness + t.subs.liquidity + t.subs.buyPressure + t.subs.holderGrowth + t.subs.smartMoney + devAdj + gradBonus + aiDelta - deadPenalty;
+  const repDelta = t.deployerRep?.delta || 0;   // deployer reputation, rebuild-safe (persisted on t, not one-shot)
+  const total = t.subs.freshness + t.subs.liquidity + t.subs.buyPressure + t.subs.holderGrowth + t.subs.smartMoney + devAdj + gradBonus + aiDelta + repDelta - deadPenalty;
   t.score = round1(Math.max(0, Math.min(100, total)));
   if (t.score > t.peakScore) t.peakScore = t.score;
   if (t.firstScorePrice === null && t.priceUsd > 0) t.firstScorePrice = t.priceUsd;

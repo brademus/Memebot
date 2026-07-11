@@ -30,7 +30,10 @@ traction_floor:                       # don't spend gate API calls until the coi
   pending_purge_min: 12               # nothing by now = dead mint, purged (was 45 — most deaths show in minutes)
 
 deployer:
-  enabled: true                       # requires HELIUS_API_KEY; skipped if absent
+  enabled: true
+  rep_enabled: true                   # graded reputation from OUR launch db (research: first-time 19.91% pump rate vs serial 4.16%)
+  rep_max_delta: 6                    # bounded score nudge, same ceiling as the AI read
+  rep_serial_min: 10                  # launches in our db to count as serial (research threshold is 20 lifetime; our window is shorter)                       # requires HELIUS_API_KEY; skipped if absent
   min_wallet_age_hours: 1             # fresh-funded deployer = suspicious
   max_prior_tokens_24h: 3             # serial launcher = spray-and-rug pattern
   blacklist_auto: true                # auto-blacklist deployers of rugged tokens

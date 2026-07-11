@@ -15,10 +15,24 @@ import { heliusTxs, heliusTxsToCreation } from '../helius';
 export interface BundleCheck {
   pass: boolean;
   reason: string | null;
-  stats: { insiderPct: number; slot0Buyers: number; fundedSnipers: number } | null;
+  stats: { insiderPct: number; slot0Buyers: number; fundedSnipers: number; clusterPct?: number } | null;
 }
 
 const NEUTRAL: BundleCheck = { pass: true, reason: null, stats: null };
+
+// known Solana CEX / bridge hot wallets — funding from these is NOT a cluster link
+// (thousands of unrelated users are funded from the same Binance wallet). Excluding
+// them is the crux of MELT's shared-funder heuristic. Extend as needed.
+const CEX_FUNDERS = new Set<string>([
+  '5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9',  // Binance
+  '2ojv9BAiHUrvsm9gxDe7fJSzbNZSJcxZvf8dqmWGHG8S',  // Binance 2
+  'AC5RDfQFmDS1deWZos921JfqscXdByf8BKHs5ACWjtW2',  // Bybit
+  '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM',  // (common hot wallet)
+  'H8sMJSCQxfKiFTCfDR3DUMLPwcRbM61LGFJ8N4dK3WjS',  // Coinbase
+  'GJRs4FwHtemZ5ZE9x3FNvJ8TMwitKTh21yxdRPqn7npE',  // Coinbase 2
+  '2AQdpHJ2JpcEgPiATUXjQxA8QmafFegfQwSLWSprPicm',  // Kraken
+  'FWznbcNXWQuHTawe9RxvQ2LdCENssh12dsznf4RiouN5',  // Kraken 2
+]);
 
 export async function checkBundle(t: TokenRecord): Promise<BundleCheck> {
   const c = cfg().bundle;
@@ -75,12 +89,49 @@ export async function checkBundle(t: TokenRecord): Promise<BundleCheck> {
     }
     const insiderPct = Math.min(100, (insiderTokens / c.total_supply) * 100);
 
-    t.bundle = { insiderPct: +insiderPct.toFixed(1), slot0Buyers, fundedSnipers };
+    // ===== CLUSTER MERGE (MELT shared-funding heuristic) =====
+    // Research (MELT, 41,470 tokens): the SINGLE strongest same-entity signal is a
+    // SHARED FUNDING ADDRESS excluding CEX funders — 22.57% of holders / 28.22% of
+    // supply, vs 9.16% for deployer co-funding alone. Bundlers now spread supply
+    // across 16-25 randomized wallets to look organic; those wallets are almost
+    // always funded from ONE upstream address. We trace each slot0 buyer's funder
+    // (one hop) and merge buyers sharing a non-CEX funder into a cluster. The merged
+    // cluster's supply share is the real concentration — this is what upgrades our
+    // proven "clean" edge from binary to graded. Bounded fan-out for Helius budget.
+    let clusterPct = insiderPct;
+    if (c.cluster_merge_enabled && slot0Buyers > 1 && slot0Buyers <= c.cluster_max_buyers) {
+      const funderOf = new Map<string, string>();
+      const buyerList = [...buyers.keys()];
+      for (const b of buyerList) {
+        const bt = await heliusTxs(b, 20, undefined, 'bg');
+        // earliest inbound SOL to this buyer = its funder
+        let funder: string | null = null, earliest = Infinity;
+        for (const tx of bt) {
+          for (const nt of tx.nativeTransfers || []) {
+            if (nt.toUserAccount === b && nt.fromUserAccount && (tx.timestamp || 0) < earliest
+                && !CEX_FUNDERS.has(nt.fromUserAccount)) { funder = nt.fromUserAccount; earliest = tx.timestamp || 0; }
+          }
+        }
+        if (funder) funderOf.set(b, funder);
+      }
+      // group buyers by shared funder; the largest shared-funder group's supply share
+      const byFunder = new Map<string, number>();
+      for (const [b, amt] of buyers) {
+        const f = funderOf.get(b);
+        if (f) byFunder.set(f, (byFunder.get(f) || 0) + amt);
+      }
+      const maxClusterTokens = byFunder.size ? Math.max(...byFunder.values()) : 0;
+      const sharedFunderPct = Math.min(100, (maxClusterTokens / c.total_supply) * 100);
+      clusterPct = Math.max(insiderPct, sharedFunderPct);
+    }
+
+    t.bundle = { insiderPct: +insiderPct.toFixed(1), slot0Buyers, fundedSnipers, clusterPct: +clusterPct.toFixed(1) } as any;
 
     if (fundedSnipers >= c.max_funded_snipers)
       return { pass: false, reason: `bundle_funded_snipers_${fundedSnipers}`, stats: t.bundle };
-    if (insiderPct > c.max_insider_supply_pct)
-      return { pass: false, reason: `bundle_insider_${insiderPct.toFixed(0)}pct`, stats: t.bundle };
+    // gate on the MERGED cluster concentration, not just direct deployer funding
+    if (clusterPct > c.max_insider_supply_pct)
+      return { pass: false, reason: `bundle_cluster_${clusterPct.toFixed(0)}pct`, stats: t.bundle };
     return { pass: true, reason: null, stats: t.bundle };
   } catch { return NEUTRAL; }
 }
