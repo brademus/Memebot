@@ -158,6 +158,20 @@ export async function run() {
   if (!pool) return;
   const c = cfg().calibration;
   if (!c || !c.enabled) return;
+  // RESTART DISCIPLINE (same pathology class as the filter-learner fix): this runs
+  // on boot (+4min) and every 6h — but restarts STACK boot runs. The 2026-07-11
+  // report showed 4 calibration passes in 38 minutes; each pass moves weights and
+  // the floor by learning_rate, so restart bursts converge on thin data far faster
+  // than the deliberate cadence. Persisted guard via weight_tuning_log: skip if the
+  // last real change is fresher than 5.5h (just under the 6h tick so the scheduler
+  // never blocks itself). '_seed' rows are excluded so a fresh DB still calibrates.
+  const guard = await pool.query(
+    `SELECT MAX(at) AS last FROM weight_tuning_log WHERE component <> '_seed'`).catch(() => ({ rows: [{ last: null }] as any[] }));
+  const lastChange = guard.rows[0]?.last ? new Date(guard.rows[0].last).getTime() : 0;
+  if (lastChange && Date.now() - lastChange < 5.5 * 3600_000) {
+    console.log('[scorecal] cooldown — last calibration < 5.5h ago, skipping (restart burst protection)');
+    return;
+  }
   try {
     diag.lastRun = new Date().toISOString();
     diag.lastError = null;
