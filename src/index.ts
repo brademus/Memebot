@@ -79,7 +79,7 @@ async function main() {
   const walletSurface = (ca: string) => {
     // a tracked wallet bought a token we're not watching — pull it in for gating.
     // It rides the normal pipeline from here: gates, scoring, states, smart lane.
-    const t = addToken({ ca, symbol: '?', name: '(wallet-surfaced)', creator: null, source: 'dexscreener' });
+    const t = addToken({ ca, symbol: ca.slice(0, 4) + '…', name: '(wallet-surfaced)', creator: null, source: 'dexscreener' });
     if (t) {
       subscribeToken(ca);   // curve tokens need the trade stream or they stay data-starved
       console.log(`[wallets] smart wallet surfaced new token ${ca}`);

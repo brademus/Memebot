@@ -60,7 +60,7 @@ async function scanBoosts(onFound: (ca: string) => void) {
     } else if (boost.total >= s.boost_surface_min) {
       // an unseen coin with real paid promotion is a discovery lead — pull it in,
       // it rides the full gates like anything else (paid ≠ safe).
-      const t = addToken({ ca, symbol: '?', name: '(boost-surfaced)', creator: null, source: 'momentum' });
+      const t = addToken({ ca, symbol: ca.slice(0, 4) + '…', name: '(boost-surfaced)', creator: null, source: 'momentum' });
       if (t) { t.boostAmount = boost.total; t.dex = 'raydium'; t.dexId = 'raydium'; diag.surfaced++; onFound(ca); }
     }
   }

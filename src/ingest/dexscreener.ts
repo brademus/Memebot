@@ -38,6 +38,12 @@ async function enrich(batch: TokenRecord[], onUpdated: (t: TokenRecord) => void)
         .filter(p => p.baseToken?.address === t.ca && p.chainId === 'solana')
         .sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
       if (!p) continue;
+      // FILL IN THE SYMBOL — tokens surfaced by wallets/momentum/boosts start as
+      // '?' and rely on enrichment for their identity. This was never being copied
+      // out of the Dexscreener response, so every surfaced coin showed as $? on the
+      // dashboard forever. Adopt the real symbol/name the moment Dexscreener has it.
+      if ((t.symbol === '?' || !t.symbol || t.symbol.endsWith('…')) && p.baseToken?.symbol) t.symbol = p.baseToken.symbol;
+      if ((!t.name || t.name.startsWith('(')) && p.baseToken?.name) t.name = p.baseToken.name;
       // only overwrite if Dexscreener has real numbers; else keep curve-seeded values
       const dexLiq = p.liquidity?.usd || 0;
       if (dexLiq > 0) t.liquidityUsd = dexLiq;
