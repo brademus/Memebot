@@ -715,6 +715,7 @@ const SOCKET_REQS = [
 function bbCard(b){
   const tag = b.lane === 'smart' ? '<span class="lane-tag">◆ SMART MONEY LANE</span>'
     : b.lane === 'pregrad' ? '<span class="lane-tag" style="color:var(--amber)">🎓 PRE-GRADUATION LANE</span>'
+    : b.lane === 'secondwave' ? '<span class="lane-tag" style="color:var(--amber)">🌊 SECOND-WAVE LANE</span>'
     : '';
   return `
       <div class="bb">
@@ -733,8 +734,9 @@ async function loadBestBuys(){
     const organic = buys.filter(b => b.lane === 'organic');
     const smart = buys.find(b => b.lane === 'smart');
     const pregrad = buys.find(b => b.lane === 'pregrad');
+    const secondwave = buys.find(b => b.lane === 'secondwave');
     $('bbnote').textContent =
-      `${organic.length} of ${BB_SLOTS} slots earned · smart lane ${smart ? 'FILLED' : 'open'} · pre-grad ${pregrad ? 'FILLED' : 'open'} · ${d.watching||0} watched`;
+      `${organic.length} of ${BB_SLOTS} slots earned · smart lane ${smart ? 'FILLED' : 'open'} · pre-grad ${pregrad ? 'FILLED' : 'open'} · 2nd-wave ${secondwave ? 'FILLED' : 'open'} · ${d.watching||0} watched`;
     let html = organic.map(bbCard).join('');
     for (let i = organic.length; i < BB_SLOTS; i++) {
       html += `<div class="bb socket"><div class="eyebrow">Slot open</div><p>${SOCKET_REQS[i] || SOCKET_REQS[2]}</p></div>`;
@@ -743,6 +745,8 @@ async function loadBestBuys(){
       : `<div class="bb socket"><div class="eyebrow" style="color:var(--amber)">◆ Smart money lane</div><p>fills when 2+ proven-winner wallets buy the same fresh coin — gates and insider checks still apply</p></div>`;
     html += pregrad ? bbCard(pregrad)
       : `<div class="bb socket"><div class="eyebrow" style="color:var(--amber)">🎓 Pre-graduation lane</div><p>fills when a coin hits 80%+ of the bonding curve with active inflow — catch the run into graduation, not the retrace after</p></div>`;
+    html += secondwave ? bbCard(secondwave)
+      : `<div class="bb socket"><div class="eyebrow" style="color:var(--amber)">🌊 Second-wave lane</div><p>fills on a post-graduation retrace of a structurally-clean token (moderate fill, low cluster concentration, smart-wallet confirmed) — buys the dip after graduation, not the top</p></div>`;
     el.innerHTML = html;
   } catch (e) {
     $('bblist').innerHTML = '<div class="bb socket" style="border-color:var(--down)"><p>best-buys fetch failed</p></div>';

@@ -24,7 +24,7 @@ function smartStats(t: TokenRecord, bb: ReturnType<typeof cfg>['bestbuys']) {
   return weightedSmartHits(t.smartHits, bb.smart_lane_window_min * 60_000);
 }
 
-interface Slot { ca: string; enteredAt: number; peakScore: number; lane: 'organic' | 'smart' | 'pregrad' }
+interface Slot { ca: string; enteredAt: number; peakScore: number; lane: 'organic' | 'smart' | 'pregrad' | 'secondwave' }
 const slots: Slot[] = [];
 const droppedAt = new Map<string, number>();   // ca -> when dropped (re-entry cooldown)
 
@@ -60,6 +60,8 @@ export function currentBestBuys() {
       else if (slot.lane === 'smart' && smartCount(t, bb) === 0) dropReason = 'smart wallets exited window';
       else if (slot.lane === 'pregrad' && t.dex !== 'pumpfun') dropReason = 'graduated — catalyst played out';
       else if (slot.lane === 'pregrad' && t.peakCurveSol > 34 && t.curveSol < t.peakCurveSol * 0.85) dropReason = 'curve reversed before graduation';
+      else if (slot.lane === 'secondwave' && t.priceUsd < t.gradPeak * bb.secondwave_max_retrace) dropReason = 'dumped through the floor — thesis broke';
+      else if (slot.lane === 'secondwave' && t.priceUsd >= t.gradPeak * 1.5) dropReason = 'recovered 1.5x — second wave played out';
       else if (t.devBuyPct > bb.max_dev_pct) dropReason = 'dev bag grew';
       else if (t.dex === 'pumpfun' && t.earlyBuyers.length >= 5
                && (1 - t.earlyExited.length / t.earlyBuyers.length) < bb.min_retention)
@@ -176,6 +178,36 @@ export function currentBestBuys() {
     }
   }
 
+  // ---- 2d. SECOND-WAVE LANE: the research's answer to why momentum failed.
+  // Momentum-chasing (24h-trending strength) measured 0.03x — you buy the top. The
+  // higher-probability entry is the post-graduation RETRACE of a STRUCTURALLY CLEAN
+  // token: graduated, moderate fill (not a <30min coordinated sprint), pulled back
+  // from post-grad peak, low cluster-merged concentration, deployer rep not-bad,
+  // smart-wallet confirmed. Captures the post-grad 2-5x without launch-snipe risk.
+  if (bb.secondwave_lane && !slots.some(s => s.lane === 'secondwave')) {
+    const cand = activeTokens()
+      .filter(t => !inSlots.has(t.ca))
+      .filter(t => (droppedAt.get(t.ca) || 0) < now - cooldownMs)
+      .filter(t => t.gated === true && !t.insiderKilled)
+      .filter(t => !!t.gradAt && t.dex === 'pumpswap')
+      .filter(t => now - (t.gradAt || 0) < bb.secondwave_max_age_min * 60_000)
+      .filter(t => (t.fillMinutes ?? 0) >= bb.secondwave_min_fill_min)
+      .filter(t => t.gradPeak > 0 && t.priceUsd > 0)
+      .filter(t => t.priceUsd <= t.gradPeak * (1 - bb.secondwave_min_retrace))
+      .filter(t => t.priceUsd >= t.gradPeak * bb.secondwave_max_retrace)
+      .filter(t => !t.bundle || (((t.bundle as any).clusterPct ?? t.bundle.insiderPct) <= bb.max_cluster_pct))
+      .filter(t => (t.deployerRep?.cls ?? 'KNOWN') !== 'SERIAL_DEAD')
+      .filter(t => smartCount(t, bb) >= 1)
+      .filter(t => !['DYING', 'DEAD'].includes(t.state))
+      .map(t => ({ t, retrace: 1 - t.priceUsd / t.gradPeak }))
+      .sort((a, b) => b.retrace - a.retrace);
+    if (cand.length) {
+      const { t } = cand[0];
+      t.secondWaveAt = now;
+      slots.push({ ca: t.ca, enteredAt: now, peakScore: t.score, lane: 'secondwave' });
+    }
+  }
+
   return slots
     .slice()
     .sort((a, b) => a.enteredAt - b.enteredAt)
@@ -190,6 +222,8 @@ export function currentBestBuys() {
           ? `${st.elite ? st.elite + ' ELITE + ' : ''}${st.wallets - st.elite} proven-winner wallet${st.wallets !== 1 ? 's' : ''} bought this within ${bb.smart_lane_window_min}m (confluence weight ${st.weight}). ` + (r.label || '')
           : s.lane === 'pregrad'
           ? `${Math.round((t.curveSol / GRADUATION_SOL) * 100)}% to graduation with active inflow — catch the run in, not the retrace after. ` + (r.label || '')
+          : s.lane === 'secondwave'
+          ? `post-graduation retrace ${Math.round((1 - t.priceUsd / t.gradPeak) * 100)}% off peak · ${t.fillMinutes}m fill · clean structure — second-wave entry, not the top. ` + (r.label || '')
           : r.label,
         confidence: r.confidence, score: t.score, peakScore: s.peakScore,
         heldMin: Math.round((now - s.enteredAt) / 60000),

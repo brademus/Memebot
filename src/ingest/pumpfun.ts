@@ -157,7 +157,11 @@ function connect(onNew: (ca: string) => void) {
         if (t) {
           t.dex = 'pumpswap'; t.dexId = 'pumpswap';
           t.playType = 'GRADUATION';
-          console.log(`[pumpfun] 🎓 GRADUATED $${t.symbol} -> PumpSwap`);
+          t.gradAt = Date.now();
+          t.gradPeak = t.priceUsd || 0;
+          t.gradTrough = t.priceUsd || 0;
+          if (t.firstSeen) t.fillMinutes = Math.round((Date.now() - t.firstSeen) / 60_000);
+          console.log(`[pumpfun] 🎓 GRADUATED $${t.symbol} -> PumpSwap (fill ${t.fillMinutes}m)`);
         }
       }
     } catch { /* ignore malformed frames */ }

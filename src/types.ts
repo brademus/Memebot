@@ -170,6 +170,12 @@ export interface AppConfig {
     smart_lane_min_wallets: number;
     pregrad_lane: boolean;
     pregrad_min_pct: number;
+    secondwave_lane: boolean;
+    secondwave_max_age_min: number;
+    secondwave_min_fill_min: number;
+    secondwave_min_retrace: number;
+    secondwave_max_retrace: number;
+    max_cluster_pct: number;
     smart_lane_window_min: number;
     smart_lane_min_score: number;
     smart_lane_min_age_min: number;

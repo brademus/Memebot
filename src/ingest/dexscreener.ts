@@ -48,7 +48,14 @@ async function enrich(batch: TokenRecord[], onUpdated: (t: TokenRecord) => void)
       const dexLiq = p.liquidity?.usd || 0;
       if (dexLiq > 0) t.liquidityUsd = dexLiq;
       const dexPrice = parseFloat(p.priceUsd || '0');
-      if (dexPrice > 0) t.priceUsd = dexPrice;
+      if (dexPrice > 0) {
+        t.priceUsd = dexPrice;
+        // post-graduation peak/trough for the second-wave retrace calc
+        if (t.gradAt) {
+          if (dexPrice > t.gradPeak) t.gradPeak = dexPrice;
+          if (t.gradTrough === 0 || dexPrice < t.gradTrough) t.gradTrough = dexPrice;
+        }
+      }
       const dexMcap = p.fdv || p.marketCap || 0;
       if (dexMcap > 0) t.mcapUsd = dexMcap;
       // graduation detection: a token gets a REAL AMM pair only after it leaves

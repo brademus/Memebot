@@ -193,3 +193,9 @@ social:                               # free social edge — Dexscreener boosts 
   boost_surface_min: 30               # an UNSEEN coin needs this much paid-boost total to be pulled in
   pregrad_lane: true                  # dedicated Best Buys socket for coins about to graduate (catch the run IN, not the post-grad retrace)
   pregrad_min_pct: 0.8                # coin must be >= this fraction of the graduation curve (0.8 = 80%)
+  secondwave_lane: true               # post-graduation retrace entry on structurally-clean tokens (research: replaces momentum-chasing, which measured 0.03x)
+  secondwave_max_age_min: 180         # only consider tokens graduated within this many minutes
+  secondwave_min_fill_min: 30         # fill must have taken >= 30min (a <30min sprint = coordinated push that dumps on the second wave)
+  secondwave_min_retrace: 0.25        # must have pulled back >= 25% from post-grad peak (buy the dip, not the top)
+  secondwave_max_retrace: 0.4         # but price must stay >= 40% of peak (below = it's dumping, thesis broke)
+  max_cluster_pct: 25                 # second-wave requires cluster-merged concentration <= this
