@@ -26,7 +26,7 @@ export async function checkBundle(t: TokenRecord): Promise<BundleCheck> {
 
   try {
     // 1. earliest txs on the mint (fresh tokens: 100 covers back to creation)
-    const mintTxs = await heliusTxs(t.ca);
+    const mintTxs = await heliusTxs(t.ca, 100, undefined, 'bg');
     if (!mintTxs.length) return NEUTRAL;
 
     const minSlot = Math.min(...mintTxs.map((x: any) => x.slot));
@@ -48,7 +48,7 @@ export async function checkBundle(t: TokenRecord): Promise<BundleCheck> {
     // 2. deployer's SOL-transfer counterparties (one hop)
     let linked = new Set<string>();
     if (deployer) {
-      const depTxs = await heliusTxs(deployer);
+      const depTxs = await heliusTxs(deployer, 100, undefined, 'bg');
       for (const tx of depTxs) {
         for (const nt of tx.nativeTransfers || []) {
           if (nt.fromUserAccount === deployer && nt.toUserAccount) linked.add(nt.toUserAccount);
