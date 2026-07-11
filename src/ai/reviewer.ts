@@ -31,13 +31,13 @@ Write a tuning review with exactly these sections:
 2. NOT WORKING: where the algorithm is losing (false kills, miscalibrated score bands, bad thresholds — cite numbers).
 3. CHANGES: specific config.yaml edits, as "key: current -> proposed", each with one line of reasoning grounded in the data. If autotune's weights disagree with your read, say which to trust and why.
 4. NOT ENOUGH DATA: which conclusions can't be drawn yet and what sample size is needed.
-Be blunt and numeric. If the dataset is too small for any confident change, say so plainly and recommend waiting — do not invent changes to seem useful.
+Be blunt and numeric. SYNTHESIZE — do not recite every tercile/row from the report back to me; cite only the specific numbers that justify a conclusion. If the dataset is too small for any confident change, say so plainly and recommend waiting — do not invent changes to seem useful. Keep the whole review under ~500 words.
 
 (A) REPORT: ${JSON.stringify(basis.report)}
 (B) CONFIG: ${basis.currentConfig}
 (C) AUTOTUNE: ${JSON.stringify(basis.autotuneSuggestion)}`;
 
-  const review = await gemini(prompt, cfg().ai.review_model, 1500);
+  const review = await gemini(prompt, cfg().ai.review_model, 4000);
   if (review && pool) {
     await pool.query(
       `CREATE TABLE IF NOT EXISTS ai_reviews (at TIMESTAMPTZ DEFAULT now(), review TEXT)`).catch(() => {});

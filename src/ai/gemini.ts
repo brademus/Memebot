@@ -18,6 +18,12 @@ export async function gemini(prompt: string, model: string, maxTokens = 300): Pr
   const tries = [model, ...FALLBACKS.filter(m => m !== model)];
   let lastStatus = '';
   for (const m of tries) {
+    // thinking config is model-family-specific: Gemini 3.x uses thinkingLevel,
+    // 2.5 uses thinkingBudget, 2.0 doesn't think. Sending the wrong one 400s, so
+    // pick per-model (and omit entirely for anything we don't recognize).
+    const genConfig: any = { maxOutputTokens: maxTokens, temperature: 0.4 };
+    if (/gemini-3/.test(m)) genConfig.thinkingConfig = { thinkingLevel: 'low' };
+    else if (/gemini-2\.5/.test(m)) genConfig.thinkingConfig = { thinkingBudget: 512 };
     try {
       const res = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${env.GEMINI_API_KEY}`,
@@ -26,7 +32,7 @@ export async function gemini(prompt: string, model: string, maxTokens = 300): Pr
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { maxOutputTokens: maxTokens, temperature: 0.4 },
+            generationConfig: genConfig,
           }),
         });
       if (res.ok) {

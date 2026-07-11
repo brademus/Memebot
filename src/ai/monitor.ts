@@ -27,7 +27,7 @@ Be concrete and quantitative. This is a trading system with real money — flag 
 LIVE SNAPSHOT:
 ${JSON.stringify(snapshot, null, 2)}`;
 
-  const read = await gemini(prompt, cfg().ai.review_model || 'gemini-3.5-flash', 900);
+  const read = await gemini(prompt, cfg().ai.review_model || 'gemini-3.5-flash', 2500);
   if (!read) return { read: null, note: 'Gemini call failed — check AI status' };
   return { read };
 }
