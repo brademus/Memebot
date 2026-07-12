@@ -1,5 +1,6 @@
 import { pool } from '../db';
 import { activeTokens } from '../store';
+import { analyzeWalletToday } from '../wallets/quality';
 
 // Dashboard analytics. All from OUR data — wallets we discovered, tokens we scanned,
 // outcomes we measured. No external leaderboards.
@@ -13,12 +14,13 @@ export async function buildAnalytics(): Promise<any> {
       liq: Math.round(t.liquidityUsd),
     }));
 
-  if (!pool) return { mostActiveNow, topWallets: [], topCoinsToday: [], todayStats: null, note: 'attach Postgres for wallet + outcome analytics' };
+  if (!pool) return {
+    mostActiveNow, topWallets: [], topCoinsToday: [], todayStats: null,
+    activeWallets: 0, note: 'attach Postgres for wallet + outcome analytics',
+  };
 
   const q = async (sql: string) => (await pool!.query(sql)).rows;
 
-  // top wallets by measured performance: of the tokens each tracked wallet bought,
-  // how many actually 2x'd by the 4h snapshot
   const topWallets = await q(`
     SELECT w.wallet, w.winners_hit, w.active, w.quality_verdict, w.win_rate, w.round_trips, w.discovered_from,
            w.last_active,
@@ -32,11 +34,18 @@ export async function buildAnalytics(): Promise<any> {
     WHERE w.winners_hit > 0 OR w.discovered_from = 'cobuyer_expansion'
     GROUP BY w.wallet, w.winners_hit, w.active, w.quality_verdict, w.win_rate, w.round_trips, w.discovered_from, w.last_active
     ORDER BY
-      (w.last_active > now() - interval '24 hours') DESC,   -- ACTIVE TODAY floats to the top
+      (w.last_active > now() - interval '24 hours') DESC,
       w.active DESC, (w.quality_verdict='ELITE') DESC, wins_2x DESC NULLS LAST, w.winners_hit DESC
     LIMIT 25`);
 
-  // top coins today by best realized multiple across any snapshot
+  // Enrich only the most relevant wallets. The analyzer is cached for three minutes,
+  // runs in Helius' background lane, and never blocks live scanner traffic.
+  const enrichedWallets = await Promise.all(topWallets.map(async (wallet: any, index: number) => {
+    if (index >= 10 || !wallet.active) return { ...wallet, day: null };
+    try { return { ...wallet, day: await analyzeWalletToday(wallet.wallet) }; }
+    catch { return { ...wallet, day: null }; }
+  }));
+
   const topCoinsToday = await q(`
     SELECT t.ca, t.symbol, t.gate_result, t.last_state,
            ROUND(MAX(o.multiple_from_first)::numeric, 2) AS best_multiple
@@ -49,8 +58,21 @@ export async function buildAnalytics(): Promise<any> {
   const todayStats = (await q(`
     SELECT COUNT(*) AS seen,
            COUNT(*) FILTER (WHERE gate_result = 'passed') AS passed,
-           COUNT(*) FILTER (WHERE triggered_at IS NOT NULL) AS triggered
+           COUNT(*) FILTER (WHERE triggered_at IS NOT NULL) AS triggered,
+           COUNT(*) FILTER (WHERE conviction_at IS NOT NULL) AS convictions
     FROM tokens WHERE first_seen > now() - interval '24 hours'`))[0];
 
-  return { mostActiveNow, topWallets, topCoinsToday, todayStats };
+  const walletSummary = (await q(`
+    SELECT COUNT(*) FILTER (WHERE active)::int AS active,
+           COUNT(*) FILTER (WHERE last_active > now() - interval '24 hours')::int AS active_today
+    FROM smart_wallets`))[0];
+
+  return {
+    mostActiveNow,
+    topWallets: enrichedWallets,
+    topCoinsToday,
+    todayStats,
+    activeWallets: Number(walletSummary?.active || 0),
+    walletsActiveToday: Number(walletSummary?.active_today || 0),
+  };
 }
