@@ -59,7 +59,7 @@ async function main() {
   // pump.fun stream connects, so the socket's open-handler resubscribes the
   // restored curve tokens automatically.
   try {
-    const rows = await loadHydratable(Math.floor(cfg().limits.max_tracked_tokens / 2));
+    const rows = await loadHydratable(Math.min(150, Math.floor(cfg().limits.max_tracked_tokens * 0.3)));
     for (const r of rows) {
       if (hydrateToken(
         { ca: r.ca, symbol: r.symbol, name: r.name, creator: r.creator, source: r.source,

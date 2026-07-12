@@ -132,7 +132,7 @@ wallets:                              # smart-money discovery + tracking (needs 
   winner_mining_max_vet: 25           # cap how many candidate wallets we deep-vet per run (Helius budget)
 
 limits:
-  max_tracked_tokens: 400             # in-memory watchlist cap
+  max_tracked_tokens: 600             # in-memory watchlist cap (raised 400->600: hydration reserves ~150 slots for restored hot/recent tokens, fresh launches get ~450 — MORE room than pre-hydration, ~few KB per token)
   dexscreener_batch_size: 30          # max token addresses per API call
 
 conviction:                           # CONVICTION tier — the "confirmed buy" alert above TRIGGER.

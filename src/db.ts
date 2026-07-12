@@ -185,15 +185,27 @@ export async function saveRuntime(list: TokenRecord[]) {
 
 export async function loadHydratable(limit: number): Promise<any[]> {
   if (!pool) return [];
+  // SELECTIVE: the first version restored up to HALF the 400-token cap with
+  // anything gated in 48h — 200 mostly-stale zombies squatting in eviction-
+  // protected slots, crowding out fresh launches and diluting enrichment. That
+  // made the bot SLOWER at new coins, the opposite of the goal. Now: hot states
+  // (TRIGGER/EXTENDED/HEATING) always restore; WATCHING only if recent (8h);
+  // DYING never. Priority-ordered, tighter cap set by the caller.
   const r = await pool.query(
     `SELECT ca, symbol, name, creator, source,
             EXTRACT(EPOCH FROM first_seen) * 1000 AS first_seen_ms,
             early_buyers, runtime
      FROM tokens
      WHERE runtime IS NOT NULL
-       AND runtime_at > now() - interval '48 hours'
        AND gate_result = 'passed'
        AND last_state <> 'DEAD'
-     ORDER BY runtime_at DESC LIMIT $1`, [limit]).catch(() => ({ rows: [] as any[] }));
+       AND (runtime->>'state') <> 'DYING'
+       AND ((runtime->>'state') IN ('TRIGGER','EXTENDED','HEATING')
+            OR runtime_at > now() - interval '8 hours')
+       AND runtime_at > now() - interval '48 hours'
+     ORDER BY CASE (runtime->>'state')
+                WHEN 'TRIGGER' THEN 0 WHEN 'EXTENDED' THEN 1 WHEN 'HEATING' THEN 2 ELSE 3 END,
+              runtime_at DESC
+     LIMIT $1`, [limit]).catch(() => ({ rows: [] as any[] }));
   return r.rows;
 }
