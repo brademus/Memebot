@@ -10,17 +10,29 @@ export function startDexscreenerPoller(onUpdated: (t: TokenRecord) => void) {
   let tickN = 0;
   const tick = async () => {
     tickN++;
-    // Two-tier polling to spend the API budget where Dexscreener actually helps:
-    //  - every tick:   graduated/AMM tokens (Dexscreener is their only data source)
-    //  - every 3rd:    curve tokens (live data comes from the pump.fun stream; we
-    //                  only need Dexscreener to notice indexing/graduation)
+    // Three-tier polling — spend the API budget where latency actually matters:
+    //  - HOT, every tick regardless of venue: near/above the trigger floor,
+    //    HEATING/TRIGGER/EXTENDED, or in a lane (graduation play / second wave).
+    //    These are the coins "the data is too delayed" is ABOUT — previously a
+    //    curve coin sitting at the floor waited 3 ticks between refreshes, and in
+    //    LITE mode Dexscreener is its ONLY activity source.
+    //  - AMM tokens: every tick (Dexscreener is their only data source)
+    //  - cold curve tokens: every 3rd tick (stream feeds them; we only need
+    //    Dexscreener to notice indexing/graduation)
+    const floor = cfg().states.trigger_score_min;
+    const hot = (t: any) =>
+      t.score >= floor - 10 || ['HEATING', 'TRIGGER', 'EXTENDED'].includes(t.state)
+      || t.playType === 'GRADUATION' || !!t.secondWaveAt;
     const tracked = allTokens().filter(t =>
       t.state !== 'DEAD' &&
-      (t.dex !== 'pumpfun' || tickN % 3 === 0));
+      (hot(t) || t.dex !== 'pumpfun' || tickN % 3 === 0));
     const batchSize = cfg().limits.dexscreener_batch_size;
-    for (let i = 0; i < tracked.length; i += batchSize) {
-      await enrich(tracked.slice(i, i + batchSize), onUpdated);
-    }
+    const batches: TokenRecord[][] = [];
+    for (let i = 0; i < tracked.length; i += batchSize) batches.push(tracked.slice(i, i + batchSize));
+    // 3 batches in flight: a 500-token tick used to run ~17 SEQUENTIAL calls and
+    // stretch the 10s cadence to 15s+ — parallelism keeps cadence honest.
+    for (let i = 0; i < batches.length; i += 3)
+      await Promise.all(batches.slice(i, i + 3).map(b => enrich(b, onUpdated)));
     setTimeout(tick, cfg().polling.dexscreener_interval_ms);
   };
   tick();

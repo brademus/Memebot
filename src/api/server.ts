@@ -19,6 +19,7 @@ import { prefilterDiag } from '../gates/prefilter';
 import { learningDiag } from '../tuning/filtertune';
 import { scorecalDiag } from '../tuning/scorecal';
 import { winnerMinerDiag } from '../wallets/winnerminer';
+import { triggerAutopsy } from '../scoring/states';
 import { momentumDiag } from '../ingest/momentum';
 import { socialDiag } from '../ingest/social';
 import { heliusHealth } from '../helius';
@@ -142,6 +143,7 @@ export function startServer() {
           winnerMiner: winnerMinerDiag(),
           discovery: discoveryDiag ? discoveryDiag() : undefined,
           gemini: { configured: geminiConfigured(), lastError: geminiLastError() },
+          triggerAutopsy: triggerAutopsy(),
           streamMode: getStreamMode(),
         },
       };

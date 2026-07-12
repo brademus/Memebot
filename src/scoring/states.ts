@@ -2,6 +2,19 @@ import { cfg } from '../config';
 import { TokenRecord } from '../types';
 import { getStreamMode } from '../ingest/pumpfun';
 import { passesPersistence } from './persistence';
+
+// TRIGGER AUTOPSY — turns "why are there no triggers" into named numbers. Every
+// evaluation where a gated coin scores ABOVE the floor but does NOT trigger is
+// attributed to the condition that blocked it (rolling 60min window). If coins
+// never even reach the floor, aboveFloor stays 0 and the problem is the SCORE;
+// if aboveFloor is high and one blocker dominates, THAT condition is the choke.
+const autopsy = { since: Date.now(), aboveFloor: 0, buy_ratio: 0, evidence: 0, persistence: 0, dying: 0 };
+const autopsyCoins = new Set<string>();
+export function triggerAutopsy() {
+  return { windowMin: Math.round((Date.now() - autopsy.since) / 60_000), coins: autopsyCoins.size,
+           checks: autopsy.aboveFloor, buy_ratio: autopsy.buy_ratio, evidence: autopsy.evidence,
+           persistence: autopsy.persistence, dying: autopsy.dying };
+}
 import { CURVE_FILLED_SOL } from '../constants';
 
 // State machine. Returns the new state if it changed, else null.
@@ -65,6 +78,22 @@ export function updateState(t: TokenRecord): TokenRecord['state'] | null {
     next = 'HEATING';                                  // open the chart
   } else {
     next = 'WATCHING';
+  }
+
+  // autopsy: gated, above floor, didn't trigger — who blocked it?
+  if (t.gated === true && t.score >= s.trigger_score_min && next !== 'TRIGGER'
+      && prev !== 'TRIGGER' && prev !== 'EXTENDED') {
+    if (Date.now() - autopsy.since > 3600_000) {
+      autopsy.since = Date.now(); autopsy.aboveFloor = autopsy.buy_ratio = autopsy.evidence = autopsy.persistence = autopsy.dying = 0;
+      autopsyCoins.clear();
+    }
+    autopsy.aboveFloor++; autopsyCoins.add(t.ca);
+    if (next === 'DYING') autopsy.dying++;
+    else {
+      if (buyRatio < s.trigger_buy_ratio_min) autopsy.buy_ratio++;
+      if (!evidenceFloor(t, s)) autopsy.evidence++;
+      if (!(passesPersistence(t) || earlyRunner(t, s))) autopsy.persistence++;
+    }
   }
 
   if (next !== prev) {
