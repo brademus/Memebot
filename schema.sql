@@ -36,9 +36,9 @@ CREATE TABLE IF NOT EXISTS deployers (
   last_seen TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS smart_wallets (       -- Phase 3, table ready now
+CREATE TABLE IF NOT EXISTS smart_wallets (
   wallet TEXT PRIMARY KEY,
-  type TEXT,                          -- sniper | whale_accumulator | kol_linked
+  type TEXT,
   win_rate_30d NUMERIC,
   tokens_traded INT,
   last_validated TIMESTAMPTZ,
@@ -48,36 +48,25 @@ CREATE TABLE IF NOT EXISTS smart_wallets (       -- Phase 3, table ready now
 CREATE INDEX IF NOT EXISTS idx_tokens_first_seen ON tokens(first_seen DESC);
 CREATE INDEX IF NOT EXISTS idx_outcomes_multiple ON outcomes(multiple_from_first DESC);
 
--- v2 additions (idempotent)
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS triggered_at TIMESTAMPTZ;
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS trigger_price NUMERIC;
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS insider_pct NUMERIC;
-
--- wallet tracking additions (idempotent)
 ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS winners_hit INT DEFAULT 0;
 ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS discovered_from TEXT;
 ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS first_discovered TIMESTAMPTZ DEFAULT now();
-CREATE TABLE IF NOT EXISTS wallet_hits (      -- live: a tracked wallet bought a token we're watching
+
+CREATE TABLE IF NOT EXISTS wallet_hits (
   ca TEXT, wallet TEXT, at TIMESTAMPTZ DEFAULT now(),
   PRIMARY KEY (ca, wallet)
 );
-
--- wallet discovery v2 (idempotent)
 CREATE TABLE IF NOT EXISTS wallet_winners (
   wallet TEXT, ca TEXT, PRIMARY KEY (wallet, ca)
 );
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS mined_at TIMESTAMPTZ;
-
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS early_buyers TEXT[] DEFAULT '{}';
-
--- CONVICTION tier (added 2026-07): measured separately from triggers so the
--- weekly review can compare precision between the two alert tiers.
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS conviction_at TIMESTAMPTZ;
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS conviction_price DOUBLE PRECISION;
 
--- FILTER LEARNING (added 2026-07): the bot's learned threshold adjustments.
--- Overrides survive redeploys (Railway resets config.yaml); the log is the
--- audit trail every change must leave.
 CREATE TABLE IF NOT EXISTS filter_overrides (
   path TEXT PRIMARY KEY,
   value DOUBLE PRECISION NOT NULL,
@@ -93,8 +82,6 @@ CREATE TABLE IF NOT EXISTS filter_tuning_log (
   evidence TEXT
 );
 
--- AI narrative read (added 2026-07): logged per token so the weekly report can
--- PROVE whether the AI's verdict correlates with outcomes. If it doesn't, disable it.
 CREATE TABLE IF NOT EXISTS ai_conviction (
   ca TEXT PRIMARY KEY,
   symbol TEXT,
@@ -104,20 +91,13 @@ CREATE TABLE IF NOT EXISTS ai_conviction (
   at TIMESTAMPTZ DEFAULT now()
 );
 
--- wallet quality (added 2026-07): independent P&L judgment, breaks the circular
--- "only wallets from our own winners" limitation.
 ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS quality_verdict TEXT;
 ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS win_rate NUMERIC;
 ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS round_trips INT;
 ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS quality_checked_at TIMESTAMPTZ;
-
--- SCORING CALIBRATION (added 2026-07): the closed loop that makes the score
--- fit outcomes over time. early_subs = sub-scores frozen at a fixed young age,
--- so we learn what predicted winners BEFORE they ran (the live subs column gets
--- overwritten as a token matures and is useless for prediction). learned_weights
--- persists the fitted weights across redeploys (Railway wipes config.yaml).
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS early_subs JSONB;
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS early_subs_at TIMESTAMPTZ;
+
 CREATE TABLE IF NOT EXISTS learned_weights (
   component TEXT PRIMARY KEY,
   weight DOUBLE PRECISION NOT NULL,
@@ -132,46 +112,43 @@ CREATE TABLE IF NOT EXISTS weight_tuning_log (
   evidence TEXT
 );
 
--- wallet activity recency (added 2026-07): copy-trading needs wallets ACTIVE TODAY,
--- not historical qualifiers sitting idle. last_active updates every time a tracked
--- wallet's buy hits the webhook; ranking + surfacing gate on it.
 ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS last_active TIMESTAMPTZ;
-
--- research-driven features 2026-07 (deployer reputation, cluster merge, second wave)
 CREATE INDEX IF NOT EXISTS idx_tokens_creator ON tokens(creator);
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS deployer_rep TEXT;
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS insider_cluster_pct NUMERIC;
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS secondwave_at TIMESTAMPTZ;
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS secondwave_price NUMERIC;
-
--- warm-boot hydration (2026-07): deploys/restarts no longer reset the watchlist.
--- runtime holds a JSON snapshot of live token state, flushed every 45s and on
--- SIGTERM (Railway sends it before every redeploy); boot rehydrates from it.
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS runtime JSONB;
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS runtime_at TIMESTAMPTZ;
 
--- paper trading (2026-07): every SUGGESTION (trigger, conviction, or any Best Buys
--- lane entry) is recorded at the instant it's made with the entry price, then P&L
--- tracked over time. This measures ENTRY TIMING per signal type — separate from the
--- outcome-from-first-score logging, which can't tell you if a pick's *timing* was
--- good. Idealized (no slippage/gas): a timing benchmark, not real P&L.
+-- Entry-timing benchmark. Each alert lane is scored from its own suggestion price.
 CREATE TABLE IF NOT EXISTS paper_trades (
   id BIGSERIAL PRIMARY KEY,
   ca TEXT NOT NULL,
   symbol TEXT,
-  signal TEXT NOT NULL,               -- 'trigger' | 'conviction' | 'bb_smart' | 'bb_organic' | 'bb_pregrad' | 'bb_secondwave'
+  signal TEXT NOT NULL,
   entry_price NUMERIC NOT NULL,
   entry_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   entry_score NUMERIC,
-  peak_price NUMERIC,                 -- best price seen since entry (paper high-water mark)
+  peak_price NUMERIC,
   peak_at TIMESTAMPTZ,
   last_price NUMERIC,
   last_at TIMESTAMPTZ,
-  exit_price NUMERIC,                 -- set when the position is closed (signal-specific exit)
+  exit_price NUMERIC,
   exit_at TIMESTAMPTZ,
   exit_reason TEXT,
   closed BOOLEAN NOT NULL DEFAULT false,
-  UNIQUE (ca, signal)                 -- one open paper position per coin per signal type
+  target_multiple NUMERIC NOT NULL DEFAULT 3,
+  target_hit_at TIMESTAMPTZ,
+  seconds_to_target INTEGER,
+  UNIQUE (ca, signal)
 );
+
+-- Existing installations receive the new 3x measurement fields idempotently.
+ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS target_multiple NUMERIC NOT NULL DEFAULT 3;
+ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS target_hit_at TIMESTAMPTZ;
+ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS seconds_to_target INTEGER;
+
 CREATE INDEX IF NOT EXISTS idx_paper_open ON paper_trades(closed) WHERE closed = false;
 CREATE INDEX IF NOT EXISTS idx_paper_signal ON paper_trades(signal);
+CREATE INDEX IF NOT EXISTS idx_paper_target_hit ON paper_trades(target_hit_at) WHERE target_hit_at IS NOT NULL;
