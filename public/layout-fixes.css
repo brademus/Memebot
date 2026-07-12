@@ -1,0 +1,25 @@
+.tile {
+  position: relative;
+}
+
+.hero,
+.title {
+  display: block;
+}
+
+.hero small {
+  max-width: 720px;
+  margin-top: 18px;
+}
+
+.title small {
+  max-width: 760px;
+  margin-top: 14px;
+}
+
+@media (max-width: 1050px) {
+  .hero,
+  .title {
+    display: block;
+  }
+}
