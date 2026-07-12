@@ -149,3 +149,29 @@ ALTER TABLE tokens ADD COLUMN IF NOT EXISTS secondwave_price NUMERIC;
 -- SIGTERM (Railway sends it before every redeploy); boot rehydrates from it.
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS runtime JSONB;
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS runtime_at TIMESTAMPTZ;
+
+-- paper trading (2026-07): every SUGGESTION (trigger, conviction, or any Best Buys
+-- lane entry) is recorded at the instant it's made with the entry price, then P&L
+-- tracked over time. This measures ENTRY TIMING per signal type — separate from the
+-- outcome-from-first-score logging, which can't tell you if a pick's *timing* was
+-- good. Idealized (no slippage/gas): a timing benchmark, not real P&L.
+CREATE TABLE IF NOT EXISTS paper_trades (
+  id BIGSERIAL PRIMARY KEY,
+  ca TEXT NOT NULL,
+  symbol TEXT,
+  signal TEXT NOT NULL,               -- 'trigger' | 'conviction' | 'bb_smart' | 'bb_organic' | 'bb_pregrad' | 'bb_secondwave'
+  entry_price NUMERIC NOT NULL,
+  entry_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  entry_score NUMERIC,
+  peak_price NUMERIC,                 -- best price seen since entry (paper high-water mark)
+  peak_at TIMESTAMPTZ,
+  last_price NUMERIC,
+  last_at TIMESTAMPTZ,
+  exit_price NUMERIC,                 -- set when the position is closed (signal-specific exit)
+  exit_at TIMESTAMPTZ,
+  exit_reason TEXT,
+  closed BOOLEAN NOT NULL DEFAULT false,
+  UNIQUE (ca, signal)                 -- one open paper position per coin per signal type
+);
+CREATE INDEX IF NOT EXISTS idx_paper_open ON paper_trades(closed) WHERE closed = false;
+CREATE INDEX IF NOT EXISTS idx_paper_signal ON paper_trades(signal);

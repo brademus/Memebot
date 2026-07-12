@@ -1,4 +1,5 @@
 import { initDb, upsertToken, markTrigger, markConviction, freezeEarlySubs, saveRuntime, loadHydratable } from './db';
+import { openPaper, startPaperTrader } from './paper/paper';
 import { startPumpfunMonitor, setSolPrice, unsubscribeToken, subscribeToken, resubscribeAll, startSubscriptionReconciler } from './ingest/pumpfun';
 import { startDexscreenerPoller } from './ingest/dexscreener';
 import { startMomentumScanner } from './ingest/momentum';
@@ -75,6 +76,7 @@ async function main() {
     setTimeout(() => { const n = resubscribeAll(); if (n) console.log(`[hydrate] subscribed ${n} restored token streams`); }, 8_000);
   } catch (e) { console.error('[hydrate]', (e as Error).message); }
   startSubscriptionReconciler();
+  startPaperTrader();   // paper-trade P&L: mark-to-market + exits every 60s
 
   // continuous snapshot: every gated, non-dead token flushed every 45s, plus a
   // final flush on SIGTERM (Railway sends it before every redeploy).
@@ -238,6 +240,7 @@ async function main() {
       if (changed === 'TRIGGER') {
         if (!t.triggeredAt) { t.triggeredAt = Date.now(); t.triggerPrice = t.priceUsd; }
         markTrigger(t.ca, t.priceUsd);
+        openPaper(t.ca, t.symbol, 'trigger', t.priceUsd, t.score);   // paper-buy the instant we call it
         alertTrigger(t);                        // alert fires IMMEDIATELY
         generateNote(t).catch(() => {});        // analyst note follows async, shows on dashboard
         aiConvictionRead(t).catch(() => {});    // AI narrative read -> bounded, logged score nudge
@@ -252,6 +255,7 @@ async function main() {
           t.convictionAt = Date.now();
           consumeBudget();
           markConviction(t.ca, t.priceUsd);
+          openPaper(t.ca, t.symbol, 'conviction', t.priceUsd, t.score);
           alertConviction(t, cv.confirmed);
           upsertToken(t).catch(() => {});
           console.log(`[state] 🔥 CONVICTION $${t.symbol} — ${cv.confirmed.join('; ')}`);

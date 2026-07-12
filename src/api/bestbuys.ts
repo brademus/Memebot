@@ -6,6 +6,7 @@ import { TokenRecord } from '../types';
 import { getStreamMode } from '../ingest/pumpfun';
 import { weightedSmartHits } from '../wallets/tracker';
 import { GRADUATION_SOL } from '../constants';
+import { openPaper, PaperSignal } from '../paper/paper';
 
 // STICKY BEST BUYS — a coin EARNS a slot (strict entry bar), then HOLDS it until
 // it genuinely stops looking good (hysteresis: enter at min_score, exit only below
@@ -205,6 +206,15 @@ export function currentBestBuys() {
       const { t } = cand[0];
       t.secondWaveAt = now;
       slots.push({ ca: t.ca, enteredAt: now, peakScore: t.score, lane: 'secondwave' });
+    }
+  }
+
+  // PAPER-BUY every Best Buys suggestion at the instant it appears. enteredAt===now
+  // means the slot was created THIS cycle (a fresh suggestion), so we only open once.
+  for (const s of slots) {
+    if (s.enteredAt === now) {
+      const t = getToken(s.ca);
+      if (t && t.priceUsd > 0) openPaper(t.ca, t.symbol, ('bb_' + s.lane) as PaperSignal, t.priceUsd, t.score);
     }
   }
 
