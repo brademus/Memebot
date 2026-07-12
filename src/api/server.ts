@@ -278,11 +278,36 @@ export function startServer() {
     catch (e) { res.status(500).json({ error: (e as Error).message }); }
   });
 
-  app.get('/api/stats', (_req, res) => {
+  app.get('/api/stats', async (_req, res) => {
     const all = allTokens();
+    // TRUE CUMULATIVE totals from Postgres — these are the lifetime numbers the
+    // header should show. The in-memory map is a capped (600), constantly-evicting
+    // WINDOW, so all.length ("264") was being shown as "seen" when it actually
+    // means "coins in the watchlist right now" — wildly smaller than the ~92k
+    // lifetime total and the source of the "these numbers feel wrong" confusion.
+    let lifetime = { seen: 0, killed: 0, passed: 0, triggered: 0 };
+    if (pool) {
+      try {
+        const r = await pool.query(`
+          SELECT COUNT(*)::int AS seen,
+                 COUNT(*) FILTER (WHERE gate_result = 'failed')::int AS killed,
+                 COUNT(*) FILTER (WHERE gate_result = 'passed')::int AS passed,
+                 COUNT(*) FILTER (WHERE triggered_at IS NOT NULL)::int AS triggered
+          FROM tokens`);
+        lifetime = r.rows[0];
+      } catch { /* fall back to live-only below */ }
+    }
     res.json({
-      seen: all.length,
-      gatedOut: all.filter(t => t.gated === false).length,
+      // lifetime (cumulative, survive eviction) — what the header labels should mean
+      seen: lifetime.seen || all.length,
+      killed: lifetime.killed,
+      passedTotal: lifetime.passed,
+      triggeredTotal: lifetime.triggered,
+      // live watchlist snapshot — clearly separated so the two aren't conflated
+      liveWatchlist: all.filter(t => t.gated === true && t.state !== 'DEAD').length,
+      liveInMemory: all.length,
+      // kept for back-compat with any existing dashboard refs
+      gatedOut: lifetime.killed || all.filter(t => t.gated === false).length,
       watching: all.filter(t => t.gated === true && t.state !== 'DEAD').length,
       triggers: all.filter(t => t.state === 'TRIGGER').length,
       convictionsToday: convictionFiredToday(),

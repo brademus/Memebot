@@ -312,9 +312,9 @@
     <div class="eyebrow"><span class="dot" id="conn"></span><span id="connTxt">connecting</span> · solana surveillance</div>
   </div>
   <div id="vitals">
-    <div class="vital"><div class="eyebrow">Seen</div><b id="sSeen">0</b></div>
-    <div class="vital"><div class="eyebrow">Killed</div><b id="sKilled">0</b></div>
-    <div class="vital"><div class="eyebrow">Watching</div><b id="sWatch">0</b></div>
+    <div class="vital"><div class="eyebrow">Seen (total)</div><b id="sSeen">0</b></div>
+    <div class="vital"><div class="eyebrow">Killed (total)</div><b id="sKilled">0</b></div>
+    <div class="vital"><div class="eyebrow">Watching (live)</div><b id="sWatch">0</b></div>
     <div class="vital hot"><div class="eyebrow">Triggers</div><b id="sTrig">0</b></div>
     <div class="vital amber"><div class="eyebrow">Convictions</div><b id="sConv">0</b><span id="sConvB"></span></div>
   </div>
@@ -545,8 +545,13 @@ connect();
 setInterval(async () => {
   try {
     const s = await (await fetch('/api/stats')).json();
-    $('sSeen').textContent = s.seen; $('sKilled').textContent = s.gatedOut;
-    $('sWatch').textContent = s.watching; $('sTrig').textContent = s.triggers;
+    // Seen/Killed = lifetime totals (survive eviction); Watching = live watchlist
+    // snapshot. Previously all three showed the capped in-memory map size, which
+    // read as ~264 when the bot had actually seen ~92k — the "these feel wrong".
+    $('sSeen').textContent = (s.seen ?? 0).toLocaleString();
+    $('sKilled').textContent = (s.killed ?? s.gatedOut ?? 0).toLocaleString();
+    $('sWatch').textContent = (s.liveWatchlist ?? s.watching ?? 0).toLocaleString();
+    $('sTrig').textContent = s.triggeredTotal ?? s.triggers ?? 0;
     lastConvCount = s.convictionsToday || 0;
     $('sConv').textContent = lastConvCount;
     $('sConvB').textContent = s.convictionBudget ? ' /' + s.convictionBudget : '';
