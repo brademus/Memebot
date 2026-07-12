@@ -2,11 +2,11 @@
   "name": "memewatch",
   "version": "1.0.0",
   "description": "Solana memecoin watchlist bot - gates, scoring, state machine, live dashboard",
-  "main": "dist/index.js",
+  "main": "dist/boot.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "tsx src/index.ts"
+    "start": "node dist/boot.js",
+    "dev": "tsx src/boot.ts"
   },
   "engines": { "node": ">=20" },
   "dependencies": {
