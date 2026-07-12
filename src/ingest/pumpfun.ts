@@ -178,6 +178,39 @@ export function unsubscribeToken(ca: string) {
 // Subscribe a token surfaced by another engine (wallet webhook / momentum scanner)
 // to the curve trade stream. Without this, surfaced pre-graduation tokens never
 // accumulated buy/sell counts or curve samples and scored ~0 organic forever.
+// Re-subscribe every live curve token's trade stream. Called after warm-boot
+// hydration (restored tokens were inserted AFTER the socket opened, so they had
+// no trade feed — the exact cause of fresh-ish coins showing 0 buys/0 sells and
+// scores that can't clear the floor) and periodically to heal any silently-lapsed
+// per-token subscription without waiting for a full ws reconnect.
+export function resubscribeAll() {
+  if (streamMode !== 'full' || !ws || ws.readyState !== ws.OPEN) return 0;
+  const live = allTokens()
+    .filter(t => t.gated !== false && t.dex === 'pumpfun' && t.state !== 'DEAD')
+    .map(t => t.ca);
+  for (let i = 0; i < live.length; i += 50)
+    try { ws.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: live.slice(i, i + 50) })); } catch {}
+  return live.length;
+}
+
+// Reconciliation: a live curve token that hasn't logged a trade in >4min almost
+// certainly has a lapsed subscription (a genuinely dead coin gets pruned to DEAD).
+// Re-subscribe those specifically. Runs every 2min.
+export function startSubscriptionReconciler() {
+  setInterval(() => {
+    if (streamMode !== 'full' || !ws || ws.readyState !== ws.OPEN) return;
+    const now = Date.now();
+    const stale = allTokens().filter(t =>
+      t.gated !== false && t.dex === 'pumpfun' && t.state !== 'DEAD' &&
+      (!t.recentTrades.length || now - t.recentTrades[t.recentTrades.length - 1].at > 4 * 60_000)
+    ).map(t => t.ca);
+    if (!stale.length) return;
+    for (let i = 0; i < stale.length; i += 50)
+      try { ws!.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: stale.slice(i, i + 50) })); } catch {}
+    console.log(`[pumpfun] reconciler re-subscribed ${stale.length} stale-trade tokens`);
+  }, 2 * 60_000);
+}
+
 export function subscribeToken(ca: string) {
   if (streamMode !== 'full') return;
   try { ws?.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: [ca] })); } catch {}

@@ -1,5 +1,5 @@
 import { initDb, upsertToken, markTrigger, markConviction, freezeEarlySubs, saveRuntime, loadHydratable } from './db';
-import { startPumpfunMonitor, setSolPrice, unsubscribeToken, subscribeToken } from './ingest/pumpfun';
+import { startPumpfunMonitor, setSolPrice, unsubscribeToken, subscribeToken, resubscribeAll, startSubscriptionReconciler } from './ingest/pumpfun';
 import { startDexscreenerPoller } from './ingest/dexscreener';
 import { startMomentumScanner } from './ingest/momentum';
 import { startSocialScanner } from './ingest/social';
@@ -69,7 +69,12 @@ async function main() {
     hydration.at = new Date().toISOString();
     if (hydration.restored)
       console.log(`[hydrate] restored ${hydration.restored} tokens from the last snapshot — deploys no longer reset the watchlist`);
+    // CRITICAL: restored tokens were inserted AFTER the socket's open-handler ran,
+    // so they have NO trade subscription — subscribe them once the stream connects.
+    // Without this, hydrated coins show 0 buys/0 sells forever and can't score.
+    setTimeout(() => { const n = resubscribeAll(); if (n) console.log(`[hydrate] subscribed ${n} restored token streams`); }, 8_000);
   } catch (e) { console.error('[hydrate]', (e as Error).message); }
+  startSubscriptionReconciler();
 
   // continuous snapshot: every gated, non-dead token flushed every 45s, plus a
   // final flush on SIGTERM (Railway sends it before every redeploy).
