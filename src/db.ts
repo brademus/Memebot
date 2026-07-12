@@ -138,3 +138,62 @@ export async function freezeEarlySubs(ca: string, subs: any) {
     [ca, JSON.stringify(subs)]
   ).catch(() => {});
 }
+
+
+// ===== WARM-BOOT HYDRATION =====
+// The in-memory watchlist used to die on every deploy — WATCHING coins lost their
+// persistence timers, curve history, and state, which both suppressed triggers
+// (a coin must SURVIVE to trigger, and deploys kept rebooting its world) and made
+// every ship a tax on the live system. Fix: snapshot the volatile runtime of every
+// gated token to a JSONB column (45s cadence + a flush on SIGTERM, which Railway
+// sends before every redeploy), and rebuild the watchlist from it at boot.
+
+function toRuntime(t: TokenRecord): any {
+  return {
+    priceUsd: t.priceUsd, liquidityUsd: t.liquidityUsd, mcapUsd: t.mcapUsd,
+    vol5m: t.vol5m, buys5m: t.buys5m, sells5m: t.sells5m, priceChange5m: t.priceChange5m,
+    pairAddress: t.pairAddress, curveSol: t.curveSol, peakCurveSol: t.peakCurveSol,
+    curveSamples: t.curveSamples.slice(-30), devBuyPct: t.devBuyPct,
+    totalBuys: t.totalBuys, totalSells: t.totalSells,
+    // cap: dedupe of very old returning buyers is lost after restart — acceptable
+    uniqueBuyers: t.uniqueBuyers.slice(-800), uniqueBuyerSamples: t.uniqueBuyerSamples.slice(-30),
+    earlyExited: t.earlyExited.slice(-300),
+    socials: t.socials, description: t.description ? t.description.slice(0, 300) : null,
+    aiConviction: t.aiConviction, boostAmount: t.boostAmount,
+    tgSamples: t.tgSamples.slice(-20), tgGrowthPerMin: t.tgGrowthPerMin,
+    playType: t.playType, laddersFired: t.laddersFired,
+    triggeredAt: t.triggeredAt, triggerPrice: t.triggerPrice,
+    insiderKilled: t.insiderKilled, convictionAt: t.convictionAt,
+    dex: t.dex, dexId: t.dexId, gated: t.gated, gateFailReason: t.gateFailReason,
+    bundle: t.bundle, aiNote: t.aiNote, smartHits: t.smartHits.slice(-100),
+    score: t.score, peakScore: t.peakScore, firstScorePrice: t.firstScorePrice,
+    subs: t.subs, state: t.state, stateChangedAt: t.stateChangedAt, lastAlertScore: t.lastAlertScore,
+    deployerRep: t.deployerRep, gradAt: t.gradAt, gradPeak: t.gradPeak, gradTrough: t.gradTrough,
+    fillMinutes: t.fillMinutes, secondWaveAt: t.secondWaveAt,
+  };
+}
+
+export async function saveRuntime(list: TokenRecord[]) {
+  if (!pool || !list.length) return;
+  for (let i = 0; i < list.length; i += 40) {
+    const chunk = list.slice(i, i + 40);
+    await Promise.all(chunk.map(t =>
+      pool!.query(`UPDATE tokens SET runtime = $2, runtime_at = now() WHERE ca = $1`,
+        [t.ca, JSON.stringify(toRuntime(t))]).catch(() => {})));
+  }
+}
+
+export async function loadHydratable(limit: number): Promise<any[]> {
+  if (!pool) return [];
+  const r = await pool.query(
+    `SELECT ca, symbol, name, creator, source,
+            EXTRACT(EPOCH FROM first_seen) * 1000 AS first_seen_ms,
+            early_buyers, runtime
+     FROM tokens
+     WHERE runtime IS NOT NULL
+       AND runtime_at > now() - interval '48 hours'
+       AND gate_result = 'passed'
+       AND last_state <> 'DEAD'
+     ORDER BY runtime_at DESC LIMIT $1`, [limit]).catch(() => ({ rows: [] as any[] }));
+  return r.rows;
+}

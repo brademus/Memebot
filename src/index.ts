@@ -1,4 +1,4 @@
-import { initDb, upsertToken, markTrigger, markConviction, freezeEarlySubs } from './db';
+import { initDb, upsertToken, markTrigger, markConviction, freezeEarlySubs, saveRuntime, loadHydratable } from './db';
 import { startPumpfunMonitor, setSolPrice, unsubscribeToken, subscribeToken } from './ingest/pumpfun';
 import { startDexscreenerPoller } from './ingest/dexscreener';
 import { startMomentumScanner } from './ingest/momentum';
@@ -23,7 +23,7 @@ import { startWalletDiscovery } from './wallets/discovery';
 import { startWalletTracker } from './wallets/tracker';
 import { startWalletWebhook } from './wallets/webhook';
 import { addToken } from './store';
-import { getToken, removeToken, allTokens, recordScan, onTokenRemove } from './store';
+import { getToken, removeToken, allTokens, recordScan, onTokenRemove, hydrateToken, hydration } from './store';
 import { cfg } from './config';
 import { getStreamMode } from './ingest/pumpfun';
 import { TokenRecord } from './types';
@@ -51,6 +51,42 @@ process.on('uncaughtException', (e) => {
 
 async function main() {
   await initDb();
+
+  // ===== WARM BOOT: rebuild the watchlist from the last runtime snapshot =====
+  // Deploys/restarts used to reset everything — every WATCHING coin lost its
+  // persistence timers and state, which suppressed triggers (a coin must SURVIVE
+  // to trigger, and each ship rebooted its world). Hydration runs BEFORE the
+  // pump.fun stream connects, so the socket's open-handler resubscribes the
+  // restored curve tokens automatically.
+  try {
+    const rows = await loadHydratable(Math.floor(cfg().limits.max_tracked_tokens / 2));
+    for (const r of rows) {
+      if (hydrateToken(
+        { ca: r.ca, symbol: r.symbol, name: r.name, creator: r.creator, source: r.source,
+          firstSeenMs: Number(r.first_seen_ms), earlyBuyers: r.early_buyers || [] },
+        r.runtime)) hydration.restored++;
+    }
+    hydration.at = new Date().toISOString();
+    if (hydration.restored)
+      console.log(`[hydrate] restored ${hydration.restored} tokens from the last snapshot — deploys no longer reset the watchlist`);
+  } catch (e) { console.error('[hydrate]', (e as Error).message); }
+
+  // continuous snapshot: every gated, non-dead token flushed every 45s, plus a
+  // final flush on SIGTERM (Railway sends it before every redeploy).
+  setInterval(() => {
+    saveRuntime(allTokens().filter(t => t.gated === true && t.state !== 'DEAD')).catch(() => {});
+  }, 45_000);
+  let shuttingDown = false;
+  const flushAndExit = async (sig: string) => {
+    if (shuttingDown) return; shuttingDown = true;
+    console.log(`[hydrate] ${sig} — flushing watchlist snapshot before exit`);
+    const guard = setTimeout(() => process.exit(0), 8_000);   // Railway kills after ~10s
+    try { await saveRuntime(allTokens().filter(t => t.gated === true && t.state !== 'DEAD')); } catch {}
+    clearTimeout(guard); process.exit(0);
+  };
+  process.on('SIGTERM', () => { flushAndExit('SIGTERM'); });
+  process.on('SIGINT', () => { flushAndExit('SIGINT'); });
+
   startServer();
 
   // one place cleans ALL per-token side state, whether a token is purged by the

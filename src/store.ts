@@ -27,6 +27,21 @@ export function addToken(partial: Pick<TokenRecord, 'ca' | 'symbol' | 'name' | '
   return t;
 }
 
+export const hydration = { restored: 0, at: null as string | null };
+
+// rebuild a token from its persisted snapshot — bypasses addToken's fresh-init so
+// state, timers (stateChangedAt), curve history, and lane stamps all SURVIVE.
+export function hydrateToken(base: { ca: string; symbol: string; name: string; creator: string | null; source: any; firstSeenMs: number; earlyBuyers: string[] }, runtime: any): boolean {
+  if (tokens.has(base.ca)) return false;
+  if (tokens.size >= cfg().limits.max_tracked_tokens) return false;
+  const fresh = addToken({ ca: base.ca, symbol: base.symbol, name: base.name, creator: base.creator, source: base.source });
+  if (!fresh) return false;
+  fresh.firstSeen = base.firstSeenMs;
+  fresh.earlyBuyers = base.earlyBuyers || [];
+  Object.assign(fresh, runtime || {});
+  return true;
+}
+
 export const getToken = (ca: string) => tokens.get(ca);
 export const allTokens = () => [...tokens.values()];
 export const activeTokens = () =>

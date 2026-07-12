@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'path';
 import { env, cfg } from '../config';
-import { activeTokens, allTokens, recentScans } from '../store';
+import { activeTokens, allTokens, recentScans , hydration } from '../store';
 import { checkConviction, convictionFiredToday } from '../scoring/conviction';
 import { pool } from '../db';
 import { buildReport } from './report';
@@ -127,6 +127,7 @@ export function startServer() {
           // to triggering? "0 triggers" with maxScore 44 vs floor 45 is a very
           // different story from maxScore 20.
           uptimeMin: Math.round(process.uptime() / 60),
+      hydrated: hydration.restored,
       effectiveFloor: cfg().states.trigger_score_min,
           scoresNearFloor: all.filter(t => t.gated === true && t.score >= cfg().states.trigger_score_min - 10).length,
           maxScoreNow: Math.max(0, ...all.filter(t => t.gated === true).map(t => t.score)),

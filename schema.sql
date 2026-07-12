@@ -143,3 +143,9 @@ ALTER TABLE tokens ADD COLUMN IF NOT EXISTS deployer_rep TEXT;
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS insider_cluster_pct NUMERIC;
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS secondwave_at TIMESTAMPTZ;
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS secondwave_price NUMERIC;
+
+-- warm-boot hydration (2026-07): deploys/restarts no longer reset the watchlist.
+-- runtime holds a JSON snapshot of live token state, flushed every 45s and on
+-- SIGTERM (Railway sends it before every redeploy); boot rehydrates from it.
+ALTER TABLE tokens ADD COLUMN IF NOT EXISTS runtime JSONB;
+ALTER TABLE tokens ADD COLUMN IF NOT EXISTS runtime_at TIMESTAMPTZ;
