@@ -2,12 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#07090d" />
   <title>MEMEWATCH</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css?v=20260712-layout2" />
+  <link rel="stylesheet" href="/layout-fixes.css?v=20260712-layout2" />
 </head>
 <body>
 <header>
@@ -35,6 +37,6 @@
 <section id="performance" class="view"><div class="title"><p>ACCOUNTABILITY</p><h1>Performance</h1><small>What the bot found, what worked, and what it missed.</small></div><div id="perfStats" class="stats"></div><div class="split"><div><h3>Top coins today</h3><div id="topCoins" class="list"></div></div><div><h3>Missed winners</h3><div id="missed" class="list"></div></div></div><div class="tools"><button id="report">Weekly report</button><button id="aiReview">AI review</button><button id="systemMonitor">System monitor</button></div><pre id="toolOutput" class="hidden"></pre></section>
 <section id="scanned" class="view"><div class="title"><p>FULL TRANSPARENCY</p><h1>All Scanned</h1><small>Everything detected, including pending and rejected tokens.</small></div><div id="seenFeed" class="feed"></div><h3>Latest gate decisions</h3><div id="scanFeed" class="list"></div><button id="loadHistory" class="load">Load database history</button><div id="history" class="list"></div></section>
 </main>
-<script src="/app.js" defer></script>
+<script src="/app.js?v=20260712-layout2" defer></script>
 </body>
 </html>
