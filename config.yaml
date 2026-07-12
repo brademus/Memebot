@@ -12,190 +12,188 @@ gates:
   lp_locked_or_burned: true           # via RugCheck markets data
   liq_to_mcap_ratio_min: 0.08         # AMM-pool tokens only (post-graduation)
   min_liquidity_usd: 9000             # AMM-pool tokens (was 12k; a $4.8K-liq kill missed a measured 64.8x)
-  min_liquidity_sol_curve: 8            # bonding-curve floor in SOL (price-independent). Fresh curve ~30 SOL; 8 filters dead sub-launches
+  min_liquidity_sol_curve: 8          # bonding-curve floor in SOL (price-independent). Fresh curve ~30 SOL; 8 filters dead sub-launches
   rugcheck_score_max: 5000            # RugCheck risk score ceiling (lower = safer)
-  require_social: false               # true = hard-kill tokens with no X/TG/website (17x differential; off by default since metadata fetch can lag)
+  require_social: false               # true = hard-kill tokens with no X/TG/website
 
-prefilter:                            # zero-API kills at the create event, before anything is spent
+prefilter:
   enabled: true
-  serial_launcher_24h: 3              # creator minted more than this in 24h (counted off our own stream) = spray factory
-  symbol_wave_per_hour: 3             # same ticker launched more than this within 60min = copycat spam wave
+  serial_launcher_24h: 3
+  symbol_wave_per_hour: 3
   min_symbol_len: 2
   max_symbol_len: 14
 
-traction_floor:                       # don't spend gate API calls until the coin shows life (full stream only)
+traction_floor:
   enabled: true
-  min_trades: 6                       # trades seen on the stream before gates run
-  min_bonded_sol: 1.5                 # OR net SOL into the curve above the ~30 start
-  pending_purge_min: 12               # nothing by now = dead mint, purged (was 45 — most deaths show in minutes)
+  min_trades: 6
+  min_bonded_sol: 1.5
+  pending_purge_min: 12
 
 deployer:
   enabled: true
-  rep_enabled: true                   # graded reputation from OUR launch db (research: first-time 19.91% pump rate vs serial 4.16%)
-  rep_max_delta: 6                    # bounded score nudge, same ceiling as the AI read
-  rep_serial_min: 10                  # launches in our db to count as serial (research threshold is 20 lifetime; our window is shorter)                       # requires HELIUS_API_KEY; skipped if absent
-  min_wallet_age_hours: 1             # fresh-funded deployer = suspicious
-  max_prior_tokens_24h: 3             # serial launcher = spray-and-rug pattern
-  blacklist_auto: true                # auto-blacklist deployers of rugged tokens
+  rep_enabled: true
+  rep_max_delta: 6
+  rep_serial_min: 10
+  min_wallet_age_hours: 1
+  max_prior_tokens_24h: 3
+  blacklist_auto: true
 
-bundle:                               # same-block sniper / insider detection (needs HELIUS_API_KEY)
+bundle:
   enabled: true
-  max_insider_supply_pct: 25          # kill if slot0 buyers hold more than this at launch
-  max_funded_snipers: 2               # kill if >=2 slot0 buyers have direct SOL links to deployer
-  count_all_slot0_as_insider: false   # true = stricter: all same-block buyers count as insiders
-  total_supply: 1000000000            # pump.fun standard 1B
+  cluster_merge_enabled: true          # merge slot-0 buyers sharing a non-CEX funder
+  cluster_max_buyers: 30               # cap Helius fan-out for cluster analysis
+  max_insider_supply_pct: 25
+  max_funded_snipers: 2
+  count_all_slot0_as_insider: false
+  total_supply: 1000000000
 
 age:
-  max_token_age_minutes: 240          # drop from active feed after 4h
-  freshness_half_life_minutes: 90     # decay curve for freshness score
+  max_token_age_minutes: 240
+  freshness_half_life_minutes: 90
 
-weights:                              # research-ranked (must sum to 100)
-  velocity: 25                        # liquidity velocity — strongest academic predictor of winners
-  organic: 20                         # unique-buyer spread + growth — non-bot participation proxy
-  social: 15                          # X/Telegram/website presence — 17x graduation lift (Telegram strongest)
-  buy_pressure: 15                    # volume-damped buys:sells
-  freshness: 10                       # age decay in the 0-4h window
-  smart_money: 15                     # tracked-wallet confluence (secondary per research — non-monotonic)
-
+weights:
+  velocity: 25
+  organic: 20
+  social: 15
+  buy_pressure: 15
+  freshness: 10
+  smart_money: 15
 
 states:
-  heating_score_min: 50        # report: sub-60 band avg 0.72x — keep the screen cleaner
-  trigger_score_min: 65        # report: 60-80 band = 10.1% 2x-rate, avg 1.60x — worth alerting
-  trigger_min_trades: 12              # evidence floor: no TRIGGER on thin data
-  trigger_min_unique_buyers: 12       # organic floor: real wallets, not churn
-  trigger_buy_ratio_min: 1.3   # joint condition was too strict: 1,009 tokens scored 60+, zero triggered          # buys:sells over last 5m window
-  extended_pct: 40                    # price ran +40% since first scored = too late
-  dying_score_drop: 15                # score falls this much from peak = demote
-  dying_buy_ratio_max: 0.8            # sells dominating = demote
+  heating_score_min: 50
+  trigger_score_min: 65
+  trigger_min_trades: 12
+  trigger_min_unique_buyers: 12
+  trigger_buy_ratio_min: 1.3
+  early_runner_enabled: true           # let breadth-confirmed runners alert before the normal persistence age
+  early_runner_min_age: 2
+  early_runner_min_buyers: 20
+  early_runner_min_trades: 25
+  extended_pct: 40
+  dying_score_drop: 15
+  dying_buy_ratio_max: 0.8
 
-ai:                                   # needs GEMINI_API_KEY (aistudio.google.com/apikey); skipped if absent
+ai:
   enabled: true
-  note_model: gemini-3.5-flash         # per-token TRIGGER notes: small, frequent -> Flash tier (updated 2026-07 to current name)
-  review_model: gemini-3.5-flash       # weekly review (updated 2026-07: gemini-3.1-pro was retired/renamed)
-  conviction_enabled: true            # AI reads name/ticker/description at TRIGGER for narrative quality (logged + measured)
-  conviction_model: gemini-3.5-flash   # narrative read (updated 2026-07 to current name)
-  conviction_max_delta: 6             # HARD bound on the AI score nudge; it can never create or block a trade alone
-                                      # if a model 404s, check current names at ai.google.dev/gemini-api/docs/models
+  note_model: gemini-3.5-flash
+  review_model: gemini-3.5-flash
+  conviction_enabled: true
+  conviction_model: gemini-3.5-flash
+  conviction_max_delta: 6
 
-bestbuys:                             # BEST BUYS panel — deliberately brutal filter.
-  max_shown: 3                        # top 3 only. The research base rate is ~0.2%, not 20%.
-  min_score: 68                # 80+ band hits 2x at 37.5%; 68 blends in the strong end of 60-80
-  require_social: true                # no TG/X = not a best buy (17x differential)
+bestbuys:
+  max_shown: 3
+  min_score: 68
+  require_social: true
   min_unique_buyers: 10
   min_trades: 15
-  min_curve_sol: 40                   # ≥10 SOL genuinely bonded beyond the 30 start
+  min_curve_sol: 40
   max_dev_pct: 7
-  exit_score: 56                      # holds its slot until score drops below this (enter at 72 = hysteresis, no flicker)
-  min_hold_seconds: 120               # can't be dropped in its first 2 min except on hard fails (insider/dying)
-  reentry_cooldown_min: 15            # once dropped, can't re-enter for this long (anti-flap)
-  supersede_margin: 12                # a new coin only bumps the weakest incumbent if it beats it by this many points
-  min_age_minutes: 4                  # PERSISTENCE: no admission during the snipe burst — research: 85% of snipers exit by 5min
-  min_retention: 0.65                 # PERSISTENCE: ≥65% of the first-15 buyer cohort still holding
-  net_inflow_window_min: 3            # PERSISTENCE: curve SOL now must be ≥ its level 3 minutes ago
-  smart_lane: true                    # dedicated extra socket for smart-wallet confluence coins
-  smart_lane_min_wallets: 2           # distinct tracked winners in the window
+  exit_score: 56
+  min_hold_seconds: 120
+  reentry_cooldown_min: 15
+  supersede_margin: 12
+  min_age_minutes: 4
+  min_retention: 0.65
+  net_inflow_window_min: 3
+  smart_lane: true
+  smart_lane_min_wallets: 2
   smart_lane_window_min: 30
-  smart_lane_min_score: 55            # algo still has to like it — lower bar because wallets front-run volume
-  smart_lane_min_age_min: 2           # wallets move early; half the organic lane's persistence age
-  smart_lane_exit_score: 45           # smart slot drops below this (hysteresis, like the organic lane)
+  smart_lane_min_score: 55
+  smart_lane_min_age_min: 2
+  smart_lane_exit_score: 45
+  pregrad_lane: true                   # catch the run into graduation
+  pregrad_min_pct: 0.8
+  secondwave_lane: true                # post-graduation retrace entry on clean structure
+  secondwave_max_age_min: 180
+  secondwave_min_fill_min: 30
+  secondwave_min_retrace: 0.25
+  secondwave_max_retrace: 0.4
+  max_cluster_pct: 25
 
 alerts:
   telegram_on_trigger: true
-  realert_score_jump: 15              # re-alert same token only on +15 score move
+  realert_score_jump: 15
 
 polling:
-  dexscreener_interval_ms: 10000      # enrichment poll for tracked tokens
-  outcome_snapshot_minutes: [60, 240, 1440]   # 1h / 4h / 24h outcome logging
+  dexscreener_interval_ms: 10000
+  outcome_snapshot_minutes: [60, 240, 1440]
 
-wallets:                              # smart-money discovery + tracking (needs HELIUS_API_KEY)
+wallets:
   enabled: true
-  discovery_min_multiple: 3           # a token must have ≥3x'd for us to mine its early buyers
-  wallet_min_winners: 2               # a wallet must appear early on ≥2 winners to earn a slot
-  early_buyer_slot_window: 3          # "early" = bought within this many slots of creation
-  max_tracked_wallets: 1000           # webhook streams ALL of these (was 300 under polling; Helius allows 100k/hook)
-  hit_recency_hours: 6                # a wallet hit counts toward score for this long
-  webhook_enabled: true               # real-time push for every active wallet (needs public URL — Railway provides one)
-  prune_min_measured_buys: 5          # judge a wallet only after this many buys have measured outcomes
-  prune_max_2x_rate: 0.08             # below this 2x hit-rate on measured buys = deactivated (cold wallet)
-  elite_min_winners: 10               # wallets with this many logged winners are ELITE — their buys move the pipeline alone
-  elite_weight: 3                     # one elite buy counts as this many standard buys in all confluence math
-  quality_validation: true            # judge candidates on their OWN Helius P&L, not just overlap with our winners
-  quality_min_verdict: MARGINAL       # ELITE|GOOD|MARGINAL|REJECT — floor to earn/keep a tracking slot
-  quality_recheck_days: 5             # re-analyze a tracked wallet's independent record this often
-  cobuyer_expansion: true             # mine co-buyers of proven winners to escape the self-winner blind spot
-  cobuyer_min_shared: 2               # a candidate must co-buy with our winners on >= this many DISTINCT coins
-  idle_deactivate_days: 7             # a proven wallet silent this long is deactivated (copy-trading needs ACTIVE wallets); re-activates if it trades again
-  winner_mining_enabled: true         # find traders proven by the market's biggest movers (not a curated famous-names list)
-  winner_mining_hours: 3              # how often to mine the day's top movers for their early buyers
-  winner_mining_min_pct: 300          # a mover must be up >= this % (24h) to mine its early buyers — real winners only
-  winner_mining_max_mints: 15         # cap how many movers we pull early-buyers for per run (Helius budget)
-  winner_mining_max_vet: 25           # cap how many candidate wallets we deep-vet per run (Helius budget)
+  discovery_min_multiple: 3
+  wallet_min_winners: 2
+  early_buyer_slot_window: 3
+  max_tracked_wallets: 1000
+  hit_recency_hours: 6
+  webhook_enabled: true
+  prune_min_measured_buys: 5
+  prune_max_2x_rate: 0.08
+  elite_min_winners: 10
+  elite_weight: 3
+  quality_validation: true
+  quality_min_verdict: MARGINAL
+  quality_recheck_days: 5
+  cobuyer_expansion: true
+  cobuyer_min_shared: 2
+  idle_deactivate_days: 7
+  winner_mining_enabled: true
+  winner_mining_hours: 3
+  winner_mining_min_pct: 300
+  winner_mining_max_mints: 15
+  winner_mining_max_vet: 25
 
 limits:
-  max_tracked_tokens: 600             # in-memory watchlist cap (raised 400->600: hydration reserves ~150 slots for restored hot/recent tokens, fresh launches get ~450 — MORE room than pre-hydration, ~few KB per token)
-  dexscreener_batch_size: 30          # max token addresses per API call
+  max_tracked_tokens: 600
+  dexscreener_batch_size: 30
 
-conviction:                           # CONVICTION tier — the "confirmed buy" alert above TRIGGER.
-  enabled: true                       # fires ONLY when independent signals agree; a few/day, often zero
-  min_score: 72                       # 80+ band hit 2x at 37.5%; 72 takes the strong end
-  min_trigger_hold_seconds: 90        # must HOLD trigger — survives the 85%-sniper-exit window
-  require_clean_bundle: true          # insiders VERIFIED clean (2.69x vs 0.88x) — unverified != clean
-  min_smart_wallets: 1                # distinct proven-winner wallets that bought; raise to 2 once tracker matures
-  smart_wallet_window_min: 30         # ...within this window
-  require_social: true                # TG or X must exist (17.4x differential)
-  max_run_pct: 25                     # no confirming into exit liquidity — must still be early
-  max_alerts_per_day: 5               # scarcity is the product; zero on a bad day is CORRECT behavior
-
-learning:                             # closed-loop filter tuning — the bot adjusts its own thresholds
-  enabled: true                       # kill switch; overrides persist in Postgres and survive redeploys
-  window_days: 14                     # rolling evidence window
-  min_samples: 8                      # measured kills a rule needs before it's allowed to move
-  min_hours_between_changes: 12       # per-path cooldown, persisted in the log — restarts can't stack decisions
-  loosen_false_kill_rate: 0.05        # a rule killing >5% future-3x winners loosens ONE bounded step per cycle
-
-momentum:                             # second discovery engine — catches runners + non-pump.fun launches
-  enabled: false                      # DISABLED 2026-07-11 on outcome data: n=32 (>=30 bar met), avg 0.03x, best 0.83x —
-                                      # every coin it surfaced lost from surface price. Buying 24h-trending = buying the top.
-                                      # Re-enable ONLY with entry discipline (e.g. surface on pullback, not strength).
-  poll_seconds: 180                   # GeckoTerminal trending + new pools (free tier: 30 req/min; we use ~1/90s)
-  min_liquidity_usd: 30000            # a runner worth a late entry has real liquidity
-  min_vol24h_usd: 150000              # and real volume behind the move
-  max_age_hours: 72                   # older than 3 days = established coin, different game
-  min_change24h_pct: 50               # it must actually be running
-  max_change5m_pct: 45                # vertical blow-off candle = exit liquidity, not entry — re-check in 30m
-
-launch_signals:                       # adversarial reads of the launch playbook (see meme-launcher analysis)
-  graduation_curve_sol: 69            # pump.fun graduation threshold — VERIFY, pump.fun has changed this over time
-  graduation_bonus_max: 6             # score bonus scaling 80% -> 100% of the curve: graduation is a known catalyst
-  dead_hours_utc: [5, 6, 7, 8, 9, 10, 11]   # stealth/manipulation launch window; peak attention is 14-18 UTC
-  dead_hours_penalty: 0               # KILLED BY DATA 2026-07-10: hour cohort showed dead hours (0.83-1.04x) = peak hours (0.82-0.93x); prior not supported
-  tg_shell_max_members: 25            # a TG this small at launch is a manufactured shell, not a community
-  tg_real_min_members: 200            # at this size the 17.4x social signal is trustworthy at full weight
-  early_runner_enabled: true          # let fast movers with real buyer breadth trigger before the full 4min age gate
-  early_runner_min_age: 2             # still a floor (dodges the worst of the snipe burst), just lower
-  early_runner_min_buyers: 20         # full-stream: distinct buyers proving it's breadth, not a 2-wallet pump
-  early_runner_min_trades: 25         # lite-stream proxy: heavier trade count since we can't see uniqueness
-
-calibration:                          # closed-loop scoring — the score fits outcomes over time
-  enabled: true                       # kill switch; learned weights persist in Postgres, survive redeploys
-  freeze_age_min: 3                   # snapshot each token's sub-scores at this age = what predicts BEFORE the run
-  window_days: 21                     # rolling training window
-  min_samples: 60                     # labeled tokens needed before any reweight
-  min_winners: 12                     # winners needed (a fit with too few winners is noise)
-  win_multiple: 3                     # label winner = best realized multiple >= this
-  learning_rate: 0.34                 # move current weights this fraction toward target each cycle (smooth, not lurching)
-  min_weight: 3                       # no fitted component drops below this...
-  max_weight: 45                      # ...or above this — bounds live in config, movement is bounded per cycle
-
-social:                               # free social edge — Dexscreener boosts + TG velocity (NOT X scraping)
+conviction:
   enabled: true
-  boost_poll_seconds: 90              # boosts feed poll (public, no auth, generous limits)
-  boost_surface_min: 30               # an UNSEEN coin needs this much paid-boost total to be pulled in
-  pregrad_lane: true                  # dedicated Best Buys socket for coins about to graduate (catch the run IN, not the post-grad retrace)
-  pregrad_min_pct: 0.8                # coin must be >= this fraction of the graduation curve (0.8 = 80%)
-  secondwave_lane: true               # post-graduation retrace entry on structurally-clean tokens (research: replaces momentum-chasing, which measured 0.03x)
-  secondwave_max_age_min: 180         # only consider tokens graduated within this many minutes
-  secondwave_min_fill_min: 30         # fill must have taken >= 30min (a <30min sprint = coordinated push that dumps on the second wave)
-  secondwave_min_retrace: 0.25        # must have pulled back >= 25% from post-grad peak (buy the dip, not the top)
-  secondwave_max_retrace: 0.4         # but price must stay >= 40% of peak (below = it's dumping, thesis broke)
-  max_cluster_pct: 25                 # second-wave requires cluster-merged concentration <= this
+  min_score: 72
+  min_trigger_hold_seconds: 90
+  require_clean_bundle: true
+  min_smart_wallets: 1
+  smart_wallet_window_min: 30
+  require_social: true
+  max_run_pct: 25
+  max_alerts_per_day: 5
+
+learning:
+  enabled: true
+  window_days: 14
+  min_samples: 8
+  min_hours_between_changes: 12
+  loosen_false_kill_rate: 0.05
+
+momentum:
+  enabled: false
+  poll_seconds: 180
+  min_liquidity_usd: 30000
+  min_vol24h_usd: 150000
+  max_age_hours: 72
+  min_change24h_pct: 50
+  max_change5m_pct: 45
+
+launch_signals:
+  graduation_curve_sol: 69
+  graduation_bonus_max: 6
+  dead_hours_utc: [5, 6, 7, 8, 9, 10, 11]
+  dead_hours_penalty: 0
+  tg_shell_max_members: 25
+  tg_real_min_members: 200
+
+calibration:
+  enabled: true
+  freeze_age_min: 3
+  window_days: 21
+  min_samples: 60
+  min_winners: 12
+  win_multiple: 3
+  learning_rate: 0.34
+  min_weight: 3
+  max_weight: 45
+
+social:
+  enabled: true
+  boost_poll_seconds: 90
+  boost_surface_min: 30
