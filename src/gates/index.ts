@@ -9,47 +9,36 @@ import { checkDeployer } from './deployer';
 export async function runGates(t: TokenRecord): Promise<string | null> {
   const g = cfg().gates;
 
-  // curve-stage tokens have liquidity locked in the bonding curve by the program
-  // itself — LP-lock doesn't apply, and the liquidity floor is lower. IMPORTANT:
-  // wallet-surfaced pump.fun tokens gate before enrichment sets t.dex, and gating
-  // them as AMM counted the curve PDA as a 100% top holder — the report's largest
-  // false-kill class (top_holder_100pct: 26/49 kills went 3x+). The 'pump' mint
-  // suffix is pump.fun's vanity standard and identifies them regardless of t.dex.
-  const onCurve = t.dex === 'pumpfun' || t.ca.endsWith('pump');
+  // A pump.fun mint keeps its "pump" suffix after graduation. The suffix is only a
+  // fallback before enrichment; once a DEX is known, that explicit market state wins.
+  // Without this distinction, graduated tokens could skip LP and sell-route checks.
+  const onCurve = t.dex === 'pumpfun' || (t.dex == null && t.ca.endsWith('pump'));
 
-  // liquidity floor. On-curve: compare native SOL (price-independent). Post-grad: USD.
+  // Liquidity floor. On-curve: compare native SOL. Post-grad: compare executable USD
+  // liquidity and pool depth relative to market cap.
   if (onCurve) {
     if (t.curveSol < g.min_liquidity_sol_curve) return `curve_sol_${t.curveSol.toFixed(1)}`;
   } else {
     if (t.liquidityUsd < g.min_liquidity_usd) return `liq_below_min_${Math.round(t.liquidityUsd)}`;
+    if (t.mcapUsd > 0 && t.liquidityUsd / t.mcapUsd < g.liq_to_mcap_ratio_min)
+      return `liq_mcap_ratio_${(t.liquidityUsd / t.mcapUsd).toFixed(3)}`;
   }
-  if (t.mcapUsd > 0 && t.liquidityUsd / t.mcapUsd < g.liq_to_mcap_ratio_min)
-    return `liq_mcap_ratio_${(t.liquidityUsd / t.mcapUsd).toFixed(3)}`;
 
-  // deployer fingerprint — one Helius call
+  // Deployer fingerprint — one Helius call.
   const dep = await checkDeployer(t.creator);
   if (!dep.pass) return dep.reason;
 
-  // social presence gate (optional): bare launches graduate at 0.11% vs 1.9% with
-  // full socials — 17x differential. Off by default (metadata fetch can lag creates).
+  // Social presence gate (optional). Metadata can lag, so only enforce after fetch.
   if (g.require_social && t.socials.fetched && !t.socials.x && !t.socials.tg && !t.socials.web)
     return 'no_socials';
 
-  // NOTE: the bundle/insider check is deliberately NOT here anymore. Report data
-  // showed Helius has indexed ~nothing at gate time (21/9000 coverage), so the two
-  // Helius calls it cost per mint bought no information. The 3-8min late re-check
-  // in the scoring loop is the real insider gate — it runs once, when the data
-  // actually exists, and its verdict is sticky (insiderKilled).
+  // Bundle/insider checks intentionally run later when Helius indexing is usable.
 
-  // rugcheck — covers authorities, holders, LP, risk score.
-  // On the bonding curve, pump.fun's program guarantees mint+freeze authority are
-  // revoked and there's no pullable LP, so RugCheck having no data yet is EXPECTED,
-  // not a red flag. We still check holder concentration if data exists, but tolerate
-  // its absence on-curve. Post-graduation we enforce the full rug suite.
+  // RugCheck covers authorities, holders, LP, and risk score. Curve-stage absence is
+  // tolerated because the program controls the curve; post-grad absence fails closed.
   const r = await fetchRugReport(t.ca, onCurve);
   if (!r.ok) {
-    if (!onCurve) return 'rugcheck_unavailable';   // graduated token with no data = fail-closed
-    // on-curve with no RugCheck data yet: allow through on curve guarantees
+    if (!onCurve) return 'rugcheck_unavailable';
   } else {
     if (g.mint_authority_revoked && !r.mintAuthorityRevoked) return 'mint_authority_active';
     if (g.freeze_authority_inactive && !r.freezeAuthorityInactive) return 'freeze_authority_active';
@@ -59,9 +48,9 @@ export async function runGates(t: TokenRecord): Promise<string | null> {
     if (r.riskScore > g.rugcheck_score_max) return `rugcheck_score_${r.riskScore}`;
   }
 
-  // honeypot check — only meaningful post-graduation (AMM). On the curve you can
-  // always sell back to the curve, so skip the Jupiter sell-sim while on-curve.
-  if (!onCurve && g.honeypot_sim && !(await canSell(t.ca))) return 'sell_sim_failed';
+  // This is currently a Jupiter sell-route availability check, not a full transaction
+  // simulation. It is still useful post-graduation and meaningless on the curve.
+  if (!onCurve && g.honeypot_sim && !(await canSell(t.ca))) return 'sell_route_failed';
 
   return null;
 }
