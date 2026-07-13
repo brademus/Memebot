@@ -7,7 +7,9 @@ let registered = false;
 let lastSync = 0;
 let lastError: string | null = null;
 let addressCount = 0;
-const secret = env.ADMIN_KEY || crypto.randomBytes(24).toString('hex');
+// The Helius webhook keeps its own per-boot secret. Dashboard access does not need
+// or share a credential with webhook delivery authentication.
+const secret = crypto.randomBytes(24).toString('hex');
 
 export const webhookLive = () => registered;
 export const webhookDiag = () => ({ registered, lastSync: lastSync ? new Date(lastSync).toISOString() : null, lastError, addressCount });
