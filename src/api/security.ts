@@ -2,25 +2,20 @@ import crypto from 'crypto';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { env } from '../config';
 
-interface Bucket {
-  count: number;
-  resetAt: number;
-}
-
+interface Bucket { count: number; resetAt: number }
 const buckets = new Map<string, Bucket>();
 let lastSweep = 0;
 
 function clientId(req: Request): string {
-  const forwarded = req.header('x-forwarded-for')?.split(',')[0]?.trim();
-  return forwarded || req.ip || req.socket.remoteAddress || 'unknown';
+  // Never trust a caller-supplied X-Forwarded-For value directly. Railway's socket
+  // peer is stable and non-spoofable; a shared proxy bucket is conservative but safe.
+  return req.socket.remoteAddress || req.ip || 'unknown';
 }
 
 function sweepExpired(now: number) {
   if (now - lastSweep < 60_000) return;
   lastSweep = now;
-  for (const [key, bucket] of buckets) {
-    if (bucket.resetAt <= now) buckets.delete(key);
-  }
+  for (const [key, bucket] of buckets) if (bucket.resetAt <= now) buckets.delete(key);
 }
 
 export function rateLimit(name: string, max: number, windowMs: number): RequestHandler {
