@@ -1,6 +1,4 @@
-import crypto from 'crypto';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
-import { env } from '../config';
 
 interface Bucket { count: number; resetAt: number }
 const buckets = new Map<string, Bucket>();
@@ -42,25 +40,9 @@ export function rateLimit(name: string, max: number, windowMs: number): RequestH
   };
 }
 
-function secureEqual(a: string, b: string): boolean {
-  const aa = Buffer.from(a);
-  const bb = Buffer.from(b);
-  return aa.length === bb.length && crypto.timingSafeEqual(aa, bb);
-}
-
-export function adminOnly(req: Request, res: Response, next: NextFunction) {
-  if (!env.ADMIN_KEY) {
-    res.status(503).json({ error: 'ADMIN_KEY is not configured' });
-    return;
-  }
-  const bearer = req.header('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1];
-  const supplied = req.header('x-admin-key') || bearer || '';
-  if (!secureEqual(supplied, env.ADMIN_KEY)) {
-    res.status(401).json({ error: 'unauthorized' });
-    return;
-  }
-  next();
-}
+// Kept as a compatibility middleware for existing route registration. Dashboard,
+// diagnostics, tuning, reports and wallet management are intentionally open.
+export const adminOnly: RequestHandler = (_req, _res, next) => next();
 
 export const publicApiLimit = rateLimit('api', 180, 60_000);
 export const expensiveApiLimit = rateLimit('expensive', 8, 60_000);
