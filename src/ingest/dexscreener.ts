@@ -1,38 +1,25 @@
 import { cfg } from '../config';
 import { allTokens } from '../store';
 import { TokenRecord } from '../types';
+import { backfillWalletEntryPrice } from '../wallets/ledger';
 
-// Dexscreener is the enrichment layer: price, liquidity, mcap, buy/sell txns.
-// Free API, batch up to 30 token addresses per call.
 const BASE = 'https://api.dexscreener.com/latest/dex/tokens/';
 
 export function startDexscreenerPoller(onUpdated: (t: TokenRecord) => void) {
   let tickN = 0;
   const tick = async () => {
     tickN++;
-    // Three-tier polling — spend the API budget where latency actually matters:
-    //  - HOT, every tick regardless of venue: near/above the trigger floor,
-    //    HEATING/TRIGGER/EXTENDED, or in a lane (graduation play / second wave).
-    //    These are the coins "the data is too delayed" is ABOUT — previously a
-    //    curve coin sitting at the floor waited 3 ticks between refreshes, and in
-    //    LITE mode Dexscreener is its ONLY activity source.
-    //  - AMM tokens: every tick (Dexscreener is their only data source)
-    //  - cold curve tokens: every 3rd tick (stream feeds them; we only need
-    //    Dexscreener to notice indexing/graduation)
     const floor = cfg().states.trigger_score_min;
-    const hot = (t: any) =>
+    const hot = (t: TokenRecord) =>
       t.score >= floor - 10 || ['HEATING', 'TRIGGER', 'EXTENDED'].includes(t.state)
       || t.playType === 'GRADUATION' || !!t.secondWaveAt;
     const tracked = allTokens().filter(t =>
-      t.state !== 'DEAD' &&
-      (hot(t) || t.dex !== 'pumpfun' || tickN % 3 === 0));
+      t.state !== 'DEAD' && (hot(t) || t.dex !== 'pumpfun' || tickN % 3 === 0));
     const batchSize = cfg().limits.dexscreener_batch_size;
     const batches: TokenRecord[][] = [];
     for (let i = 0; i < tracked.length; i += batchSize) batches.push(tracked.slice(i, i + batchSize));
-    // 3 batches in flight: a 500-token tick used to run ~17 SEQUENTIAL calls and
-    // stretch the 10s cadence to 15s+ — parallelism keeps cadence honest.
     for (let i = 0; i < batches.length; i += 3)
-      await Promise.all(batches.slice(i, i + 3).map(b => enrich(b, onUpdated)));
+      await Promise.all(batches.slice(i, i + 3).map(batch => enrich(batch, onUpdated)));
     setTimeout(tick, cfg().polling.dexscreener_interval_ms);
   };
   tick();
@@ -46,53 +33,38 @@ async function enrich(batch: TokenRecord[], onUpdated: (t: TokenRecord) => void)
     const data: any = await res.json();
     const pairs: any[] = data.pairs || [];
     for (const t of batch) {
-      const p = pairs
-        .filter(p => p.baseToken?.address === t.ca && p.chainId === 'solana')
+      const pair = pairs
+        .filter(candidate => candidate.baseToken?.address === t.ca && candidate.chainId === 'solana')
         .sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
-      if (!p) continue;
-      // FILL IN THE SYMBOL — tokens surfaced by wallets/momentum/boosts start as
-      // '?' and rely on enrichment for their identity. This was never being copied
-      // out of the Dexscreener response, so every surfaced coin showed as $? on the
-      // dashboard forever. Adopt the real symbol/name the moment Dexscreener has it.
-      if ((t.symbol === '?' || !t.symbol || t.symbol.endsWith('…')) && p.baseToken?.symbol) t.symbol = p.baseToken.symbol;
-      if ((!t.name || t.name.startsWith('(')) && p.baseToken?.name) t.name = p.baseToken.name;
-      // only overwrite if Dexscreener has real numbers; else keep curve-seeded values
-      const dexLiq = p.liquidity?.usd || 0;
-      if (dexLiq > 0) t.liquidityUsd = dexLiq;
-      const dexPrice = parseFloat(p.priceUsd || '0');
+      if (!pair) continue;
+      if ((t.symbol === '?' || !t.symbol || t.symbol.endsWith('…')) && pair.baseToken?.symbol) t.symbol = pair.baseToken.symbol;
+      if ((!t.name || t.name.startsWith('(')) && pair.baseToken?.name) t.name = pair.baseToken.name;
+      const dexLiquidity = pair.liquidity?.usd || 0;
+      if (dexLiquidity > 0) t.liquidityUsd = dexLiquidity;
+      const dexPrice = parseFloat(pair.priceUsd || '0');
       if (dexPrice > 0) {
         t.priceUsd = dexPrice;
-        // post-graduation peak/trough for the second-wave retrace calc
+        backfillWalletEntryPrice(t.ca, dexPrice).catch(() => {});
         if (t.gradAt) {
           if (dexPrice > t.gradPeak) t.gradPeak = dexPrice;
           if (t.gradTrough === 0 || dexPrice < t.gradTrough) t.gradTrough = dexPrice;
         }
       }
-      const dexMcap = p.fdv || p.marketCap || 0;
+      const dexMcap = pair.fdv || pair.marketCap || 0;
       if (dexMcap > 0) t.mcapUsd = dexMcap;
-      // graduation detection: a token gets a REAL AMM pair only after it leaves
-      // the curve. Only transition off 'pumpfun' when Dexscreener names a
-      // different, real dex — never overwrite with 'pumpfun' or with null/undefined
-      // (an unindexed pair), which previously wiped curve state and broke every
-      // t.dex === 'pumpfun' code path (gating, persistence, scoring).
-      if (p.dexId && p.dexId !== 'pumpfun') { t.dex = p.dexId; t.dexId = p.dexId; }
-      t.priceChange5m = p.priceChange?.m5 || 0;
-      t.pairAddress = p.pairAddress || t.pairAddress;
-      // 5m txn/volume counts: for on-curve tokens the pump.fun stream owns these
-      // (real curve trades); Dexscreener has no curve data and would clobber them
-      // with 0s. Only adopt Dexscreener's counts once the token has left the curve.
+      if (pair.dexId && pair.dexId !== 'pumpfun') { t.dex = pair.dexId; t.dexId = pair.dexId; }
+      t.priceChange5m = pair.priceChange?.m5 || 0;
+      t.pairAddress = pair.pairAddress || t.pairAddress;
       if (t.dex !== 'pumpfun') {
-        t.vol5m = p.volume?.m5 || 0;
-        t.buys5m = p.txns?.m5?.buys || 0;
-        t.sells5m = p.txns?.m5?.sells || 0;
+        t.vol5m = pair.volume?.m5 || 0;
+        t.buys5m = pair.txns?.m5?.buys || 0;
+        t.sells5m = pair.txns?.m5?.sells || 0;
         t.uniqueBuyerSamples.push(t.buys5m);
         if (t.uniqueBuyerSamples.length > 6) t.uniqueBuyerSamples.shift();
       }
       onUpdated(t);
     }
-  } catch (e) {
-    console.error('[dexscreener]', (e as Error).message);
-  }
+  } catch (error) { console.error('[dexscreener]', (error as Error).message); }
 }
 
 export async function fetchTokenSnapshot(ca: string): Promise<{ price: number; liq: number; mcap: number } | null> {
@@ -100,8 +72,8 @@ export async function fetchTokenSnapshot(ca: string): Promise<{ price: number; l
     const res = await fetch(BASE + ca);
     if (!res.ok) return null;
     const data: any = await res.json();
-    const p = (data.pairs || []).sort((a: any, b: any) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
-    if (!p) return null;
-    return { price: parseFloat(p.priceUsd || '0'), liq: p.liquidity?.usd || 0, mcap: p.fdv || 0 };
+    const pair = (data.pairs || []).sort((a: any, b: any) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
+    if (!pair) return null;
+    return { price: parseFloat(pair.priceUsd || '0'), liq: pair.liquidity?.usd || 0, mcap: pair.fdv || pair.marketCap || 0 };
   } catch { return null; }
 }
