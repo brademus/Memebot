@@ -1,4 +1,3 @@
-import { getSolPrice } from '../ingest/pumpfun';
 import { TokenRecord } from '../types';
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
@@ -53,57 +52,73 @@ function failed(status: string, startedAt: number, extras: Partial<ExecutableQuo
   };
 }
 
-// Quote-only use of Jupiter Swap V2. No wallet, private key, transaction signing,
-// or execution is involved. The entry price is made conservative by valuing output
-// at Jupiter's minimum amount after slippage and adding estimated network fees.
+async function requestOrder(outputMint: string, amount: number, apiKey: string, signal: AbortSignal) {
+  const params = new URLSearchParams({
+    inputMint: SOL_MINT,
+    outputMint,
+    amount: String(amount),
+    swapMode: 'ExactIn',
+    slippageBps: String(executionSettings.slippageBps),
+  });
+  const response = await fetch(`https://api.jup.ag/swap/v2/order?${params}`, {
+    headers: { 'x-api-key': apiKey },
+    signal,
+  });
+  const data: any = await response.json().catch(() => ({}));
+  return { response, data };
+}
+
+// Quote-only use of Jupiter Swap V2. No wallet, signer, transaction signing, or
+// execution is involved. If the requested size exceeds the liquidity cap, a second
+// smaller quote is requested rather than estimating price impact linearly.
 export async function quoteExecutableEntry(t: TokenRecord, markPrice: number): Promise<ExecutableQuote> {
   const startedAt = Date.now();
   const apiKey = process.env.JUPITER_API_KEY || '';
   if (!apiKey) return failed('jupiter_api_key_missing', startedAt);
   if (!t.ca || !markPrice || markPrice <= 0) return failed('invalid_mark', startedAt);
 
-  const solUsd = getSolPrice();
-  if (!Number.isFinite(solUsd) || solUsd <= 0) return failed('sol_price_unavailable', startedAt);
-
-  // Do not model a position large enough to materially consume the displayed pool.
-  const liquidityCappedSol = t.liquidityUsd > 0
-    ? (t.liquidityUsd * executionSettings.maxLiquidityPct) / solUsd
-    : executionSettings.positionSol;
-  const positionSol = Math.min(executionSettings.positionSol, liquidityCappedSol);
-  const estimatedPositionUsd = positionSol * solUsd;
-  if (estimatedPositionUsd < executionSettings.minPositionUsd) {
-    return failed('position_below_minimum', startedAt, { positionSol, positionUsd: estimatedPositionUsd });
+  const maxPositionUsd = t.liquidityUsd > 0
+    ? t.liquidityUsd * executionSettings.maxLiquidityPct
+    : Number.POSITIVE_INFINITY;
+  if (maxPositionUsd < executionSettings.minPositionUsd) {
+    return failed('position_below_minimum', startedAt, { positionUsd: maxPositionUsd });
   }
-
-  const amount = Math.max(1, Math.floor(positionSol * 1_000_000_000));
-  const params = new URLSearchParams({
-    inputMint: SOL_MINT,
-    outputMint: t.ca,
-    amount: String(amount),
-    swapMode: 'ExactIn',
-    slippageBps: String(executionSettings.slippageBps),
-  });
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), executionSettings.quoteTimeoutMs);
   try {
-    const response = await fetch(`https://api.jup.ag/swap/v2/order?${params}`, {
-      headers: { 'x-api-key': apiKey },
-      signal: controller.signal,
-    });
-    const data: any = await response.json().catch(() => ({}));
+    let amount = Math.max(1, Math.floor(executionSettings.positionSol * 1_000_000_000));
+    let { response, data } = await requestOrder(t.ca, amount, apiKey, controller.signal);
     if (!response.ok) return failed(`jupiter_http_${response.status}`, startedAt);
     if (data?.error || data?.errorMessage || !data?.outAmount) {
       return failed('jupiter_no_route', startedAt, { router: data?.router || null });
     }
 
-    const inUsd = Number(data.inUsdValue);
+    let inUsd = Number(data.inUsdValue);
+    if (!Number.isFinite(inUsd) || inUsd <= 0) return failed('jupiter_invalid_quote', startedAt);
+
+    // Jupiter provides the actual USD value of the SOL input. Re-quote at the pool
+    // cap when needed instead of relying on a separate, potentially stale SOL feed.
+    if (inUsd > maxPositionUsd * 1.01) {
+      amount = Math.max(1, Math.floor(amount * maxPositionUsd / inUsd));
+      ({ response, data } = await requestOrder(t.ca, amount, apiKey, controller.signal));
+      if (!response.ok) return failed(`jupiter_http_${response.status}`, startedAt);
+      if (data?.error || data?.errorMessage || !data?.outAmount) {
+        return failed('jupiter_no_route_after_size_cap', startedAt, { router: data?.router || null });
+      }
+      inUsd = Number(data.inUsdValue);
+    }
+
+    const positionSol = amount / 1_000_000_000;
     const outUsd = Number(data.outUsdValue);
     const outAmount = Number(data.outAmount);
     const threshold = Number(data.otherAmountThreshold);
     const impact = Math.abs(Number(data.priceImpact ?? data.priceImpactPct ?? 0));
     if (![inUsd, outUsd, outAmount].every(Number.isFinite) || inUsd <= 0 || outUsd <= 0 || outAmount <= 0) {
       return failed('jupiter_invalid_quote', startedAt);
+    }
+    if (inUsd < executionSettings.minPositionUsd) {
+      return failed('position_below_minimum', startedAt, { positionSol, positionUsd: inUsd });
     }
 
     const thresholdRatio = Number.isFinite(threshold) && threshold > 0
@@ -115,7 +130,8 @@ export async function quoteExecutableEntry(t: TokenRecord, markPrice: number): P
       data.prioritizationFeeLamports,
       data.rentFeeLamports,
     ].reduce((sum, value) => sum + Math.max(0, Number(value) || 0), 0);
-    const totalCostUsd = inUsd + (feeLamports / 1_000_000_000) * solUsd;
+    const impliedSolUsd = inUsd / positionSol;
+    const totalCostUsd = inUsd + (feeLamports / 1_000_000_000) * impliedSolUsd;
     const effectiveEntryPrice = markPrice * (totalCostUsd / minimumOutUsd);
     const common = {
       positionSol,
@@ -135,12 +151,7 @@ export async function quoteExecutableEntry(t: TokenRecord, markPrice: number): P
       return failed('effective_price_invalid', startedAt, common);
     }
 
-    return {
-      eligible: true,
-      status: 'executable_quote',
-      effectiveEntryPrice,
-      ...common,
-    };
+    return { eligible: true, status: 'executable_quote', effectiveEntryPrice, ...common };
   } catch (error) {
     return failed(error instanceof Error && error.name === 'AbortError' ? 'jupiter_timeout' : 'jupiter_error', startedAt);
   } finally {
