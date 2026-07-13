@@ -5,7 +5,7 @@
   "main": "dist/boot.js",
   "scripts": {
     "build": "tsc",
-    "test": "node --test dist/paper/execution.test.js",
+    "test": "node --test dist/paper/execution.test.js dist/api/bestbuys.test.js dist/scoring/score.test.js",
     "check": "npm run build && npm test",
     "start": "node dist/boot.js",
     "dev": "tsx src/boot.ts"
