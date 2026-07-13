@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { setSolPrice } from '../ingest/pumpfun';
 import { TokenRecord } from '../types';
 import { quoteExecutableEntry } from './execution';
 
@@ -27,7 +26,6 @@ test('marks a signal ineligible when the Jupiter API key is absent', async () =>
 
 test('uses minimum slippage output and fees to make entry price conservative', async () => {
   process.env.JUPITER_API_KEY = 'test-key';
-  setSolPrice(100);
   globalThis.fetch = async () => new Response(JSON.stringify({
     inUsdValue: 10,
     outUsdValue: 9.8,
@@ -52,7 +50,6 @@ test('uses minimum slippage output and fees to make entry price conservative', a
 
 test('rejects a route whose quoted price impact exceeds the configured maximum', async () => {
   process.env.JUPITER_API_KEY = 'test-key';
-  setSolPrice(100);
   globalThis.fetch = async () => new Response(JSON.stringify({
     inUsdValue: 10,
     outUsdValue: 8,
