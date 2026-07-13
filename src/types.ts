@@ -1,3 +1,12 @@
+export interface RawScoreFeatures {
+  freshness: number;
+  velocity: number;
+  buy_pressure: number;
+  organic: number;
+  social: number;
+  smart_money: number;
+}
+
 export interface TokenRecord {
   ca: string;
   symbol: string;
@@ -51,7 +60,14 @@ export interface TokenRecord {
   score: number;
   peakScore: number;
   firstScorePrice: number | null;
-  subs: { freshness: number; liquidity: number; buyPressure: number; holderGrowth: number; smartMoney: number };
+  subs: {
+    freshness: number;
+    liquidity: number;
+    buyPressure: number;
+    holderGrowth: number;
+    smartMoney: number;
+    raw?: RawScoreFeatures;
+  };
   // holder proxy tracking
   uniqueBuyerSamples: number[];      // rolling buys5m samples for growth calc
   bundle: { insiderPct: number; slot0Buyers: number; fundedSnipers: number; clusterPct?: number } | null;
@@ -232,6 +248,19 @@ export interface AppConfig {
     require_social: boolean;
     max_run_pct: number;
     max_alerts_per_day: number;
+  };
+  paper: {
+    require_jupiter_quote: boolean;
+    target_multiple: number;
+    stop_multiple: number;
+    max_hold_hours: number;
+    position_sol: number;
+    max_liquidity_pct: number;
+    min_position_usd: number;
+    slippage_bps: number;
+    max_price_impact_pct: number;
+    quote_timeout_ms: number;
+    min_forward_samples_per_lane: number;
   };
   polling: { dexscreener_interval_ms: number; outcome_snapshot_minutes: number[] };
   limits: { max_tracked_tokens: number; dexscreener_batch_size: number };
