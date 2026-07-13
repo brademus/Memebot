@@ -8,8 +8,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=20260712-layout2" />
-  <link rel="stylesheet" href="/layout-fixes.css?v=20260712-layout2" />
+  <link rel="stylesheet" href="/styles.css?v=20260712-final" />
+  <link rel="stylesheet" href="/layout-fixes.css?v=20260712-final" />
 </head>
 <body>
 <header>
@@ -20,23 +20,23 @@
 </header>
 <main>
 <section id="home" class="view active">
-  <div class="hero"><p>MEMECOIN INTELLIGENCE</p><h1>See what matters.<br><span>Ignore the noise.</span></h1><small>One dashboard for live calls, proven wins, tracked wallets, and every underlying signal.</small></div>
+  <div class="hero"><p>MEMECOIN INTELLIGENCE</p><h1>See what matters.<br><span>Ignore the noise.</span></h1><small>Live opportunities, confirmed calls, executable 3x evidence, tracked wallets, and every underlying signal.</small></div>
   <div class="tiles">
-    <button class="tile primary" data-go="convictions"><span class="tag">LIVE OPPORTUNITIES</span><strong id="nConv">0</strong><h2>Convictions</h2><p>Coins the bot still believes are buys right now.</p><b>Open convictions →</b></button>
-    <button class="tile" data-go="wins"><span class="tag">TRACK RECORD</span><strong id="nWins">0</strong><h2>Winning Calls</h2><p>Calls that reached at least 2x after being surfaced.</p><b>View winners →</b></button>
+    <button class="tile primary" data-go="opportunities"><span class="tag">LIVE NOW</span><strong id="nOpp">0</strong><h2>Opportunities</h2><p>Confirmed convictions and earlier Best Buy lanes, clearly separated.</p><b>Open opportunities →</b></button>
+    <button class="tile" data-go="wins"><span class="tag">EXECUTABLE EVIDENCE</span><strong id="nWins">0</strong><h2>3x Calls</h2><p>Calls that reached 3x from a modeled executable entry.</p><b>View evidence →</b></button>
     <button class="tile" data-go="wallets"><span class="tag">SMART MONEY</span><strong id="nWallets">0</strong><h2>Wallet Tracker</h2><p>Top tracked traders and estimated performance today.</p><b>Follow the money →</b></button>
     <button class="tile compact" data-go="watchlist"><strong id="nWatch">0</strong><h2>Live Watchlist</h2><p>Every coin that passed the safety gates.</p></button>
-    <button class="tile compact" data-go="performance"><strong id="nSeen">0</strong><h2>Performance</h2><p>Bot results, missed winners, and analytics.</p></button>
+    <button class="tile compact" data-go="performance"><strong id="nSeen">0</strong><h2>Performance</h2><p>Trigger counts, forward evidence, missed winners, and analytics.</p></button>
     <button class="tile compact" data-go="scanned"><strong id="nKilled">0</strong><h2>All Scanned</h2><p>The complete feed, including rejected coins.</p></button>
   </div>
 </section>
-<section id="convictions" class="view"><div class="title"><p>LIVE OPPORTUNITIES</p><h1>Convictions <span id="convCount">0</span></h1><small>One recommendation layer. Former Best Buy lanes are shown here only when they earn a current slot.</small></div><div id="convList" class="cards"></div></section>
-<section id="wins" class="view"><div class="title"><p>TRACK RECORD</p><h1>Winning Calls</h1><small>Coins that reached 2x or more after the bot called them.</small></div><div id="winStats" class="stats"></div><div id="winList" class="list"></div></section>
+<section id="opportunities" class="view"><div class="title"><p>LIVE NOW</p><h1>Opportunities <span id="oppCount">0</span></h1><small>A confirmed conviction has passed through TRIGGER. Earlier Smart Wallet, Organic, Pre‑Graduation and Second‑Wave cards have not.</small></div><div id="oppList" class="cards"></div></section>
+<section id="wins" class="view"><div class="title"><p>EXECUTABLE FORWARD EVIDENCE</p><h1>3x Calls</h1><small>Measured from a conservative Jupiter quote after slippage tolerance, price impact, modeled position size and estimated network fees.</small></div><div id="winStats" class="stats"></div><div id="winList" class="list"></div></section>
 <section id="wallets" class="view"><div class="title"><p>SMART MONEY</p><h1>Wallet Tracker</h1><small>Ranked by measured history, current activity, and conservative same-day realized SOL performance.</small></div><div id="walletStats" class="stats"></div><div id="walletList" class="list"></div></section>
 <section id="watchlist" class="view"><div class="title"><p>LIVE PIPELINE</p><h1>Watchlist</h1><small>All live coins that passed the rug and safety gates.</small></div><div class="filters"><button class="on" data-filter="ALL">All</button><button data-filter="TRIGGER">Trigger</button><button data-filter="HEATING">Heating</button><button data-filter="WATCHING">Watching</button></div><div class="table"><table><thead><tr><th>Coin</th><th>State</th><th>Score</th><th>Age</th><th>Liquidity</th><th>B:S</th><th>5m</th><th>Moved</th><th>Smart</th><th></th></tr></thead><tbody id="watchRows"></tbody></table></div></section>
-<section id="performance" class="view"><div class="title"><p>ACCOUNTABILITY</p><h1>Performance</h1><small>What the bot found, what worked, and what it missed.</small></div><div id="perfStats" class="stats"></div><div class="split"><div><h3>Top coins today</h3><div id="topCoins" class="list"></div></div><div><h3>Missed winners</h3><div id="missed" class="list"></div></div></div><div class="tools"><button id="report">Weekly report</button><button id="aiReview">AI review</button><button id="systemMonitor">System monitor</button></div><pre id="toolOutput" class="hidden"></pre></section>
+<section id="performance" class="view"><div class="title"><p>ACCOUNTABILITY</p><h1>Performance</h1><small>Trigger calls, confirmed convictions, executable 3x evidence, and what the bot missed.</small></div><div id="perfStats" class="stats"></div><div class="split"><div><h3>Forward evidence by lane</h3><div id="evidence" class="list"></div></div><div><h3>Missed winners</h3><div id="missed" class="list"></div></div></div><div class="tools"><button id="report">Weekly report</button><button id="aiReview">AI review</button><button id="systemMonitor">System monitor</button></div><pre id="toolOutput" class="hidden"></pre></section>
 <section id="scanned" class="view"><div class="title"><p>FULL TRANSPARENCY</p><h1>All Scanned</h1><small>Everything detected, including pending and rejected tokens.</small></div><div id="seenFeed" class="feed"></div><h3>Latest gate decisions</h3><div id="scanFeed" class="list"></div><button id="loadHistory" class="load">Load database history</button><div id="history" class="list"></div></section>
 </main>
-<script src="/app.js?v=20260712-layout2" defer></script>
+<script src="/app.js?v=20260712-final" defer></script>
 </body>
 </html>
