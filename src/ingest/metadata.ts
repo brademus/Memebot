@@ -1,10 +1,7 @@
 import { TokenRecord } from '../types';
-import { recordTgSample } from './social';
 
-// SOCIAL PRESENCE DETECTOR — the highest-lift free signal in the research:
-// tokens with X + Telegram + website graduate at 17.4x the rate of bare launches
-// (Telegram alone = 8.9x). pump.fun create events carry a metadata URI whose JSON
-// includes twitter/telegram/website fields. Fetch it async; score updates next tick.
+const telegramUrls = new Map<string, string>();
+
 export async function fetchSocials(t: TokenRecord, uri: string | undefined) {
   if (!uri) { t.socials.fetched = true; return; }
   try {
@@ -22,22 +19,24 @@ export async function fetchSocials(t: TokenRecord, uri: string | undefined) {
       fetched: true,
       tgMembers: null,
     };
-    // capture the human-authored description — the narrative signal a number
-    // can't read (live meme vs low-effort clone). Consumed by the AI read at trigger.
     if (m.description && typeof m.description === 'string') t.description = m.description.slice(0, 500);
-    // COMMUNITY VERIFICATION — a TG that exists is worth little; a TG with real
-    // members is the signal. Public t.me pages expose the count; a channel made
-    // five minutes before deploy with 3 members is a manufactured shell and
-    // should not ride the 17.4x social lift. Fail-neutral: null = unverifiable
-    // (private/invite links, scrape misses) and keeps today's behavior.
-    if (t.socials.tg) fetchTgMembers(t, String(m.telegram)).catch(() => {});
+    if (t.socials.tg) {
+      telegramUrls.set(t.ca, String(m.telegram));
+      fetchTgMembers(t, String(m.telegram)).catch(() => {});
+    }
   } catch { t.socials.fetched = true; }
+}
+
+export async function refreshTelegramMembers(t: TokenRecord): Promise<void> {
+  const raw = telegramUrls.get(t.ca);
+  if (!raw || !t.socials.tg) return;
+  await fetchTgMembers(t, raw);
 }
 
 async function fetchTgMembers(t: TokenRecord, raw: string) {
   const handle = raw.replace(/^https?:\/\//, '').replace(/^(www\.)?t\.me\//, '').replace(/^@/, '')
     .split(/[/?#]/)[0].trim();
-  if (!handle || handle.startsWith('+') || /joinchat/i.test(raw)) return;   // invite links: uncountable
+  if (!handle || handle.startsWith('+') || /joinchat/i.test(raw)) return;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 6000);
   try {
@@ -47,11 +46,26 @@ async function fetchTgMembers(t: TokenRecord, raw: string) {
     });
     if (!res.ok) return;
     const html = await res.text();
-    const m = html.match(/tgme_page_extra">\s*([\d\s\u00a0,\.]+)\s*(?:members|subscribers)/i);
-    if (m) {
-      t.socials.tgMembers = parseInt(m[1].replace(/[^\d]/g, ''), 10) || null;
-      if (t.socials.tgMembers) recordTgSample(t, t.socials.tgMembers);   // -> growth velocity
-    }
-  } catch { /* fail-neutral */ }
+    const match = html.match(/tgme_page_extra">\s*([\d\s\u00a0,\.]+)\s*(?:members|subscribers)/i);
+    if (!match) return;
+    const members = parseInt(match[1].replace(/[^\d]/g, ''), 10) || null;
+    if (!members) return;
+    t.socials.tgMembers = members;
+    recordTgSample(t, members);
+  } catch {}
   finally { clearTimeout(timer); }
+}
+
+function recordTgSample(t: TokenRecord, members: number) {
+  const now = Date.now();
+  t.tgSamples = (t.tgSamples || []).filter(sample => now - sample.at < 30 * 60_000);
+  const prior = t.tgSamples[t.tgSamples.length - 1];
+  if (!prior || prior.n !== members || now - prior.at > 60_000)
+    t.tgSamples.push({ n: members, at: now });
+  if (t.tgSamples.length >= 2) {
+    const first = t.tgSamples[0];
+    const last = t.tgSamples[t.tgSamples.length - 1];
+    const minutes = (last.at - first.at) / 60_000;
+    t.tgGrowthPerMin = minutes > 0.5 ? Math.round((last.n - first.n) / minutes) : 0;
+  }
 }
