@@ -1,20 +1,17 @@
-# ============================================================
-# MEMEWATCH CONFIG — every threshold lives here, not in code.
-# Tune freely; worker hot-reloads this file every 60s.
-# ============================================================
+# MEMEWATCH CONFIG — validated and hot-reloaded every 60 seconds.
 
 gates:
-  mint_authority_revoked: true        # kill if dev can still mint
-  freeze_authority_inactive: true     # kill if dev can freeze wallets
-  top3_holder_pct_max: 35             # excl. LP; kill above this
-  hard_reject_top_holder_pct: 50      # single holder above this = untradeable
-  honeypot_sim: true                  # Jupiter sell-quote must succeed
-  lp_locked_or_burned: true           # via RugCheck markets data
-  liq_to_mcap_ratio_min: 0.08         # AMM-pool tokens only (post-graduation)
-  min_liquidity_usd: 9000             # AMM-pool tokens (was 12k; a $4.8K-liq kill missed a measured 64.8x)
-  min_liquidity_sol_curve: 8          # bonding-curve floor in SOL (price-independent). Fresh curve ~30 SOL; 8 filters dead sub-launches
-  rugcheck_score_max: 5000            # RugCheck risk score ceiling (lower = safer)
-  require_social: false               # true = hard-kill tokens with no X/TG/website
+  mint_authority_revoked: true
+  freeze_authority_inactive: true
+  top3_holder_pct_max: 35
+  hard_reject_top_holder_pct: 50
+  honeypot_sim: true
+  lp_locked_or_burned: true
+  liq_to_mcap_ratio_min: 0.08
+  min_liquidity_usd: 9000
+  min_liquidity_sol_curve: 8
+  rugcheck_score_max: 5000
+  require_social: false
 
 prefilter:
   enabled: true
@@ -40,8 +37,8 @@ deployer:
 
 bundle:
   enabled: true
-  cluster_merge_enabled: true          # merge slot-0 buyers sharing a non-CEX funder
-  cluster_max_buyers: 30               # cap Helius fan-out for cluster analysis
+  cluster_merge_enabled: true
+  cluster_max_buyers: 30
   max_insider_supply_pct: 25
   max_funded_snipers: 2
   count_all_slot0_as_insider: false
@@ -65,7 +62,7 @@ states:
   trigger_min_trades: 12
   trigger_min_unique_buyers: 12
   trigger_buy_ratio_min: 1.3
-  early_runner_enabled: true           # let breadth-confirmed runners alert before the normal persistence age
+  early_runner_enabled: true
   early_runner_min_age: 2
   early_runner_min_buyers: 20
   early_runner_min_trades: 25
@@ -102,9 +99,9 @@ bestbuys:
   smart_lane_min_score: 55
   smart_lane_min_age_min: 2
   smart_lane_exit_score: 45
-  pregrad_lane: true                   # catch the run into graduation
+  pregrad_lane: true
   pregrad_min_pct: 0.8
-  secondwave_lane: true                # post-graduation retrace entry on clean structure
+  secondwave_lane: true
   secondwave_max_age_min: 180
   secondwave_min_fill_min: 30
   secondwave_min_retrace: 0.25
@@ -114,6 +111,19 @@ bestbuys:
 alerts:
   telegram_on_trigger: true
   realert_score_jump: 15
+
+paper:
+  require_jupiter_quote: true
+  target_multiple: 3
+  stop_multiple: 0.5
+  max_hold_hours: 24
+  position_sol: 0.1
+  max_liquidity_pct: 0.005
+  min_position_usd: 10
+  slippage_bps: 150
+  max_price_impact_pct: 0.08
+  quote_timeout_ms: 4000
+  min_forward_samples_per_lane: 100
 
 polling:
   dexscreener_interval_ms: 10000
@@ -166,7 +176,7 @@ learning:
   loosen_false_kill_rate: 0.05
 
 momentum:
-  enabled: false
+  enabled: true
   poll_seconds: 180
   min_liquidity_usd: 30000
   min_vol24h_usd: 150000

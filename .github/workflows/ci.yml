@@ -32,8 +32,17 @@ jobs:
       - name: TypeScript build
         run: npm run build
 
-      - name: Regression tests
-        run: npm test
+      - name: Jupiter entry and exit tests
+        run: node --test dist/paper/execution.test.js
+
+      - name: Best Buy lane tests
+        run: node --test dist/api/bestbuys.test.js
+
+      - name: Scoring calibration parity tests
+        run: node --test dist/scoring/score.test.js
+
+      - name: State-machine tests
+        run: node --test dist/scoring/states.test.js
 
       - name: Dashboard JavaScript syntax
         run: node --check public/app.js && node --check public/observed-wins.js

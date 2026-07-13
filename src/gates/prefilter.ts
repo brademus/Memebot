@@ -3,24 +3,9 @@ import { pool } from '../db';
 
 // PREFILTER — kill obvious garbage AT THE CREATE EVENT, before we spend anything:
 // no trade subscription, no metadata fetch, no gate retries, no API calls.
-//
-// Every check here is synchronous and in-memory. The signals:
-//   1. BLACKLISTED DEPLOYER — wallet already rugged a token we logged. The DB
-//      check the gates do costs a query per attempt; here it's a cached Set.
-//   2. SERIAL LAUNCHER — creator minted > N tokens in 24h ON OUR OWN STREAM.
-//      Spray-and-rug factories launch dozens a day; we watch every create, so we
-//      can count launches ourselves instead of paying Helius to reconstruct it.
-//   3. SYMBOL SPAM WAVE — the same ticker launched 3+ times inside an hour is a
-//      copycat wave chasing whatever just trended. First one gets a fair look;
-//      the wave behind it is noise by construction.
-//   4. NAME SANITY — empty/absurd symbols, links stuffed into the name field.
-//
-// A prefilter kill is still recorded (KILL + reason) so the seen feed stays
-// honest about everything we saw and why it never got a scan.
-
 const blacklist = new Set<string>();
-const creatorMints = new Map<string, number[]>();   // creator -> create timestamps (24h)
-const symbolWaves = new Map<string, number[]>();    // symbol(lower) -> create timestamps (60m)
+const creatorMints = new Map<string, number[]>();
+const symbolWaves = new Map<string, number[]>();
 const kills: Record<string, number> = {};
 let started = false;
 
@@ -32,72 +17,75 @@ function startBlacklistRefresh() {
   const load = async () => {
     if (!pool) return;
     try {
-      const r = await pool.query(`SELECT wallet FROM deployers WHERE blacklisted`);
+      const result = await pool.query(`SELECT wallet FROM deployers WHERE blacklisted`);
       blacklist.clear();
-      for (const row of r.rows) blacklist.add(row.wallet);
+      for (const row of result.rows) blacklist.add(row.wallet);
     } catch {}
   };
   load();
-  setInterval(load, 5 * 60_000);
+  const refreshTimer = setInterval(load, 5 * 60_000);
+  refreshTimer.unref();
 }
 
 function prune(map: Map<string, number[]>, windowMs: number) {
   const cutoff = Date.now() - windowMs;
-  for (const [k, arr] of map) {
-    const kept = arr.filter(t => t > cutoff);
-    if (kept.length) map.set(k, kept); else map.delete(k);
+  for (const [key, values] of map) {
+    const kept = values.filter(timestamp => timestamp > cutoff);
+    if (kept.length) map.set(key, kept);
+    else map.delete(key);
   }
 }
-setInterval(() => { prune(creatorMints, 24 * 3600_000); prune(symbolWaves, 60 * 60_000); }, 10 * 60_000);
+
+const pruneTimer = setInterval(() => {
+  prune(creatorMints, 24 * 3600_000);
+  prune(symbolWaves, 60 * 60_000);
+}, 10 * 60_000);
+pruneTimer.unref();
 
 export function prefilter(msg: { mint: string; symbol?: string; name?: string; traderPublicKey?: string }): string | null {
-  const p = cfg().prefilter;
+  const settings = cfg().prefilter;
   startBlacklistRefresh();
   const now = Date.now();
 
-  // always record the launch for counters, even when disabled — the data is free
   const creator = msg.traderPublicKey || null;
   if (creator) {
-    const arr = creatorMints.get(creator) || [];
-    arr.push(now);
-    creatorMints.set(creator, arr);
-  }
-  const symKey = (msg.symbol || '').toLowerCase();
-  if (symKey) {
-    const arr = symbolWaves.get(symKey) || [];
-    arr.push(now);
-    symbolWaves.set(symKey, arr);
+    const values = creatorMints.get(creator) || [];
+    values.push(now);
+    creatorMints.set(creator, values);
   }
 
-  if (!p || !p.enabled) return null;
+  const symbolKey = (msg.symbol || '').toLowerCase();
+  if (symbolKey) {
+    const values = symbolWaves.get(symbolKey) || [];
+    values.push(now);
+    symbolWaves.set(symbolKey, values);
+  }
 
-  // 1. blacklisted deployer — cached, instant
+  if (!settings?.enabled) return null;
   if (creator && blacklist.has(creator)) return kill('prefilter_blacklisted');
 
-  // 2. serial launcher — counted off our own stream, no API needed
   if (creator) {
     const cutoff = now - 24 * 3600_000;
-    const n = (creatorMints.get(creator) || []).filter(t => t > cutoff).length;
-    if (n > p.serial_launcher_24h) return kill(`prefilter_serial_${n}_in_24h`);
+    const count = (creatorMints.get(creator) || []).filter(timestamp => timestamp > cutoff).length;
+    if (count > settings.serial_launcher_24h) return kill(`prefilter_serial_${count}_in_24h`);
   }
 
-  // 3. symbol spam wave — same ticker flooding within the hour
-  if (symKey) {
+  if (symbolKey) {
     const cutoff = now - 60 * 60_000;
-    const n = (symbolWaves.get(symKey) || []).filter(t => t > cutoff).length;
-    if (n > p.symbol_wave_per_hour) return kill(`prefilter_wave_${symKey}_x${n}`);
+    const count = (symbolWaves.get(symbolKey) || []).filter(timestamp => timestamp > cutoff).length;
+    if (count > settings.symbol_wave_per_hour) return kill(`prefilter_wave_${symbolKey}_x${count}`);
   }
 
-  // 4. name sanity
-  const sym = (msg.symbol || '').trim();
-  if (sym.length < p.min_symbol_len || sym.length > p.max_symbol_len) return kill('prefilter_symbol_len');
-  const name = (msg.name || '');
+  const symbol = (msg.symbol || '').trim();
+  if (symbol.length < settings.min_symbol_len || symbol.length > settings.max_symbol_len)
+    return kill('prefilter_symbol_len');
+  const name = msg.name || '';
   if (/https?:\/\/|t\.me\/|discord\.gg\//i.test(name)) return kill('prefilter_link_in_name');
-
   return null;
 
   function kill(reason: string): string {
-    kills[reason.split('_').slice(0, 2).join('_')] = (kills[reason.split('_').slice(0, 2).join('_')] || 0) + 1;
+    const key = reason.split('_').slice(0, 2).join('_');
+    kills[key] = (kills[key] || 0) + 1;
     return reason;
   }
 }

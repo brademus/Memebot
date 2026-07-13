@@ -56,9 +56,27 @@ ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS discovered_from TEXT;
 ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS first_discovered TIMESTAMPTZ DEFAULT now();
 
 CREATE TABLE IF NOT EXISTS wallet_hits (
-  ca TEXT, wallet TEXT, at TIMESTAMPTZ DEFAULT now(),
+  ca TEXT,
+  wallet TEXT,
+  at TIMESTAMPTZ DEFAULT now(),
+  buy_at TIMESTAMPTZ DEFAULT now(),
+  buy_price NUMERIC,
   PRIMARY KEY (ca, wallet)
 );
+ALTER TABLE wallet_hits ADD COLUMN IF NOT EXISTS buy_at TIMESTAMPTZ DEFAULT now();
+ALTER TABLE wallet_hits ADD COLUMN IF NOT EXISTS buy_price NUMERIC;
+CREATE INDEX IF NOT EXISTS idx_wallet_hits_due ON wallet_hits(buy_at);
+
+CREATE TABLE IF NOT EXISTS wallet_hit_outcomes (
+  ca TEXT NOT NULL,
+  wallet TEXT NOT NULL,
+  snapshot_minutes INT NOT NULL,
+  price_usd NUMERIC,
+  multiple_from_buy NUMERIC,
+  taken_at TIMESTAMPTZ DEFAULT now(),
+  PRIMARY KEY (ca, wallet, snapshot_minutes)
+);
+
 CREATE TABLE IF NOT EXISTS wallet_winners (
   wallet TEXT, ca TEXT, PRIMARY KEY (wallet, ca)
 );
@@ -95,9 +113,6 @@ ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS quality_verdict TEXT;
 ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS win_rate NUMERIC;
 ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS round_trips INT;
 ALTER TABLE smart_wallets ADD COLUMN IF NOT EXISTS quality_checked_at TIMESTAMPTZ;
-
--- `early_subs` now contains `raw`: six normalized pre-weight features. Legacy rows
--- without that object remain for audit but are not used by the raw-v1 calibrator.
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS early_subs JSONB;
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS early_subs_at TIMESTAMPTZ;
 
@@ -124,8 +139,6 @@ ALTER TABLE tokens ADD COLUMN IF NOT EXISTS secondwave_price NUMERIC;
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS runtime JSONB;
 ALTER TABLE tokens ADD COLUMN IF NOT EXISTS runtime_at TIMESTAMPTZ;
 
--- Every suggestion is retained, including calls that could not obtain an executable
--- route. Only execution_eligible rows contribute to executable performance claims.
 CREATE TABLE IF NOT EXISTS paper_trades (
   id BIGSERIAL PRIMARY KEY,
   ca TEXT NOT NULL,
@@ -144,6 +157,7 @@ CREATE TABLE IF NOT EXISTS paper_trades (
   exit_reason TEXT,
   closed BOOLEAN NOT NULL DEFAULT false,
   target_multiple NUMERIC NOT NULL DEFAULT 3,
+  observed_target_hit_at TIMESTAMPTZ,
   target_hit_at TIMESTAMPTZ,
   seconds_to_target INTEGER,
   execution_eligible BOOLEAN NOT NULL DEFAULT false,
@@ -151,15 +165,23 @@ CREATE TABLE IF NOT EXISTS paper_trades (
   position_sol NUMERIC,
   position_usd NUMERIC,
   quoted_out_usd NUMERIC,
+  quoted_out_amount NUMERIC,
   price_impact_pct NUMERIC,
   slippage_bps INTEGER,
   fee_lamports BIGINT,
   router TEXT,
   quote_time_ms INTEGER,
+  exit_quote_status TEXT,
+  exit_quoted_usd NUMERIC,
+  exit_price_impact_pct NUMERIC,
+  exit_fee_lamports BIGINT,
+  exit_router TEXT,
+  exit_quote_time_ms INTEGER,
   UNIQUE (ca, signal)
 );
 
 ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS target_multiple NUMERIC NOT NULL DEFAULT 3;
+ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS observed_target_hit_at TIMESTAMPTZ;
 ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS target_hit_at TIMESTAMPTZ;
 ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS seconds_to_target INTEGER;
 ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS mark_entry_price NUMERIC;
@@ -168,13 +190,32 @@ ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS quote_status TEXT NOT NULL DEF
 ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS position_sol NUMERIC;
 ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS position_usd NUMERIC;
 ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS quoted_out_usd NUMERIC;
+ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS quoted_out_amount NUMERIC;
 ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS price_impact_pct NUMERIC;
 ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS slippage_bps INTEGER;
 ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS fee_lamports BIGINT;
 ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS router TEXT;
 ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS quote_time_ms INTEGER;
+ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS exit_quote_status TEXT;
+ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS exit_quoted_usd NUMERIC;
+ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS exit_price_impact_pct NUMERIC;
+ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS exit_fee_lamports BIGINT;
+ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS exit_router TEXT;
+ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS exit_quote_time_ms INTEGER;
+
+-- Preserve every historical market observation. Old entry-only Jupiter rows are not
+-- round-trip verified, so move their target timestamp to the observed column once.
+UPDATE paper_trades
+   SET observed_target_hit_at = target_hit_at
+ WHERE observed_target_hit_at IS NULL AND target_hit_at IS NOT NULL;
+UPDATE paper_trades
+   SET target_hit_at = NULL, seconds_to_target = NULL
+ WHERE execution_eligible = true
+   AND target_hit_at IS NOT NULL
+   AND exit_quote_status IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_paper_open ON paper_trades(closed) WHERE closed = false;
 CREATE INDEX IF NOT EXISTS idx_paper_signal ON paper_trades(signal);
 CREATE INDEX IF NOT EXISTS idx_paper_target_hit ON paper_trades(target_hit_at) WHERE target_hit_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_paper_observed_hit ON paper_trades(observed_target_hit_at) WHERE observed_target_hit_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_paper_executable ON paper_trades(execution_eligible, signal, entry_at DESC);

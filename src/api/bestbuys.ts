@@ -3,73 +3,56 @@ import { passesPersistence } from '../scoring/persistence';
 import { activeTokens, getToken } from '../store';
 import { rankToken } from '../scoring/rank';
 import { TokenRecord } from '../types';
-import { getStreamMode } from '../ingest/pumpfun';
 import { weightedSmartHits } from '../wallets/tracker';
 import { GRADUATION_SOL } from '../constants';
 import { openPaper, PaperSignal } from '../paper/paper';
 
-// STICKY BEST BUYS — a coin EARNS a slot (strict entry bar), then HOLDS it until
-// it genuinely stops looking good (hysteresis: enter at min_score, exit only below
-// exit_score, or on hard fails). Dropped coins can't flap back in for a cooldown.
-// This makes the panel a stable shortlist you can actually watch, not a slot machine.
-
-
-// tier-weighted smart-money confluence within the smart-lane window.
-// Weight, not raw count, is the qualifying number: one ELITE wallet
-// (elite_weight 3) clears a bar of 2 by itself — a 31-winner wallet's buy is
-// worth more than two 2-winner wallets agreeing.
+function smartStats(t: TokenRecord, bb: ReturnType<typeof cfg>['bestbuys']) {
+  return weightedSmartHits(t.smartHits, bb.smart_lane_window_min * 60_000);
+}
 function smartCount(t: TokenRecord, bb: ReturnType<typeof cfg>['bestbuys']): number {
   return smartStats(t, bb).weight;
 }
-function smartStats(t: TokenRecord, bb: ReturnType<typeof cfg>['bestbuys']) {
-  return weightedSmartHits(t.smartHits, bb.smart_lane_window_min * 60_000);
+
+export function isSecondWaveRetrace(price: number, peak: number, minRetrace: number, maxRetrace: number): boolean {
+  if (!(price > 0) || !(peak > 0)) return false;
+  const retrace = 1 - price / peak;
+  return retrace >= minRetrace && retrace <= maxRetrace;
 }
 
 interface Slot { ca: string; enteredAt: number; peakScore: number; lane: 'organic' | 'smart' | 'pregrad' | 'secondwave' }
 const slots: Slot[] = [];
-const droppedAt = new Map<string, number>();   // ca -> when dropped (re-entry cooldown)
+const droppedAt = new Map<string, number>();
 
 export function currentBestBuys() {
   const bb = cfg().bestbuys;
   const now = Date.now();
-
-  // prune the re-entry cooldown map (bounded memory)
   const pruneBefore = now - bb.reentry_cooldown_min * 60_000 * 2;
   for (const [ca, at] of droppedAt) if (at < pruneBefore) droppedAt.delete(ca);
 
-  // ---- 1. re-evaluate incumbents: hold unless genuinely degraded ----
   for (let i = slots.length - 1; i >= 0; i--) {
     const slot = slots[i];
     const t = getToken(slot.ca);
-    const heldSec = (now - slot.enteredAt) / 1000;
     let dropReason: string | null = null;
-
     if (!t || t.state === 'DEAD') dropReason = 'gone';
     else {
       const r = rankToken(t);
       slot.peakScore = Math.max(slot.peakScore, t.score);
-      // ALL quality fails drop IMMEDIATELY. The min-hold protects against slot
-      // churn from supersession, never against showing a degraded coin — a D-grade
-      // card in Best Buys is a lie regardless of how recently it was admitted.
+      const retrace = t.gradPeak > 0 ? 1 - t.priceUsd / t.gradPeak : 0;
       if (t.bundle && t.bundle.fundedSnipers > 0) dropReason = 'insider detected';
       else if (t.insiderKilled) dropReason = 'insider detected';
       else if (t.state === 'DYING') dropReason = 'momentum died';
-      else if (t.score < (slot.lane === 'smart' ? bb.smart_lane_exit_score : bb.exit_score))
-        dropReason = `score fell to ${t.score}`;
+      else if (t.score < (slot.lane === 'smart' ? bb.smart_lane_exit_score : bb.exit_score)) dropReason = `score fell to ${t.score}`;
       else if (slot.lane === 'organic' && (r.grade === 'C' || r.grade === 'D')) dropReason = `degraded to ${r.grade}`;
       else if (slot.lane === 'organic' && (r.timing === 'LATE' || r.timing === 'STALE')) dropReason = 'entry window closed';
       else if (slot.lane === 'smart' && smartCount(t, bb) === 0) dropReason = 'smart wallets exited window';
       else if (slot.lane === 'pregrad' && t.dex !== 'pumpfun') dropReason = 'graduated — catalyst played out';
       else if (slot.lane === 'pregrad' && t.peakCurveSol > 34 && t.curveSol < t.peakCurveSol * 0.85) dropReason = 'curve reversed before graduation';
-      else if (slot.lane === 'secondwave' && t.priceUsd < t.gradPeak * bb.secondwave_max_retrace) dropReason = 'dumped through the floor — thesis broke';
+      else if (slot.lane === 'secondwave' && retrace > bb.secondwave_max_retrace) dropReason = 'dumped through configured retrace floor';
       else if (slot.lane === 'secondwave' && t.priceUsd >= t.gradPeak * 1.5) dropReason = 'recovered 1.5x — second wave played out';
       else if (t.devBuyPct > bb.max_dev_pct) dropReason = 'dev bag grew';
-      else if (t.dex === 'pumpfun' && t.earlyBuyers.length >= 5
-               && (1 - t.earlyExited.length / t.earlyBuyers.length) < bb.min_retention)
-        dropReason = 'early buyers dumping';
-      else if (t.dex === 'pumpfun' && t.peakCurveSol > 34 && t.curveSol < t.peakCurveSol * 0.85)
-        dropReason = 'curve outflow';
-      void heldSec;   // min_hold now only shields incumbents from supersession, below
+      else if (t.dex === 'pumpfun' && t.earlyBuyers.length >= 5 && (1 - t.earlyExited.length / t.earlyBuyers.length) < bb.min_retention) dropReason = 'early buyers dumping';
+      else if (t.dex === 'pumpfun' && t.peakCurveSol > 34 && t.curveSol < t.peakCurveSol * 0.85) dropReason = 'curve outflow';
     }
     if (dropReason) {
       droppedAt.set(slot.ca, now);
@@ -77,17 +60,15 @@ export function currentBestBuys() {
     }
   }
 
-  // ---- 2. admissions: strict entry bar, fill free slots, rare supersede ----
   const inSlots = new Set(slots.map(s => s.ca));
   const organicSlots = () => slots.filter(s => s.lane === 'organic');
   const cooldownMs = bb.reentry_cooldown_min * 60_000;
   const candidates = activeTokens()
     .filter(t => !inSlots.has(t.ca))
     .filter(t => (droppedAt.get(t.ca) || 0) < now - cooldownMs)
-    .filter(t => passesPersistence(t, now))              // survived the snipe window
+    .filter(t => passesPersistence(t, now))
     .map(t => ({ t, r: rankToken(t) }))
-    .filter(({ t, r }) =>
-      ['A+', 'A'].includes(r.grade)
+    .filter(({ t, r }) => ['A+', 'A'].includes(r.grade)
       && r.timing === 'EARLY'
       && t.score >= bb.min_score
       && (t.totalBuys + t.totalSells) >= bb.min_trades
@@ -102,17 +83,11 @@ export function currentBestBuys() {
     if (organicSlots().length < bb.max_shown) {
       slots.push({ ca: t.ca, enteredAt: now, peakScore: t.score, lane: 'organic' });
     } else {
-      // full: only supersede the weakest incumbent by a clear margin, and never
-      // one still inside its minimum hold
       const org = organicSlots();
-      const weakest = org.reduce((min, s) => {
-        const st = getToken(s.ca);
-        const mt = getToken(min.ca);
-        return (st?.score ?? 0) < (mt?.score ?? 0) ? s : min;
-      }, org[0]);
-      const wt = getToken(weakest.ca);
+      const weakest = org.reduce((min, s) => (getToken(s.ca)?.score ?? 0) < (getToken(min.ca)?.score ?? 0) ? s : min, org[0]);
+      const incumbent = getToken(weakest.ca);
       const heldSec = (now - weakest.enteredAt) / 1000;
-      if (wt && heldSec >= bb.min_hold_seconds && t.score >= (wt.score + bb.supersede_margin)) {
+      if (incumbent && heldSec >= bb.min_hold_seconds && t.score >= incumbent.score + bb.supersede_margin) {
         droppedAt.set(weakest.ca, now);
         slots.splice(slots.indexOf(weakest), 1);
         slots.push({ ca: t.ca, enteredAt: now, peakScore: t.score, lane: 'organic' });
@@ -120,128 +95,77 @@ export function currentBestBuys() {
     }
   }
 
-  // ---- 2b. SMART LANE: the wallet-sourced socket. When multiple wallets that
-  // made money on OUR OWN logged winners converge on one fresh coin, that
-  // confluence front-runs the score — retail volume (which the score needs)
-  // hasn't arrived yet. Lower SCORE bar, identical SAFETY bar: gates passed,
-  // no insider structure, dev bag capped. One socket, same hysteresis idea.
   if (bb.smart_lane && !slots.some(s => s.lane === 'smart')) {
     const smart = activeTokens()
-      .filter(t => !inSlots.has(t.ca))
-      .filter(t => (droppedAt.get(t.ca) || 0) < now - cooldownMs)
-      .filter(t => t.gated === true && !t.insiderKilled)
-      .filter(t => !['DYING', 'DEAD', 'EXTENDED'].includes(t.state))
-      .filter(t => (!t.bundle || t.bundle.fundedSnipers === 0))
-      .filter(t => t.devBuyPct <= bb.max_dev_pct)
-      .filter(t => (now - t.firstSeen) / 60000 >= bb.smart_lane_min_age_min)
-      .filter(t => t.score >= bb.smart_lane_min_score)
-      // curve health without the full organic gauntlet: no meaningful drawdown
+      .filter(t => !inSlots.has(t.ca) && (droppedAt.get(t.ca) || 0) < now - cooldownMs)
+      .filter(t => t.gated === true && !t.insiderKilled && !['DYING', 'DEAD', 'EXTENDED'].includes(t.state))
+      .filter(t => (!t.bundle || t.bundle.fundedSnipers === 0) && t.devBuyPct <= bb.max_dev_pct)
+      .filter(t => (now - t.firstSeen) / 60000 >= bb.smart_lane_min_age_min && t.score >= bb.smart_lane_min_score)
       .filter(t => !(t.dex === 'pumpfun' && t.peakCurveSol > 34 && t.curveSol < t.peakCurveSol * 0.9))
       .map(t => ({ t, n: smartCount(t, bb) }))
       .filter(({ n }) => n >= bb.smart_lane_min_wallets)
       .sort((a, b) => b.n - a.n || b.t.score - a.t.score);
-    if (smart.length) {
-      const { t } = smart[0];
-      slots.push({ ca: t.ca, enteredAt: now, peakScore: t.score, lane: 'smart' });
-    }
+    if (smart.length) slots.push({ ca: smart[0].t.ca, enteredAt: now, peakScore: smart[0].t.score, lane: 'smart' });
   }
 
-  // ---- 2c. PRE-GRADUATION LANE: catch the run INTO graduation, not the retrace
-  // after. Graduation is one of the few SCHEDULED catalysts in this market — a
-  // coin at 80-100% of the bonding curve with sustained inflow is about to migrate,
-  // and being in before that beats chasing the post-grad pump (which the smart
-  // lane's own caution warns retraces hard). Same safety bar as every lane: gates
-  // passed, no insider structure, dev bag capped. Requires REAL inflow (not just
-  // proximity) so we don't buy a stalled curve.
   if (bb.pregrad_lane && !slots.some(s => s.lane === 'pregrad')) {
     const near = activeTokens()
-      .filter(t => !inSlots.has(t.ca))
-      .filter(t => (droppedAt.get(t.ca) || 0) < now - cooldownMs)
-      .filter(t => t.gated === true && !t.insiderKilled)
-      .filter(t => t.dex === 'pumpfun' && t.curveSol > 0)
-      .filter(t => !['DYING', 'DEAD'].includes(t.state))
-      .filter(t => (!t.bundle || t.bundle.fundedSnipers === 0))
-      .filter(t => t.devBuyPct <= bb.max_dev_pct)
-      // in the graduation zone: 80-100% of the real curve threshold
-      .filter(t => t.curveSol >= GRADUATION_SOL * bb.pregrad_min_pct && t.curveSol < GRADUATION_SOL * 1.0)
-      // REAL inflow — curve is still climbing, not stalled at the threshold
+      .filter(t => !inSlots.has(t.ca) && (droppedAt.get(t.ca) || 0) < now - cooldownMs)
+      .filter(t => t.gated === true && !t.insiderKilled && t.dex === 'pumpfun' && t.curveSol > 0)
+      .filter(t => !['DYING', 'DEAD'].includes(t.state) && (!t.bundle || t.bundle.fundedSnipers === 0) && t.devBuyPct <= bb.max_dev_pct)
+      .filter(t => t.curveSol >= GRADUATION_SOL * bb.pregrad_min_pct && t.curveSol < GRADUATION_SOL)
       .map(t => {
-        const ref = t.curveSamples.find(cs => now - cs.at >= 3 * 60_000);
-        const climbing = !ref || t.curveSol > ref.sol;
-        const pct = Math.round((t.curveSol / GRADUATION_SOL) * 100);
-        return { t, climbing, pct };
+        const ref = t.curveSamples.find(sample => now - sample.at >= 3 * 60_000);
+        return { t, climbing: !ref || t.curveSol > ref.sol, pct: Math.round(t.curveSol / GRADUATION_SOL * 100) };
       })
       .filter(({ climbing }) => climbing)
       .sort((a, b) => b.pct - a.pct);
-    if (near.length) {
-      const { t } = near[0];
-      slots.push({ ca: t.ca, enteredAt: now, peakScore: t.score, lane: 'pregrad' });
-    }
+    if (near.length) slots.push({ ca: near[0].t.ca, enteredAt: now, peakScore: near[0].t.score, lane: 'pregrad' });
   }
 
-  // ---- 2d. SECOND-WAVE LANE: the research's answer to why momentum failed.
-  // Momentum-chasing (24h-trending strength) measured 0.03x — you buy the top. The
-  // higher-probability entry is the post-graduation RETRACE of a STRUCTURALLY CLEAN
-  // token: graduated, moderate fill (not a <30min coordinated sprint), pulled back
-  // from post-grad peak, low cluster-merged concentration, deployer rep not-bad,
-  // smart-wallet confirmed. Captures the post-grad 2-5x without launch-snipe risk.
   if (bb.secondwave_lane && !slots.some(s => s.lane === 'secondwave')) {
-    const cand = activeTokens()
-      .filter(t => !inSlots.has(t.ca))
-      .filter(t => (droppedAt.get(t.ca) || 0) < now - cooldownMs)
-      .filter(t => t.gated === true && !t.insiderKilled)
-      .filter(t => !!t.gradAt && t.dex === 'pumpswap')
+    const candidates2 = activeTokens()
+      .filter(t => !inSlots.has(t.ca) && (droppedAt.get(t.ca) || 0) < now - cooldownMs)
+      .filter(t => t.gated === true && !t.insiderKilled && !!t.gradAt && t.dex === 'pumpswap')
       .filter(t => now - (t.gradAt || 0) < bb.secondwave_max_age_min * 60_000)
       .filter(t => (t.fillMinutes ?? 0) >= bb.secondwave_min_fill_min)
-      .filter(t => t.gradPeak > 0 && t.priceUsd > 0)
-      .filter(t => t.priceUsd <= t.gradPeak * (1 - bb.secondwave_min_retrace))
-      .filter(t => t.priceUsd >= t.gradPeak * bb.secondwave_max_retrace)
-      .filter(t => !t.bundle || (((t.bundle as any).clusterPct ?? t.bundle.insiderPct) <= bb.max_cluster_pct))
+      .filter(t => isSecondWaveRetrace(t.priceUsd, t.gradPeak, bb.secondwave_min_retrace, bb.secondwave_max_retrace))
+      .filter(t => !t.bundle || ((t.bundle.clusterPct ?? t.bundle.insiderPct) <= bb.max_cluster_pct))
       .filter(t => (t.deployerRep?.cls ?? 'KNOWN') !== 'SERIAL_DEAD')
-      .filter(t => smartCount(t, bb) >= 1)
-      .filter(t => !['DYING', 'DEAD'].includes(t.state))
+      .filter(t => smartCount(t, bb) >= 1 && !['DYING', 'DEAD'].includes(t.state))
       .map(t => ({ t, retrace: 1 - t.priceUsd / t.gradPeak }))
       .sort((a, b) => b.retrace - a.retrace);
-    if (cand.length) {
-      const { t } = cand[0];
-      t.secondWaveAt = now;
-      slots.push({ ca: t.ca, enteredAt: now, peakScore: t.score, lane: 'secondwave' });
+    if (candidates2.length) {
+      const token = candidates2[0].t;
+      token.secondWaveAt = now;
+      slots.push({ ca: token.ca, enteredAt: now, peakScore: token.score, lane: 'secondwave' });
     }
   }
 
-  // PAPER-BUY every Best Buys suggestion at the instant it appears. enteredAt===now
-  // means the slot was created THIS cycle (a fresh suggestion), so we only open once.
-  for (const s of slots) {
-    if (s.enteredAt === now) {
-      const t = getToken(s.ca);
-      if (t && t.priceUsd > 0) openPaper(t.ca, t.symbol, ('bb_' + s.lane) as PaperSignal, t.priceUsd, t.score);
+  for (const slot of slots) {
+    if (slot.enteredAt === now) {
+      const token = getToken(slot.ca);
+      if (token && token.priceUsd > 0) openPaper(token.ca, token.symbol, (`bb_${slot.lane}`) as PaperSignal, token.priceUsd, token.score);
     }
   }
 
-  return slots
-    .slice()
-    .sort((a, b) => a.enteredAt - b.enteredAt)
-    .map(s => {
-      const t = getToken(s.ca)!;
-      const r = rankToken(t);
-      const st = smartStats(t, bb);
-      return {
-        ca: t.ca, symbol: t.symbol, grade: r.grade, timing: r.timing,
-        lane: s.lane,
-        label: s.lane === 'smart'
-          ? `${st.elite ? st.elite + ' ELITE + ' : ''}${st.wallets - st.elite} proven-winner wallet${st.wallets !== 1 ? 's' : ''} bought this within ${bb.smart_lane_window_min}m (confluence weight ${st.weight}). ` + (r.label || '')
-          : s.lane === 'pregrad'
-          ? `${Math.round((t.curveSol / GRADUATION_SOL) * 100)}% to graduation with active inflow — catch the run in, not the retrace after. ` + (r.label || '')
-          : s.lane === 'secondwave'
-          ? `post-graduation retrace ${Math.round((1 - t.priceUsd / t.gradPeak) * 100)}% off peak · ${t.fillMinutes}m fill · clean structure — second-wave entry, not the top. ` + (r.label || '')
-          : r.label,
-        confidence: r.confidence, score: t.score, peakScore: s.peakScore,
-        heldMin: Math.round((now - s.enteredAt) / 60000),
-        cautions: r.cautions,
-        liq: Math.round(t.liquidityUsd), buys: t.buys5m, sells: t.sells5m,
-        smart: st.wallets,
-        smartElite: st.elite,
-        pair: t.pairAddress,
-      };
-    });
+  return slots.slice().sort((a, b) => a.enteredAt - b.enteredAt).map(slot => {
+    const token = getToken(slot.ca)!;
+    const rank = rankToken(token);
+    const smart = smartStats(token, bb);
+    return {
+      ca: token.ca, symbol: token.symbol, grade: rank.grade, timing: rank.timing, lane: slot.lane,
+      label: slot.lane === 'smart'
+        ? `${smart.elite ? smart.elite + ' ELITE + ' : ''}${smart.wallets - smart.elite} proven-winner wallet${smart.wallets !== 1 ? 's' : ''} bought this within ${bb.smart_lane_window_min}m (confluence weight ${smart.weight}). ${rank.label || ''}`
+        : slot.lane === 'pregrad'
+        ? `${Math.round(token.curveSol / GRADUATION_SOL * 100)}% to graduation with active inflow — catch the run in, not the retrace after. ${rank.label || ''}`
+        : slot.lane === 'secondwave'
+        ? `post-graduation retrace ${Math.round((1 - token.priceUsd / token.gradPeak) * 100)}% off peak · ${token.fillMinutes}m fill · clean structure — second-wave entry, not the top. ${rank.label || ''}`
+        : rank.label,
+      confidence: rank.confidence, score: token.score, peakScore: slot.peakScore,
+      heldMin: Math.round((now - slot.enteredAt) / 60000), cautions: rank.cautions,
+      liq: Math.round(token.liquidityUsd), buys: token.buys5m, sells: token.sells5m,
+      smart: smart.wallets, smartElite: smart.elite, pair: token.pairAddress,
+    };
+  });
 }
