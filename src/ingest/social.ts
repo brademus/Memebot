@@ -1,37 +1,20 @@
 import { cfg } from '../config';
-import { getToken, addToken } from '../store';
-import { TokenRecord } from '../types';
-
-// SOCIAL EDGE — cheap, fast, ban-proof. NOT X scraping (403/ToS/burns money).
-// Two free signals that actually predict:
-//
-//   BOOSTS — Dexscreener's token-boosts feed lists tokens people are PAYING to
-//   promote right now, with boost amount (money = harder-to-fake attention than
-//   follower counts) and social links. A coin already in our pipeline that shows
-//   up here is getting real promotional push; an unseen boosted coin with a big
-//   amount is a discovery lead. Free, public, no auth, no rate pain.
-//
-//   TG VELOCITY — we already capture Telegram member COUNT once; the real tell is
-//   member GROWTH RATE. 200 -> 800 in 20min is a pre-pump signal a static count
-//   misses. Same free t.me scrape, sampled over time.
-//
-// Both are logged as measured signals (boostAmount, tgGrowthPerMin) so the
-// calibrator can learn whether they predict — never a blind score bump.
+import { activeTokens, getToken, addToken } from '../store';
+import { refreshTelegramMembers } from './metadata';
 
 const BOOSTS_LATEST = 'https://api.dexscreener.com/token-boosts/latest/v1';
 const BOOSTS_TOP = 'https://api.dexscreener.com/token-boosts/top/v1';
-
-const diag = { lastRun: null as string | null, lastError: null as string | null, boostsSeen: 0, surfaced: 0 };
+const diag = { lastRun: null as string | null, lastError: null as string | null, boostsSeen: 0, surfaced: 0, telegramSampled: 0 };
 export const socialDiag = () => ({ ...diag });
 
 export function startSocialScanner(onFound: (ca: string) => void) {
   if (!cfg().social?.enabled) return;
-  const tick = () => scanBoosts(onFound).catch(e => { diag.lastError = (e as Error).message; });
+  const tick = () => scan(onFound).catch(error => { diag.lastError = (error as Error).message; });
   setTimeout(tick, 45_000);
   setInterval(tick, Math.max(60, cfg().social.boost_poll_seconds) * 1000);
 }
 
-async function scanBoosts(onFound: (ca: string) => void) {
+async function scan(onFound: (ca: string) => void) {
   diag.lastRun = new Date().toISOString();
   diag.lastError = null;
   const seen = new Map<string, { amount: number; total: number }>();
@@ -40,41 +23,41 @@ async function scanBoosts(onFound: (ca: string) => void) {
       const res = await fetch(url, { headers: { accept: 'application/json' } });
       if (!res.ok) continue;
       const data: any = await res.json();
-      for (const b of Array.isArray(data) ? data : []) {
-        if (b.chainId !== 'solana' || !b.tokenAddress) continue;
-        const prev = seen.get(b.tokenAddress) || { amount: 0, total: 0 };
-        seen.set(b.tokenAddress, {
-          amount: Math.max(prev.amount, Number(b.amount) || 0),
-          total: Math.max(prev.total, Number(b.totalAmount) || 0),
+      for (const boost of Array.isArray(data) ? data : []) {
+        if (boost.chainId !== 'solana' || !boost.tokenAddress) continue;
+        const prior = seen.get(boost.tokenAddress) || { amount: 0, total: 0 };
+        seen.set(boost.tokenAddress, {
+          amount: Math.max(prior.amount, Number(boost.amount) || 0),
+          total: Math.max(prior.total, Number(boost.totalAmount) || 0),
         });
       }
-    } catch { /* one endpoint failing is fine */ }
+    } catch {}
   }
   diag.boostsSeen = seen.size;
 
-  const s = cfg().social;
+  const settings = cfg().social;
   for (const [ca, boost] of seen) {
     const existing = getToken(ca);
-    if (existing) {
-      existing.boostAmount = boost.total;   // annotate — calibrator measures if it predicts
-    } else if (boost.total >= s.boost_surface_min) {
-      // an unseen coin with real paid promotion is a discovery lead — pull it in,
-      // it rides the full gates like anything else (paid ≠ safe).
-      const t = addToken({ ca, symbol: ca.slice(0, 4) + '…', name: '(boost-surfaced)', creator: null, source: 'momentum' });
-      if (t) { t.boostAmount = boost.total; t.dex = 'raydium'; t.dexId = 'raydium'; diag.surfaced++; onFound(ca); }
+    if (existing) existing.boostAmount = boost.total;
+    else if (boost.total >= settings.boost_surface_min) {
+      const token = addToken({ ca, symbol: ca.slice(0, 4) + '…', name: '(boost-surfaced)', creator: null, source: 'momentum' });
+      if (token) {
+        token.boostAmount = boost.total;
+        token.dex = 'raydium';
+        token.dexId = 'raydium';
+        diag.surfaced++;
+        onFound(ca);
+      }
     }
   }
-}
 
-// TG VELOCITY — called from the metadata layer's periodic re-fetch. Records a
-// members sample and computes growth/min over the retained window.
-export function recordTgSample(t: TokenRecord, members: number) {
-  const now = Date.now();
-  t.tgSamples = (t.tgSamples || []).filter(x => now - x.at < 30 * 60_000);
-  t.tgSamples.push({ n: members, at: now });
-  if (t.tgSamples.length >= 2) {
-    const first = t.tgSamples[0], last = t.tgSamples[t.tgSamples.length - 1];
-    const mins = (last.at - first.at) / 60_000;
-    t.tgGrowthPerMin = mins > 0.5 ? Math.round((last.n - first.n) / mins) : 0;
-  }
+  // A single metadata scrape cannot produce velocity. Resample live Telegram-backed
+  // candidates in bounded batches so member growth becomes a real measured feature.
+  const telegram = activeTokens()
+    .filter(token => token.socials.tg)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 30);
+  diag.telegramSampled = telegram.length;
+  for (let index = 0; index < telegram.length; index += 5)
+    await Promise.all(telegram.slice(index, index + 5).map(token => refreshTelegramMembers(token)));
 }
