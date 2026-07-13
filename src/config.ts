@@ -5,9 +5,8 @@ import { AppConfig } from './types';
 
 const CONFIG_PATH = path.join(process.cwd(), 'config.yaml');
 
-// LEARNED OVERRIDES — the filter learner (tuning/filtertune.ts) persists threshold
-// adjustments to Postgres so they survive redeploys. They overlay the YAML baseline;
-// YAML remains the human-readable source of truth while Postgres stores learned values.
+// LEARNED OVERRIDES — the filter learner persists threshold adjustments to Postgres
+// so they survive redeploys. YAML remains the human-readable baseline.
 let overrides: Record<string, number> = {};
 let weightOverrides: Record<string, number> = {};
 let directions: Record<string, number> = {};
@@ -97,34 +96,34 @@ function validateConfig(raw: unknown): AppConfig {
   }
 
   const errors: string[] = [];
-  for (const p of REQUIRED_BOOLEANS) {
-    if (typeof valueAt(raw, p) !== 'boolean') errors.push(`${p} must be boolean`);
+  for (const path of REQUIRED_BOOLEANS) {
+    if (typeof valueAt(raw, path) !== 'boolean') errors.push(`${path} must be boolean`);
   }
-  for (const p of REQUIRED_NUMBERS) {
-    const v = valueAt(raw, p);
-    if (typeof v !== 'number' || !Number.isFinite(v)) errors.push(`${p} must be a finite number`);
+  for (const path of REQUIRED_NUMBERS) {
+    const value = valueAt(raw, path);
+    if (typeof value !== 'number' || !Number.isFinite(value)) errors.push(`${path} must be a finite number`);
   }
-  for (const p of REQUIRED_STRINGS) {
-    const v = valueAt(raw, p);
-    if (typeof v !== 'string' || !v.trim()) errors.push(`${p} must be a non-empty string`);
+  for (const path of REQUIRED_STRINGS) {
+    const value = valueAt(raw, path);
+    if (typeof value !== 'string' || !value.trim()) errors.push(`${path} must be a non-empty string`);
   }
 
   const hours = valueAt(raw, 'launch_signals.dead_hours_utc');
-  if (!Array.isArray(hours) || hours.some(v => !Number.isInteger(v) || v < 0 || v > 23)) {
+  if (!Array.isArray(hours) || hours.some(value => !Number.isInteger(value) || value < 0 || value > 23)) {
     errors.push('launch_signals.dead_hours_utc must contain UTC hours 0-23');
   }
 
   const snapshots = valueAt(raw, 'polling.outcome_snapshot_minutes');
   if (!Array.isArray(snapshots) || snapshots.length === 0 ||
-      snapshots.some(v => !Number.isInteger(v) || v <= 0) ||
-      snapshots.some((v, i) => i > 0 && v <= snapshots[i - 1])) {
+      snapshots.some(value => !Number.isInteger(value) || value <= 0) ||
+      snapshots.some((value, index) => index > 0 && value <= snapshots[index - 1])) {
     errors.push('polling.outcome_snapshot_minutes must be positive, strictly increasing integers');
   }
 
   const weightValues = ['velocity', 'organic', 'social', 'buy_pressure', 'freshness', 'smart_money']
-    .map(k => Number(valueAt(raw, `weights.${k}`)));
+    .map(key => Number(valueAt(raw, `weights.${key}`)));
   if (weightValues.every(Number.isFinite)) {
-    const total = weightValues.reduce((sum, v) => sum + v, 0);
+    const total = weightValues.reduce((sum, value) => sum + value, 0);
     if (Math.abs(total - 100) > 0.001) errors.push(`weights must sum to 100; received ${total}`);
   }
 
@@ -142,33 +141,32 @@ function validateConfig(raw: unknown): AppConfig {
   return raw as AppConfig;
 }
 
-export function setConfigOverrides(o: Record<string, number>) {
-  // Merge per key so the filter learner and score calibrator cannot erase each other.
-  overrides = { ...overrides, ...o };
+export function setConfigOverrides(next: Record<string, number>) {
+  overrides = { ...overrides, ...next };
   try { current = withOverrides(load()); }
-  catch (e) { console.error('[config] rejected learned overrides:', (e as Error).message); }
+  catch (error) { console.error('[config] rejected learned overrides:', (error as Error).message); }
 }
 
-export function setDirections(d: Record<string, number>) { directions = d; }
+export function setDirections(next: Record<string, number>) { directions = next; }
 export function getDirection(key: string): number { return directions[key] ?? 1; }
 
-export function setWeightOverrides(o: Record<string, number>) {
-  weightOverrides = o;
+export function setWeightOverrides(next: Record<string, number>) {
+  weightOverrides = next;
   try { current = withOverrides(load()); }
-  catch (e) { console.error('[config] rejected learned weights:', (e as Error).message); }
+  catch (error) { console.error('[config] rejected learned weights:', (error as Error).message); }
 }
 
 function withOverrides(base: AppConfig): AppConfig {
-  for (const [p, v] of Object.entries(overrides)) {
-    const keys = p.split('.');
+  for (const [dottedPath, value] of Object.entries(overrides)) {
+    const keys = dottedPath.split('.');
     let node: any = base;
-    for (let i = 0; i < keys.length - 1 && node; i++) node = node[keys[i]];
-    if (node && typeof node[keys[keys.length - 1]] === 'number') node[keys[keys.length - 1]] = v;
+    for (let index = 0; index < keys.length - 1 && node; index++) node = node[keys[index]];
+    if (node && typeof node[keys[keys.length - 1]] === 'number') node[keys[keys.length - 1]] = value;
   }
-  const wnode: any = (base as any).weights;
-  if (wnode) {
-    for (const [k, v] of Object.entries(weightOverrides)) {
-      if (typeof wnode[k] === 'number') wnode[k] = v;
+  const weights: any = (base as any).weights;
+  if (weights) {
+    for (const [key, value] of Object.entries(weightOverrides)) {
+      if (typeof weights[key] === 'number') weights[key] = value;
     }
   }
   return validateConfig(base);
@@ -181,14 +179,16 @@ function load(): AppConfig {
 let current: AppConfig = withOverrides(load());
 console.log('[config] validated runtime configuration');
 
-// Hot-reload every 60s. A bad edit never replaces the last known-good config.
-setInterval(() => {
+// A hot-reload timer should not keep tests or one-off diagnostic scripts alive.
+// The production worker already has sockets/server timers, so unref changes no runtime behavior.
+const reloadTimer = setInterval(() => {
   try {
     current = withOverrides(load());
-  } catch (e) {
-    console.error('[config] reload rejected, keeping previous:', (e as Error).message);
+  } catch (error) {
+    console.error('[config] reload rejected, keeping previous:', (error as Error).message);
   }
 }, 60_000);
+reloadTimer.unref();
 
 export const cfg = () => current;
 export const env = {
@@ -199,6 +199,7 @@ export const env = {
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
   GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
   PUMPPORTAL_API_KEY: process.env.PUMPPORTAL_API_KEY || '',
+  JUPITER_API_KEY: process.env.JUPITER_API_KEY || '',
   ADMIN_KEY: process.env.ADMIN_KEY || '',
   PORT: parseInt(process.env.PORT || '3000', 10),
 };
