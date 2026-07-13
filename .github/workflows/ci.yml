@@ -34,3 +34,6 @@ jobs:
 
       - name: Regression tests
         run: npm test
+
+      - name: Dashboard JavaScript syntax
+        run: node --check public/app.js && node --check public/observed-wins.js
