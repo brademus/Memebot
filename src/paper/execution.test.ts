@@ -3,85 +3,102 @@ import assert from 'node:assert/strict';
 import { TokenRecord } from '../types';
 import { quoteExecutableEntry, quoteExecutableExit } from './execution';
 
-const token = {
-  ca: '7YttLkHDo6NEQv7YQwKkK8uZZzYxqkZQ2u4xJr6pump',
-  liquidityUsd: 100_000,
-} as TokenRecord;
-
+const token = { ca: '7YttLkHDo6NEQv7YQwKkK8uZZzYxqkZQ2u4xJr6pump', liquidityUsd: 100_000 } as TokenRecord;
 const originalFetch = globalThis.fetch;
-const originalKey = process.env.JUPITER_API_KEY;
+const original = {
+  key: process.env.JUPITER_API_KEY,
+  wallet: process.env.SIMULATION_WALLET,
+  rpc: process.env.SOLANA_RPC_URL,
+};
 
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
-  if (originalKey === undefined) delete process.env.JUPITER_API_KEY;
-  else process.env.JUPITER_API_KEY = originalKey;
+  restore('JUPITER_API_KEY', original.key);
+  restore('SIMULATION_WALLET', original.wallet);
+  restore('SOLANA_RPC_URL', original.rpc);
 });
+
+function configure() {
+  process.env.JUPITER_API_KEY = 'test-key';
+  process.env.SIMULATION_WALLET = '11111111111111111111111111111111';
+  process.env.SOLANA_RPC_URL = 'https://rpc.test';
+}
+function quote(overrides: Record<string, unknown> = {}) {
+  return {
+    inUsdValue: 10, outUsdValue: 9.8, outAmount: '1000000', otherAmountThreshold: '985000',
+    priceImpact: -0.01, slippageBps: 150, signatureFeeLamports: 5000,
+    prioritizationFeeLamports: 5000, rentFeeLamports: 0, router: 'metis', mode: 'manual',
+    transaction: 'A'.repeat(100), ...overrides,
+  };
+}
+function simulatedFetch(overrides: Record<string, unknown> = {}) {
+  return async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.includes('api.jup.ag')) return new Response(JSON.stringify(quote(overrides)), { status: 200, headers: { 'content-type': 'application/json' } });
+    return new Response(JSON.stringify({ jsonrpc: '2.0', result: { value: { err: null, unitsConsumed: 123456 } } }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+}
 
 test('marks a signal ineligible when the Jupiter API key is absent', async () => {
   delete process.env.JUPITER_API_KEY;
-  const quote = await quoteExecutableEntry(token, 0.00001);
-  assert.equal(quote.eligible, false);
-  assert.equal(quote.status, 'jupiter_api_key_missing');
+  const result = await quoteExecutableEntry(token, 0.00001);
+  assert.equal(result.eligible, false);
+  assert.equal(result.status, 'jupiter_api_key_missing');
 });
 
-test('uses minimum slippage output and fees to make entry price conservative', async () => {
+test('requires a simulation wallet for executable evidence', async () => {
   process.env.JUPITER_API_KEY = 'test-key';
-  globalThis.fetch = async () => new Response(JSON.stringify({
-    inUsdValue: 10,
-    outUsdValue: 9.8,
-    outAmount: '1000000',
-    otherAmountThreshold: '985000',
-    priceImpact: -0.01,
-    slippageBps: 150,
-    signatureFeeLamports: 5000,
-    prioritizationFeeLamports: 5000,
-    rentFeeLamports: 0,
-    router: 'metis',
-  }), { status: 200, headers: { 'content-type': 'application/json' } });
+  delete process.env.SIMULATION_WALLET;
+  const result = await quoteExecutableEntry(token, 0.00001);
+  assert.equal(result.eligible, false);
+  assert.equal(result.status, 'simulation_wallet_missing');
+});
 
+test('builds and simulates multiple sizes before approving entry', async () => {
+  configure();
+  globalThis.fetch = simulatedFetch();
   const mark = 0.00001;
-  const quote = await quoteExecutableEntry(token, mark);
-  assert.equal(quote.eligible, true);
-  assert.equal(quote.status, 'executable_quote');
-  assert.ok((quote.effectiveEntryPrice || 0) > mark);
-  assert.equal(quote.router, 'metis');
-  assert.equal(quote.positionSol, 0.1);
-  assert.equal(quote.quotedOutAmount, '1000000');
+  const result = await quoteExecutableEntry(token, mark);
+  assert.equal(result.eligible, true);
+  assert.equal(result.status, 'executable_simulated');
+  assert.equal(result.transactionBuilt, true);
+  assert.equal(result.simulationOk, true);
+  assert.ok(result.probeSizes.length >= 3);
+  assert.ok((result.effectiveEntryPrice || 0) > mark);
+  assert.equal(result.router, 'metis');
+  assert.ok((result.executionScore || 0) >= 0.65);
 });
 
-test('rejects an entry route whose quoted price impact exceeds the configured maximum', async () => {
-  process.env.JUPITER_API_KEY = 'test-key';
-  globalThis.fetch = async () => new Response(JSON.stringify({
-    inUsdValue: 10,
-    outUsdValue: 8,
-    outAmount: '1000000',
-    otherAmountThreshold: '985000',
-    priceImpact: -0.2,
-    slippageBps: 150,
-    router: 'metis',
-  }), { status: 200, headers: { 'content-type': 'application/json' } });
-
-  const quote = await quoteExecutableEntry(token, 0.00001);
-  assert.equal(quote.eligible, false);
-  assert.equal(quote.status, 'price_impact_too_high');
+test('rejects a route whose transaction cannot be built', async () => {
+  configure();
+  globalThis.fetch = simulatedFetch({ transaction: null });
+  const result = await quoteExecutableEntry(token, 0.00001);
+  assert.equal(result.eligible, false);
+  assert.equal(result.status, 'transaction_not_built');
 });
 
-test('verifies liquidation of the exact entry token amount', async () => {
-  process.env.JUPITER_API_KEY = 'test-key';
-  globalThis.fetch = async (_url) => new Response(JSON.stringify({
-    inUsdValue: 31,
-    outUsdValue: 30.5,
-    outAmount: '200000000',
-    otherAmountThreshold: '197000000',
-    priceImpact: -0.02,
-    signatureFeeLamports: 5000,
-    prioritizationFeeLamports: 5000,
-    router: 'jupiterz',
-  }), { status: 200, headers: { 'content-type': 'application/json' } });
-
-  const quote = await quoteExecutableExit(token.ca, '1000000');
-  assert.equal(quote.eligible, true);
-  assert.equal(quote.status, 'executable_exit_quote');
-  assert.ok((quote.proceedsUsd || 0) > 29);
-  assert.equal(quote.router, 'jupiterz');
+test('rejects excessive quoted price impact even when simulation passes', async () => {
+  configure();
+  globalThis.fetch = simulatedFetch({ priceImpact: -0.2 });
+  const result = await quoteExecutableEntry(token, 0.00001);
+  assert.equal(result.eligible, false);
+  assert.equal(result.status, 'price_impact_too_high');
 });
+
+test('builds and simulates liquidation of the exact entry token amount', async () => {
+  configure();
+  globalThis.fetch = simulatedFetch({
+    inUsdValue: 31, outUsdValue: 30.5, outAmount: '200000000', otherAmountThreshold: '197000000',
+    priceImpact: -0.02, router: 'jupiterz',
+  });
+  const result = await quoteExecutableExit(token.ca, '1000000');
+  assert.equal(result.eligible, true);
+  assert.equal(result.status, 'executable_exit_simulated');
+  assert.equal(result.transactionBuilt, true);
+  assert.equal(result.simulationOk, true);
+  assert.ok((result.proceedsUsd || 0) > 29);
+});
+
+function restore(key: string, value: string | undefined) {
+  if (value === undefined) delete process.env[key]; else process.env[key] = value;
+}

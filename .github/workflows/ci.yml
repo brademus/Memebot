@@ -15,7 +15,7 @@ concurrency:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,7 +23,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -32,7 +32,7 @@ jobs:
       - name: TypeScript build
         run: npm run build
 
-      - name: Jupiter entry and exit tests
+      - name: Jupiter built and simulated entry and exit tests
         run: node --test dist/paper/execution.test.js
 
       - name: Jupiter quote classification tests
@@ -44,11 +44,29 @@ jobs:
       - name: Scoring calibration parity tests
         run: node --test dist/scoring/score.test.js
 
-      - name: State-machine tests
+      - name: State-machine and abstention tests
         run: node --test dist/scoring/states.test.js
 
       - name: Exact forward snapshot tests
         run: node --test dist/tuning/snapshots.test.js
+
+      - name: Competing-risk monotonicity test
+        run: node --test --test-name-pattern="high-quality" dist/model/model.test.js
+
+      - name: Funding-entity graph test
+        run: node --test --test-name-pattern="shared funding" dist/model/model.test.js
+
+      - name: Event-time burst quality test
+        run: node --test --test-name-pattern="event-time" dist/model/model.test.js
+
+      - name: Regime classification test
+        run: node --test --test-name-pattern="regime classifier" dist/model/model.test.js
+
+      - name: Observation milestone test
+        run: node --test --test-name-pattern="observations include" dist/model/model.test.js
+
+      - name: Full test manifest
+        run: npm test
 
       - name: Dashboard JavaScript syntax
         run: node --check public/app.js && node --check public/no-admin.js && node --check public/observed-wins.js
