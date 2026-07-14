@@ -139,8 +139,7 @@ async function resolveDue() {
 
 async function stampCurrentRecommendations() {
   if (!pool) return;
-  const current = allTokens().filter(token => token.firstSeen >= processStartedAt - 60_000);
-  for (const token of current) {
+  for (const token of allTokens()) {
     if (token.triggeredAt && token.triggeredAt >= processStartedAt) {
       await pool.query(
         `UPDATE tokens SET trigger_model_version=COALESCE(trigger_model_version,$2)
