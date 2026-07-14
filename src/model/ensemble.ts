@@ -9,6 +9,7 @@ import { openPaper } from '../paper/paper';
 import { buildSignalFeatures } from './features';
 import { clamp01, round, softmax, standardDeviation } from './math';
 import { learnedRankScore } from './rank-learner';
+import { startPromotionGate, promotionReady, promotionStatus } from './promotion';
 import { currentRegime } from './regime';
 import { DECISION_MAX_AGE_MS, MODEL_VERSION, recommendationEligibleSource } from './version';
 
@@ -20,9 +21,15 @@ const diag = {
   lastEvaluation: null as string | null, lastCalibration: null as string | null,
   lastError: null as string | null, reasons: {} as Record<string, number>,
 };
-export const ensembleDiag = () => ({ ...diag, inFlight: inFlight.size, calibrationBins: calibration.size });
+export const ensembleDiag = () => ({
+  ...diag,
+  inFlight: inFlight.size,
+  calibrationBins: calibration.size,
+  promotion: promotionStatus(),
+});
 
 export function startSignalEnsemble() {
+  startPromotionGate();
   refreshCalibration().catch(() => {});
   const timer = setInterval(() => refreshCalibration().catch(() => {}), 15 * 60_000);
   timer.unref();
@@ -30,14 +37,11 @@ export function startSignalEnsemble() {
 
 export function decisionAllowsRecommendation(token: TokenRecord, now = Date.now()): boolean {
   if (!cfg().signal_model.enabled) return recommendationEligibleSource(token.source);
-  // SHADOW MODE (default): the model evaluates, records observations, and paper-
-  // trades its allowed picks — but does NOT veto the live board. It was shipped
-  // block-by-default with cold-start thresholds (top-10%% cohort, uncertainty
-  // ceiling unreachable without calibration history), which emptied Best Buys for
-  // ~18h and starved the paper/lane outcome loops. Per the project laws, a new
-  // signal EARNS live control by beating the incumbent lanes on the paper
-  // scoreboard — flip signal_model.mode to 'enforce' when it does.
-  if (cfg().signal_model.mode !== 'enforce') return recommendationEligibleSource(token.source);
+  // Shadow mode never vetoes incumbent lanes. Even if configuration is switched to
+  // enforce, the incumbent board remains live until the cached promotion gate proves
+  // the model on executable holdout evidence and placebo-tested evaluations.
+  if (cfg().signal_model.mode !== 'enforce' || !promotionReady())
+    return recommendationEligibleSource(token.source);
   const decision = token.modelDecision;
   if (!decision || token.modelDecisionAt === null) return false;
   return decision.modelVersion === MODEL_VERSION && decision.allow && decision.expiresAt >= now
@@ -111,8 +115,6 @@ async function evaluate(token: TokenRecord, now: number): Promise<SignalDecision
     uncertainty: round(uncertainty), alphaScore: round(cohort.alpha),
     cohortPercentile: round(cohort.percentile), cohortSize: cohort.size, execution,
   };
-  if (decision.allow && token.priceUsd > 0)
-    openPaper(token.ca, token.symbol, 'model' as any, token.priceUsd, token.score);  // scoreboard entry — model vs lanes, head-to-head
   token.modelDecision = decision;
   token.modelDecisionAt = now;
   diag.evaluated++;
@@ -121,10 +123,22 @@ async function evaluate(token: TokenRecord, now: number): Promise<SignalDecision
   if (allow) diag.allowed++; else diag.abstained++;
   for (const reason of reasons.length ? reasons : ['allowed'])
     diag.reasons[reason.split(':')[0]] = (diag.reasons[reason.split(':')[0]] || 0) + 1;
+
   await persistDecision(token, decision).catch(error => {
     diag.lastError = (error as Error).message;
     console.error('[signal-ensemble] persist', diag.lastError);
   });
+
+  // Raw shadow evidence measures the statistical stack before Jupiter availability.
+  // Executable shadow evidence is a separate lane and includes real entry/exit checks.
+  if (preliminaryPass && token.priceUsd > 0) {
+    await openPaper(token.ca, token.symbol, 'model_raw', token.priceUsd, token.score, undefined, { skipExecutionQuote: true })
+      .catch(error => console.error('[model-paper:raw]', (error as Error).message));
+  }
+  if (allow && token.priceUsd > 0) {
+    await openPaper(token.ca, token.symbol, 'model_executable', token.priceUsd, token.score, execution || undefined)
+      .catch(error => console.error('[model-paper:executable]', (error as Error).message));
+  }
   return decision;
 }
 
