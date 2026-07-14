@@ -6,7 +6,8 @@ import { quoteExecutableEntry } from '../paper/execution';
 import { CompetingRiskHazards, ExecutionEvidence, MarketRegime, SignalDecision, SignalFeatureVector, TokenRecord } from '../types';
 import { analyzeEntityGraph } from './entity-graph';
 import { buildSignalFeatures } from './features';
-import { clamp01, mean, round, sigmoid, softmax, standardDeviation } from './math';
+import { clamp01, round, softmax, standardDeviation } from './math';
+import { learnedRankScore } from './rank-learner';
 import { currentRegime } from './regime';
 import { DECISION_MAX_AGE_MS, MODEL_VERSION, recommendationEligibleSource } from './version';
 
@@ -18,7 +19,6 @@ const diag = {
   lastEvaluation: null as string | null, lastCalibration: null as string | null,
   lastError: null as string | null, reasons: {} as Record<string, number>,
 };
-
 export const ensembleDiag = () => ({ ...diag, inFlight: inFlight.size, calibrationBins: calibration.size });
 
 export function startSignalEnsemble() {
@@ -60,14 +60,9 @@ async function evaluate(token: TokenRecord, now: number): Promise<SignalDecision
   const downsideProbability = clamp01(hazards.stop_30pct + hazards.stop_50pct + hazards.rug + hazards.route_loss);
   const expectedValue = expectedUtility(hazards, targetBeforeStopProbability, rawTargetProbability);
   const layerScores = [
-    targetBeforeStopProbability,
-    1 - downsideProbability,
-    features.buyerIndependence,
-    1 - features.graphRisk,
-    features.burstQuality,
-    1 - features.burstExhaustion,
-    cohort.percentile,
-    features.routePrior,
+    targetBeforeStopProbability, 1 - downsideProbability, features.buyerIndependence,
+    1 - features.graphRisk, features.burstQuality, 1 - features.burstExhaustion,
+    cohort.percentile, features.routePrior,
   ];
   const uncertainty = clamp01(
     0.30 * (1 - features.featureCompleteness)
@@ -93,7 +88,8 @@ async function evaluate(token: TokenRecord, now: number): Promise<SignalDecision
       unitsConsumed: quote.unitsConsumed, probeSizes: quote.probeSizes,
     };
     if (!execution.eligible) reasons.push(`execution:${execution.status}`);
-    if (execution.executionScore < cfg().signal_model.min_execution_score) reasons.push(`execution_score:${execution.executionScore.toFixed(2)}`);
+    if (execution.executionScore < cfg().signal_model.min_execution_score)
+      reasons.push(`execution_score:${execution.executionScore.toFixed(2)}`);
     await persistExecutionProbe(token, execution).catch(() => {});
   }
   const allow = preliminaryPass && !!execution?.eligible && reasons.length === 0;
@@ -112,7 +108,8 @@ async function evaluate(token: TokenRecord, now: number): Promise<SignalDecision
   diag.lastEvaluation = new Date(now).toISOString();
   diag.lastError = null;
   if (allow) diag.allowed++; else diag.abstained++;
-  for (const reason of reasons.length ? reasons : ['allowed']) diag.reasons[reason.split(':')[0]] = (diag.reasons[reason.split(':')[0]] || 0) + 1;
+  for (const reason of reasons.length ? reasons : ['allowed'])
+    diag.reasons[reason.split(':')[0]] = (diag.reasons[reason.split(':')[0]] || 0) + 1;
   await persistDecision(token, decision).catch(error => {
     diag.lastError = (error as Error).message;
     console.error('[signal-ensemble] persist', diag.lastError);
@@ -146,7 +143,7 @@ export function competingRiskHazards(features: SignalFeatureVector, regime: Mark
 
 export function alphaScore(features: SignalFeatureVector, regime: MarketRegime): number {
   const regimePenalty = regime.kind === 'adverse' ? 0.22 : regime.kind === 'transition' ? 0.14 : regime.kind === 'cold' ? 0.06 : 0;
-  return clamp01(
+  const fixed = clamp01(
     0.16 * features.capitalEfficiency + 0.13 * features.curveSpeed1m + 0.08 * features.curveSpeed3m
     + 0.13 * features.organicBreadth + 0.08 * features.buyPressure + 0.07 * features.smartMoney
     + 0.06 * features.socialCredibility + 0.10 * features.buyerIndependence
@@ -154,6 +151,10 @@ export function alphaScore(features: SignalFeatureVector, regime: MarketRegime):
     - 0.14 * features.graphRisk - 0.10 * features.burstExhaustion - 0.08 * features.runupPenalty
     - regimePenalty + 0.18,
   );
+  const learned = learnedRankScore(features);
+  // The learned model contributes only after passing chronological validation and its
+  // placebo gate. Keeping a majority fixed component limits sudden parameter drift.
+  return learned === null ? fixed : clamp01(0.55 * fixed + 0.45 * learned);
 }
 
 function cohortRank(token: TokenRecord, features: SignalFeatureVector, regime: MarketRegime, now: number) {
@@ -195,7 +196,7 @@ function preliminaryReasons(
 
 function expectedUtility(hazards: CompetingRiskHazards, calibratedTarget: number, rawTarget: number): number {
   const targetScale = rawTarget > 0 ? calibratedTarget / rawTarget : 1;
-  return hazards.target_1_5x * 0.5 + hazards.target_2x * targetScale * 1.0 + hazards.target_3x * targetScale * 2.0
+  return hazards.target_1_5x * 0.5 + hazards.target_2x * targetScale + hazards.target_3x * targetScale * 2
     - hazards.stop_30pct * 0.30 - hazards.stop_50pct * 0.50 - hazards.rug * 0.95
     - hazards.route_loss * 0.55 - hazards.timeout * 0.08;
 }
@@ -211,8 +212,8 @@ function calibrateProbability(raw: number, regimeKind: string) {
 async function refreshCalibration() {
   if (!pool) return;
   const rows = await pool.query(
-    `SELECT regime_kind,probability_bin,observations,posterior_probability FROM model_calibration_bins WHERE model_version=$1`,
-    [MODEL_VERSION],
+    `SELECT regime_kind,probability_bin,observations,posterior_probability
+       FROM model_calibration_bins WHERE model_version=$1`, [MODEL_VERSION],
   ).catch(() => ({ rows: [] as any[] }));
   calibration.clear();
   for (const row of rows.rows) calibration.set(`${row.regime_kind}:${row.probability_bin}`, {
@@ -238,7 +239,9 @@ async function persistExecutionProbe(token: TokenRecord, execution: ExecutionEvi
 
 async function persistDecision(token: TokenRecord, decision: SignalDecision) {
   if (!pool) return;
-  const bucket = Math.floor(decision.evaluatedAt / 30_000);
+  // Durable evidence is sampled once per five-minute state bucket. The live decision
+  // still refreshes every 45 seconds, but the database does not grow by one row per TTL.
+  const bucket = Math.floor(decision.evaluatedAt / 300_000);
   const hash = crypto.createHash('sha256').update(JSON.stringify({
     ca: token.ca, bucket, regime: decision.regime.id, alpha: round(decision.alphaScore, 2),
     target: round(decision.targetBeforeStopProbability, 2), allow: decision.allow,
