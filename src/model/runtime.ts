@@ -5,6 +5,7 @@ import { refreshSignalDecision, startSignalEnsemble } from './ensemble';
 import { startSignalObservationCollector } from './observations';
 import { startDecisionOutcomeTracker } from './outcomes';
 import { startModelEvaluator } from './evaluation';
+import { startPairwiseRankLearner } from './rank-learner';
 import { finalizeSignalSchema } from './schema-finalizer';
 
 let started = false;
@@ -20,6 +21,7 @@ export function startModelRuntime() {
     startTradeEventWriter();
     startRegimeEngine();
     startSignalEnsemble();
+    startPairwiseRankLearner();
     startSignalObservationCollector();
     startDecisionOutcomeTracker();
     startModelEvaluator();
@@ -35,6 +37,6 @@ export function startModelRuntime() {
     sweep();
     const timer = setInterval(sweep, 5_000); timer.unref();
     diag.startedAt = new Date().toISOString();
-    console.log('[signal-v3] regime, graph, sequence, survival, ranking, execution and evaluation layers running');
+    console.log('[signal-v3] regime, graph, sequence, survival, learned ranking, execution and evaluation layers running');
   }, 12_000);
 }
