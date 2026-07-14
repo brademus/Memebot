@@ -4,61 +4,86 @@ import { bumpDeployer, upsertToken } from '../db';
 import { prefilter } from '../gates/prefilter';
 import { env } from '../config';
 import { fetchSocials } from './metadata';
+import { recordTradeEvent } from '../market/trade-events';
+import { TradeEvent } from '../types';
 
 let SOL_USD = 150;
-export function setSolPrice(p: number) { if (p > 0) SOL_USD = p; }
+export function setSolPrice(price: number) { if (price > 0) SOL_USD = price; }
 export const getSolPrice = () => SOL_USD;
 
+function normalizeSol(value: unknown): number | null {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  return amount > 1_000_000 ? amount / 1_000_000_000 : amount;
+}
+function normalizeToken(value: unknown): number | null {
+  const amount = Number(value);
+  return Number.isFinite(amount) && amount > 0 ? amount : null;
+}
+
 function seedCurve(t: any, msg: any) {
-  const solInCurve = msg.vSolInBondingCurve || 0;
-  const mcapSol = msg.marketCapSol || 0;
+  const solInCurve = Number(msg.vSolInBondingCurve || 0);
+  const mcapSol = Number(msg.marketCapSol || 0);
   t.curveSol = solInCurve;
   t.liquidityUsd = solInCurve * SOL_USD;
   t.mcapUsd = mcapSol * SOL_USD;
   t.dex = 'pumpfun';
   t.dexId = 'pumpfun';
   if (msg.initialBuy || msg.solAmount) t.buys5m = 1;
-  if (msg.initialBuy) t.devBuyPct = Math.min(100, (msg.initialBuy / 1e9) * 100);
+  if (msg.initialBuy) t.devBuyPct = Math.min(100, (Number(msg.initialBuy) / 1e9) * 100);
   t.curveSamples = [{ sol: solInCurve, at: Date.now() }];
 }
 
 function applyCurveTrade(msg: any) {
   const t = getToken(msg.mint);
   if (!t) return;
+  const now = Date.now();
   if (msg.vSolInBondingCurve) {
-    t.curveSol = msg.vSolInBondingCurve;
+    t.curveSol = Number(msg.vSolInBondingCurve);
     t.peakCurveSol = Math.max(t.peakCurveSol, t.curveSol);
-    t.liquidityUsd = msg.vSolInBondingCurve * SOL_USD;
+    t.liquidityUsd = t.curveSol * SOL_USD;
   }
-  if (msg.marketCapSol) t.mcapUsd = msg.marketCapSol * SOL_USD;
-  if (msg.txType === 'buy') {
+  if (msg.marketCapSol) t.mcapUsd = Number(msg.marketCapSol) * SOL_USD;
+  if (msg.vSolInBondingCurve && msg.vTokensInBondingCurve)
+    t.priceUsd = (Number(msg.vSolInBondingCurve) / Number(msg.vTokensInBondingCurve)) * SOL_USD;
+
+  const wallet = String(msg.traderPublicKey || msg.user || msg.trader || '') || null;
+  const buy = msg.txType === 'buy';
+  const event: TradeEvent = {
+    at: now,
+    buy,
+    wallet,
+    solAmount: normalizeSol(msg.solAmount ?? msg.sol_amount),
+    tokenAmount: normalizeToken(msg.tokenAmount ?? msg.token_amount),
+    signature: String(msg.signature || msg.txSignature || msg.tx || '') || null,
+    slot: Number.isFinite(Number(msg.slot)) ? Number(msg.slot) : null,
+    priceUsd: t.priceUsd || null,
+    curveSol: t.curveSol || null,
+  };
+
+  if (buy) {
     t.totalBuys++;
-    t.recentTrades.push({ at: Date.now(), buy: true });
-    const buyer = msg.traderPublicKey;
-    if (buyer && !t.uniqueBuyers.includes(buyer) && t.uniqueBuyers.length < 500) t.uniqueBuyers.push(buyer);
-    if (buyer && t.earlyBuyers.length < 15 && !t.earlyBuyers.includes(buyer)) t.earlyBuyers.push(buyer);
-  } else if (msg.txType === 'sell') {
+    if (wallet && !t.uniqueBuyers.includes(wallet) && t.uniqueBuyers.length < 800) t.uniqueBuyers.push(wallet);
+    if (wallet && t.earlyBuyers.length < 25 && !t.earlyBuyers.includes(wallet)) t.earlyBuyers.push(wallet);
+  } else {
     t.totalSells++;
-    t.recentTrades.push({ at: Date.now(), buy: false });
-    const seller = msg.traderPublicKey;
-    if (seller && t.earlyBuyers.includes(seller) && !t.earlyExited.includes(seller)) t.earlyExited.push(seller);
+    if (wallet && t.earlyBuyers.includes(wallet) && !t.earlyExited.includes(wallet)) t.earlyExited.push(wallet);
   }
-  const cutoff = Date.now() - 5 * 60_000;
+  t.recentTrades.push(event);
+  recordTradeEvent(t.ca, event);
+
+  const cutoff = now - 5 * 60_000;
   while (t.recentTrades.length && t.recentTrades[0].at < cutoff) t.recentTrades.shift();
   if (t.dex === 'pumpfun') {
-    t.buys5m = t.recentTrades.filter(x => x.buy).length;
+    t.buys5m = t.recentTrades.filter(trade => trade.buy).length;
     t.sells5m = t.recentTrades.length - t.buys5m;
   }
-  // Sample distinct-wallet breadth, not raw buy count. Repeated bot churn from a
-  // single wallet can no longer masquerade as organic holder growth.
-  if (msg.txType === 'buy') {
+  if (buy) {
     t.uniqueBuyerSamples.push(t.uniqueBuyers.length);
-    if (t.uniqueBuyerSamples.length > 6) t.uniqueBuyerSamples.shift();
+    if (t.uniqueBuyerSamples.length > 12) t.uniqueBuyerSamples.shift();
   }
-  t.curveSamples.push({ sol: t.curveSol, at: Date.now() });
-  if (t.curveSamples.length > 60) t.curveSamples.shift();
-  if (msg.vSolInBondingCurve && msg.vTokensInBondingCurve)
-    t.priceUsd = (msg.vSolInBondingCurve / msg.vTokensInBondingCurve) * SOL_USD;
+  t.curveSamples.push({ sol: t.curveSol, at: now });
+  if (t.curveSamples.length > 120) t.curveSamples.shift();
 }
 
 const WS_URL = () => 'wss://pumpportal.fun/api/data' + (env.PUMPPORTAL_API_KEY ? `?api-key=${env.PUMPPORTAL_API_KEY}` : '');
@@ -77,8 +102,8 @@ function connect(onNew: (ca: string) => void) {
     ws!.send(JSON.stringify({ method: 'subscribeMigration' }));
     if (streamMode === 'full') {
       const live = allTokens().filter(t => t.gated !== false && t.dex === 'pumpfun' && t.state !== 'DEAD').map(t => t.ca);
-      for (let i = 0; i < live.length; i += 50)
-        ws!.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: live.slice(i, i + 50) }));
+      for (let index = 0; index < live.length; index += 50)
+        ws!.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: live.slice(index, index + 50) }));
       console.log(`[pumpfun] connected — resubscribed ${live.length} live token streams`);
     } else console.log('[pumpfun] connected, subscribed to new tokens + migrations');
   });
@@ -87,14 +112,14 @@ function connect(onNew: (ca: string) => void) {
     try {
       const msg = JSON.parse(raw.toString());
       if (msg.mint && msg.txType === 'create') {
-        const pf = prefilter(msg);
+        const fail = prefilter(msg);
         const t = addToken({ ca: msg.mint, symbol: msg.symbol || '?', name: msg.name || '?', creator: msg.traderPublicKey || null, source: 'pumpfun' });
-        if (t && pf) {
+        if (t && fail) {
           t.gated = false;
-          t.gateFailReason = pf;
+          t.gateFailReason = fail;
           seedCurve(t, msg);
           if (t.firstScorePrice === null && t.priceUsd > 0) t.firstScorePrice = t.priceUsd;
-          recordScan({ ca: t.ca, symbol: t.symbol, verdict: 'KILL', reason: pf, at: Date.now() });
+          recordScan({ ca: t.ca, symbol: t.symbol, verdict: 'KILL', reason: fail, at: Date.now() });
           upsertToken(t).catch(() => {});
         } else if (t) {
           seedCurve(t, msg);
@@ -108,11 +133,8 @@ function connect(onNew: (ca: string) => void) {
       } else if (msg.mint && (msg.txType === 'migrate' || msg.txType === 'migration')) {
         const t = getToken(msg.mint);
         if (t) {
-          t.dex = 'pumpswap'; t.dexId = 'pumpswap';
-          t.playType = 'GRADUATION';
-          t.gradAt = Date.now();
-          t.gradPeak = t.priceUsd || 0;
-          t.gradTrough = t.priceUsd || 0;
+          t.dex = 'pumpswap'; t.dexId = 'pumpswap'; t.playType = 'GRADUATION';
+          t.gradAt = Date.now(); t.gradPeak = t.priceUsd || 0; t.gradTrough = t.priceUsd || 0;
           if (t.firstSeen) t.fillMinutes = Math.round((Date.now() - t.firstSeen) / 60_000);
           console.log(`[pumpfun] 🎓 GRADUATED $${t.symbol} -> PumpSwap (fill ${t.fillMinutes}m)`);
         }
@@ -120,25 +142,26 @@ function connect(onNew: (ca: string) => void) {
     } catch {}
   });
   ws.on('close', () => reconnect(onNew));
-  ws.on('error', (e) => { console.error('[pumpfun] ws error:', e.message); ws?.close(); });
+  ws.on('error', error => { console.error('[pumpfun] ws error:', error.message); ws?.close(); });
 }
 
 export function unsubscribeToken(ca: string) { try { ws?.send(JSON.stringify({ method: 'unsubscribeTokenTrade', keys: [ca] })); } catch {} }
 export function resubscribeAll() {
   if (streamMode !== 'full' || !ws || ws.readyState !== ws.OPEN) return 0;
   const live = allTokens().filter(t => t.gated !== false && t.dex === 'pumpfun' && t.state !== 'DEAD').map(t => t.ca);
-  for (let i = 0; i < live.length; i += 50)
-    try { ws.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: live.slice(i, i + 50) })); } catch {}
+  for (let index = 0; index < live.length; index += 50)
+    try { ws.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: live.slice(index, index + 50) })); } catch {}
   return live.length;
 }
 export function startSubscriptionReconciler() {
   setInterval(() => {
     if (streamMode !== 'full' || !ws || ws.readyState !== ws.OPEN) return;
     const now = Date.now();
-    const stale = allTokens().filter(t => t.gated !== false && t.dex === 'pumpfun' && t.state !== 'DEAD' && (!t.recentTrades.length || now - t.recentTrades[t.recentTrades.length - 1].at > 4 * 60_000)).map(t => t.ca);
+    const stale = allTokens().filter(t => t.gated !== false && t.dex === 'pumpfun' && t.state !== 'DEAD'
+      && (!t.recentTrades.length || now - t.recentTrades[t.recentTrades.length - 1].at > 4 * 60_000)).map(t => t.ca);
     if (!stale.length) return;
-    for (let i = 0; i < stale.length; i += 50)
-      try { ws!.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: stale.slice(i, i + 50) })); } catch {}
+    for (let index = 0; index < stale.length; index += 50)
+      try { ws!.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: stale.slice(index, index + 50) })); } catch {}
     console.log(`[pumpfun] reconciler re-subscribed ${stale.length} stale-trade tokens`);
   }, 2 * 60_000);
 }
