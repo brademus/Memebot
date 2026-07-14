@@ -10,6 +10,7 @@ gates:
   liq_to_mcap_ratio_min: 0.08
   min_liquidity_usd: 9000
   min_liquidity_sol_curve: 8
+  curve_min_liquidity_usd: 1200
   rugcheck_score_max: 5000
   require_social: false
 
@@ -124,6 +125,29 @@ paper:
   max_price_impact_pct: 0.08
   quote_timeout_ms: 4000
   min_forward_samples_per_lane: 100
+
+# The legacy score is only a cheap candidate generator. Calls require all v3 layers:
+# competing-risk survival, cross-sectional rank, entity graph, event-time flow,
+# uncertainty calibration and a built/simulated Jupiter route. Missing evidence means
+# abstain, not a lower-quality alert.
+signal_model:
+  enabled: true
+  require_transaction_simulation: true
+  min_rank_percentile: 0.90
+  min_target_before_stop: 0.08
+  max_downside_probability: 0.42
+  max_graph_risk: 0.35
+  max_burst_exhaustion: 0.55
+  max_uncertainty: 0.32
+  min_expected_value: 0.08
+  min_feature_completeness: 0.68
+  min_execution_score: 0.65
+  min_independent_entity_ratio: 0.55
+  decision_ttl_seconds: 45
+  min_cohort_size: 8
+  route_stability_max_bps: 350
+  regime_change_abstain_threshold: 0.78
+  probe_sizes_sol: [0.05, 0.1, 0.25]
 
 polling:
   dexscreener_interval_ms: 10000
