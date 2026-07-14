@@ -13,11 +13,9 @@ export function startDecisionOutcomeTracker() {
     console.error('[decision-outcomes]', diag.lastError);
   });
   setTimeout(tick, 20_000);
-  const timer = setInterval(tick, 15_000);
-  timer.unref();
+  const timer = setInterval(tick, 15_000); timer.unref();
   setTimeout(() => rebuildCalibration().catch(() => {}), 90_000);
-  const calibrationTimer = setInterval(() => rebuildCalibration().catch(() => {}), 15 * 60_000);
-  calibrationTimer.unref();
+  const calibrationTimer = setInterval(() => rebuildCalibration().catch(() => {}), 15 * 60_000); calibrationTimer.unref();
 }
 
 async function updateOutcomes() {
@@ -31,8 +29,11 @@ async function updateOutcomes() {
          JOIN signal_decision_outcomes outcome ON outcome.decision_id=decision.id
         WHERE decision.model_version=$1
           AND decision.evaluated_at>now()-interval '8 hours'
-          AND (outcome.status='tracking' OR decision.evaluated_at>now()-interval '4 hours')
-        ORDER BY decision.evaluated_at LIMIT 500`, [MODEL_VERSION],
+          AND (outcome.status='tracking'
+               OR (decision.evaluated_at>now()-interval '4 hours' AND outcome.updated_at<now()-interval '60 seconds'))
+        ORDER BY CASE WHEN outcome.status='tracking' THEN 0 ELSE 1 END,
+                 outcome.updated_at ASC,decision.evaluated_at DESC
+        LIMIT 500`, [MODEL_VERSION],
     );
     diag.tracked = rows.rows.length;
     for (const row of rows.rows) {
@@ -40,9 +41,7 @@ async function updateOutcomes() {
       const ageMs = Date.now() - new Date(row.evaluated_at).getTime();
       if (!token || !token.priceUsd || token.priceUsd <= 0) {
         if (ageMs > 20 * 60_000) {
-          await pool.query(
-            `UPDATE signal_decision_outcomes SET tracking_gap=true,updated_at=now() WHERE decision_id=$1`, [row.id],
-          );
+          await pool.query(`UPDATE signal_decision_outcomes SET tracking_gap=true,updated_at=now() WHERE decision_id=$1`, [row.id]);
           diag.gaps++;
         }
         continue;
@@ -89,8 +88,7 @@ async function rebuildCalibration() {
        SELECT split_part(decision.regime_id,':',2) AS regime_kind,
               LEAST(9,GREATEST(0,FLOOR(decision.target_before_stop_probability*10)::int)) AS probability_bin,
               outcome.first_event='target_2x' AS success
-         FROM signal_decisions decision
-         JOIN signal_decision_outcomes outcome ON outcome.decision_id=decision.id
+         FROM signal_decisions decision JOIN signal_decision_outcomes outcome ON outcome.decision_id=decision.id
         WHERE decision.model_version=$1 AND outcome.status='resolved' AND NOT outcome.tracking_gap
           AND decision.evaluated_at>now()-interval '30 days')
      SELECT regime_kind,probability_bin,COUNT(*)::int AS observations,
@@ -102,16 +100,15 @@ async function rebuildCalibration() {
   for (const row of rows.rows) {
     const observations = Number(row.observations) || 0;
     const successes = Number(row.successes) || 0;
-    const posterior = (successes + 1) / (observations + 2);
     await pool.query(
       `INSERT INTO model_calibration_bins
          (model_version,regime_kind,probability_bin,observations,successes,posterior_probability,updated_at)
        VALUES ($1,$2,$3,$4,$5,$6,now())`,
-      [MODEL_VERSION, row.regime_kind || 'all', row.probability_bin, observations, successes, posterior],
+      [MODEL_VERSION, row.regime_kind || 'all', row.probability_bin, observations, successes,
+       (successes + 1) / (observations + 2)],
     );
     total += observations;
   }
-  // Global bins make calibration usable in sparse regimes.
   const global = await pool.query(
     `WITH labeled AS (
        SELECT LEAST(9,GREATEST(0,FLOOR(decision.target_before_stop_probability*10)::int)) AS probability_bin,
