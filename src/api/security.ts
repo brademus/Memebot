@@ -1,4 +1,6 @@
+import crypto from 'crypto';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
+import { env } from '../config';
 
 interface Bucket { count: number; resetAt: number }
 const buckets = new Map<string, Bucket>();
@@ -40,17 +42,33 @@ export function rateLimit(name: string, max: number, windowMs: number): RequestH
   };
 }
 
-// MUTATING routes (wallet add/remove) require ADMIN_KEY again. This was removed as
-// "intentionally open" — but the smart-wallet list drives what the bot recommends,
-// so an open POST /api/wallets on a public URL is a signal-poisoning vector: anyone
-// with the URL could inject wallets the bot then follows, or wipe the tracked set.
-// The dashboard doesn't call these endpoints, so requiring the key costs nothing.
-// Reads stay open; only writes are gated. If ADMIN_KEY is unset, writes are refused.
-import { env } from '../config';
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+export function adminKeyMatches(supplied: string, expected: string): boolean {
+  if (!supplied || !expected) return false;
+  const suppliedDigest = crypto.createHash('sha256').update(supplied, 'utf8').digest();
+  const expectedDigest = crypto.createHash('sha256').update(expected, 'utf8').digest();
+  return crypto.timingSafeEqual(suppliedDigest, expectedDigest);
+}
+
+function suppliedAdminKey(req: Request): string {
+  const bearer = req.header('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+  return bearer || req.header('x-admin-key')?.trim() || '';
+}
+
+// This middleware may be mounted on a route family, but it only authenticates writes.
+// Dashboard reads and diagnostics remain open and rate-limited. Query-string secrets
+// are deliberately rejected because URLs leak into browser history and proxy logs.
 export const adminOnly: RequestHandler = (req, res, next) => {
-  if (!env.ADMIN_KEY) { res.status(503).json({ error: 'ADMIN_KEY not configured — mutating endpoints disabled' }); return; }
-  const supplied = req.header('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1] || (req.query.key as string) || '';
-  if (supplied !== env.ADMIN_KEY) { res.status(401).json({ error: 'unauthorized' }); return; }
+  if (!MUTATING_METHODS.has(req.method.toUpperCase())) { next(); return; }
+  if (!env.ADMIN_KEY) {
+    res.status(503).json({ error: 'ADMIN_KEY not configured — mutating endpoints disabled' });
+    return;
+  }
+  if (!adminKeyMatches(suppliedAdminKey(req), env.ADMIN_KEY)) {
+    res.status(401).json({ error: 'unauthorized' });
+    return;
+  }
   next();
 };
 

@@ -31,11 +31,11 @@ function token(overrides: Partial<TokenRecord> = {}): TokenRecord {
   } as TokenRecord;
 }
 
-test('promotes only a persistent evidence-backed v3-approved token to trigger', () => {
+test('shadow rollout preserves incumbent trigger promotion', () => {
   assert.equal(updateState(token()), 'TRIGGER');
 });
-test('abstains when the v3 decision is absent', () => {
-  assert.equal(updateState(token({ modelDecision: null, modelDecisionAt: null })), 'HEATING');
+test('shadow rollout does not require a v3 decision', () => {
+  assert.equal(updateState(token({ modelDecision: null, modelDecisionAt: null })), 'TRIGGER');
 });
 test('keeps momentum-source tokens measurable but out of recommendations', () => {
   const candidate = token({ source: 'momentum' });

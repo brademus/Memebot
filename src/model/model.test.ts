@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { adminKeyMatches } from '../api/security';
 import { aggregateEntityGraph } from './entity-graph';
 import { burstFeatures } from './burst';
 import { alphaScore, competingRiskHazards } from './ensemble';
+import { assessPromotion, PROMOTION_THRESHOLDS, PromotionSample } from './promotion';
 import { classifyRegime } from './regime';
 import { observationKeys } from './observations';
 import { rankVector, trainPairwiseRanker } from './rank-learner';
@@ -46,6 +48,37 @@ test('pairwise rank learning orders later winners and beats directional placebo'
   assert.ok(trained.validationPairs >= 30);
   assert.ok(trained.validationAccuracy > 0.9);
   assert.ok(trained.validationAccuracy > trained.placeboAccuracy + 0.3);
+});
+
+test('admin keys use constant-length digest comparison and reject blanks', () => {
+  assert.equal(adminKeyMatches('correct horse battery staple', 'correct horse battery staple'), true);
+  assert.equal(adminKeyMatches('wrong', 'correct horse battery staple'), false);
+  assert.equal(adminKeyMatches('', 'correct horse battery staple'), false);
+});
+
+test('promotion requires executable scale, holdout lift, regime coverage and falsification', () => {
+  const samples: PromotionSample[] = [];
+  for (let index = 0; index < PROMOTION_THRESHOLDS.minResolvedExecutable; index++) {
+    samples.push({
+      signal: 'model_executable', entryAt: index, multiple: index % 5 === 0 ? 3.1 : 1.25,
+      verifiedTarget: index % 5 === 0, regime: index % 2 ? 'normal' : 'hot',
+    });
+    samples.push({
+      signal: 'bb_smart', entryAt: index, multiple: index % 10 === 0 ? 3.0 : 1.05,
+      verifiedTarget: index % 10 === 0, regime: index % 2 ? 'normal' : 'hot',
+    });
+  }
+  const assessment = assessPromotion(samples, true);
+  assert.equal(assessment.ready, true);
+  assert.ok((assessment.modelTargetRate || 0) > (assessment.incumbentTargetRate || 0));
+
+  const coldStart = assessPromotion(samples.slice(0, 40), true);
+  assert.equal(coldStart.ready, false);
+  assert.ok(coldStart.reasons.some(reason => reason.includes('model executable samples')));
+
+  const failedPlacebo = assessPromotion(samples, false);
+  assert.equal(failedPlacebo.ready, false);
+  assert.ok(failedPlacebo.reasons.some(reason => reason.includes('placebo')));
 });
 
 test('shared funding roots collapse wallets into one risky economic entity', () => {

@@ -5,32 +5,50 @@ import { ExecutionEvidence } from '../types';
 import { executionSettings, quoteExecutableEntry, quoteExecutableExit } from './execution';
 import { quoteCategory, quotePhase } from './quote-status';
 
-export type PaperSignal = 'trigger' | 'conviction' | 'bb_smart' | 'bb_organic' | 'bb_pregrad' | 'bb_secondwave' | 'model';
+export type PaperSignal = 'trigger' | 'conviction' | 'bb_smart' | 'bb_organic' | 'bb_pregrad' | 'bb_secondwave'
+  | 'model' | 'model_raw' | 'model_executable';
+
+export interface OpenPaperOptions {
+  skipExecutionQuote?: boolean;
+}
 
 export async function openPaper(
   ca: string, symbol: string, signal: PaperSignal, markPrice: number, score: number | null,
   screenedExecution?: ExecutionEvidence,
+  options: OpenPaperOptions = {},
 ) {
   if (!pool || !markPrice || markPrice <= 0) return;
   const keyPresent = !!process.env.JUPITER_API_KEY;
+  const predicate = signal === 'model_raw' ? 'preliminary_pass=true' : 'allow=true';
   const decision = await pool.query(
-    `SELECT id FROM signal_decisions WHERE ca=$1 AND model_version=$2 AND allow=true ORDER BY evaluated_at DESC LIMIT 1`,
+    `SELECT id FROM signal_decisions WHERE ca=$1 AND model_version=$2 AND ${predicate}
+      ORDER BY evaluated_at DESC LIMIT 1`,
     [ca, MODEL_VERSION],
   ).catch(() => ({ rows: [] as any[] }));
   const decisionId = decision.rows[0]?.id || null;
+  const initialQuoteStatus = options.skipExecutionQuote ? 'shadow_raw_no_execution' : 'quote_pending';
   const inserted = await pool.query(
     `INSERT INTO paper_trades
        (ca,symbol,signal,entry_price,mark_entry_price,entry_score,peak_price,peak_at,last_price,last_at,
         target_multiple,quote_status,model_version,quote_key_present,signal_decision_id,
         transaction_built,simulation_ok,simulation_error,route_stability_bps,execution_score,execution_probe)
-     VALUES ($1,$2,$3,$4,$4,$5,$4,now(),$4,now(),$6,'quote_pending',$7,$8,$9,$10,$11,$12,$13,$14,$15)
+     VALUES ($1,$2,$3,$4,$4,$5,$4,now(),$4,now(),$6,$16,$7,$8,$9,$10,$11,$12,$13,$14,$15)
      ON CONFLICT (ca,signal,model_version) DO NOTHING RETURNING id`,
     [ca, symbol, signal, markPrice, score, executionSettings.targetMultiple, MODEL_VERSION, keyPresent,
      decisionId, screenedExecution?.transactionBuilt || false, screenedExecution?.simulationOk || false,
      screenedExecution?.simulationError || null, screenedExecution?.routeStabilityBps || null,
-     screenedExecution?.executionScore || null, screenedExecution ? JSON.stringify(screenedExecution) : null],
+     screenedExecution?.executionScore || null, screenedExecution ? JSON.stringify(screenedExecution) : null,
+     initialQuoteStatus],
   ).catch(() => null);
   if (!inserted?.rowCount) return;
+
+  if (options.skipExecutionQuote) {
+    await pool.query(
+      `UPDATE paper_trades SET quote_attempted_at=now(),quote_key_present=$4
+        WHERE ca=$1 AND signal=$2 AND model_version=$3`, [ca, signal, MODEL_VERSION, keyPresent],
+    ).catch(() => {});
+    return;
+  }
 
   const token = getToken(ca);
   if (!token) {
@@ -126,6 +144,10 @@ async function mark() {
         row.execution_eligible ? 'target_3x_exit_simulated' : 'target_3x_observed_legacy');
       continue;
     }
+    if (observedTarget && row.signal === 'model_raw') {
+      await closeAt(row.ca, row.signal, row.model_version, price, 'target_3x_observed_shadow');
+      continue;
+    }
     let reason: string | null = null;
     if (multiple <= executionSettings.stopMultiple) reason = `stop_${Math.round((1 - executionSettings.stopMultiple) * 100)}pct`;
     else if (token.state === 'DEAD') reason = 'coin_died';
@@ -149,6 +171,7 @@ export async function paperScoreboard(days = 30): Promise<any[]> {
   if (!pool) return [];
   const result = await pool.query(
     `SELECT signal,model_version,COUNT(*) AS observations,
+       COUNT(*) FILTER (WHERE closed AND exit_reason IS DISTINCT FROM 'tracking_lost') AS resolved_observed,
        COUNT(*) FILTER (WHERE execution_eligible) AS executable,
        COUNT(*) FILTER (WHERE transaction_built) AS transaction_built,
        COUNT(*) FILTER (WHERE simulation_ok) AS simulation_ok,
@@ -157,6 +180,15 @@ export async function paperScoreboard(days = 30): Promise<any[]> {
        COUNT(*) FILTER (WHERE exit_reason='tracking_lost') AS incomplete,
        COUNT(*) FILTER (WHERE observed_target_hit_at IS NOT NULL) AS observed_hits_3x,
        COUNT(*) FILTER (WHERE execution_eligible AND target_hit_at IS NOT NULL) AS hits_3x,
+       ROUND(AVG(COALESCE(exit_price,last_price)/NULLIF(entry_price,0)) FILTER
+         (WHERE closed AND exit_reason IS DISTINCT FROM 'tracking_lost')::numeric,3) AS avg_observed_return,
+       ROUND((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY COALESCE(exit_price,last_price)/NULLIF(entry_price,0))
+         FILTER (WHERE closed AND exit_reason IS DISTINCT FROM 'tracking_lost'))::numeric,3) AS median_observed_return,
+       ROUND((COUNT(*) FILTER (WHERE observed_target_hit_at IS NOT NULL))::numeric/
+         NULLIF(COUNT(*) FILTER (WHERE closed AND exit_reason IS DISTINCT FROM 'tracking_lost'),0)*100,1) AS pct_3x_observed,
+       ROUND((COUNT(*) FILTER (WHERE closed AND exit_reason IS DISTINCT FROM 'tracking_lost'
+         AND COALESCE(exit_price,last_price)/NULLIF(entry_price,0)<=0.5))::numeric/
+         NULLIF(COUNT(*) FILTER (WHERE closed AND exit_reason IS DISTINCT FROM 'tracking_lost'),0)*100,1) AS severe_loss_pct_observed,
        ROUND(AVG(COALESCE(exit_price,last_price)/NULLIF(entry_price,0)) FILTER
          (WHERE execution_eligible AND closed AND exit_reason IS DISTINCT FROM 'tracking_lost')::numeric,3) AS avg_executable_return,
        ROUND((COUNT(*) FILTER (WHERE execution_eligible AND target_hit_at IS NOT NULL))::numeric/
@@ -174,12 +206,15 @@ export async function paperScoreboard(days = 30): Promise<any[]> {
      GROUP BY signal,model_version ORDER BY model_version DESC,pct_3x_executable DESC NULLS LAST`, [String(days)],
   ).catch(() => null);
   return (result?.rows || []).map((row: any) => {
-    const resolved = numberValue(row.resolved_executable);
+    const resolvedExecutable = numberValue(row.resolved_executable);
+    const resolvedObserved = numberValue(row.resolved_observed);
+    const isRaw = row.signal === 'model_raw';
+    const resolved = isRaw ? resolvedObserved : resolvedExecutable;
     return { ...row, current_model: row.model_version === MODEL_VERSION,
       forward_ready: resolved >= executionSettings.minForwardSamples,
       evidence_status: resolved >= executionSettings.minForwardSamples
-        ? `evidence-ready (${resolved} resolved simulated calls)`
-        : `collecting (${resolved}/${executionSettings.minForwardSamples} resolved simulated calls)` };
+        ? `evidence-ready (${resolved} resolved ${isRaw ? 'observed' : 'simulated'} calls)`
+        : `collecting (${resolved}/${executionSettings.minForwardSamples} resolved ${isRaw ? 'observed' : 'simulated'} calls)` };
   });
 }
 

@@ -2,13 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { quoteCategory, quotePhase } from './quote-status';
 
-test('separates legacy, pre-key and post-key quote attempts', () => {
+test('separates legacy, shadow, pre-key and post-key quote attempts', () => {
   assert.equal(quotePhase('legacy_mark', null), 'legacy');
+  assert.equal(quotePhase('shadow_raw_no_execution', false), 'shadow');
   assert.equal(quotePhase('jupiter_api_key_missing', false), 'pre_key');
   assert.equal(quotePhase('jupiter_no_route', true), 'post_key');
 });
 
 test('classifies build, simulation and routing outcomes', () => {
+  assert.equal(quoteCategory('shadow_raw_no_execution'), 'research_only');
   assert.equal(quoteCategory('jupiter_http_401'), 'unauthorized');
   assert.equal(quoteCategory('jupiter_http_429'), 'rate_limited');
   assert.equal(quoteCategory('jupiter_no_route'), 'no_route');
