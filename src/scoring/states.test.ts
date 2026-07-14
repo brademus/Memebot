@@ -6,6 +6,7 @@ import { TokenRecord } from '../types';
 function token(overrides: Partial<TokenRecord> = {}): TokenRecord {
   return {
     firstSeen: Date.now() - 5 * 60_000,
+    source: 'pumpfun',
     state: 'WATCHING',
     stateChangedAt: Date.now() - 2 * 60_000,
     score: 70,
@@ -29,6 +30,12 @@ function token(overrides: Partial<TokenRecord> = {}): TokenRecord {
 test('promotes a persistent evidence-backed token to trigger', () => {
   const candidate = token();
   assert.equal(updateState(candidate), 'TRIGGER');
+});
+
+test('keeps momentum-source tokens measurable but out of recommendations', () => {
+  const candidate = token({ source: 'momentum' });
+  assert.equal(updateState(candidate), 'HEATING');
+  assert.equal(candidate.state, 'HEATING');
 });
 
 test('classifies an uncalled 40 percent runner as extended before promotion', () => {
