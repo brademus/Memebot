@@ -5,12 +5,14 @@ const LOCK_NAME = process.env.WORKER_LOCK_KEY || 'memewatch-production-worker-v1
 let lockClient: PoolClient | null = null;
 let leader = false;
 let lastError: string | null = null;
+let attempts = 0;
 
 export const leadershipDiag = () => ({
   role: leader ? 'leader' : 'follower',
   lockName: LOCK_NAME,
   coordinated: !!pool,
   lastError,
+  attempts,
 });
 
 /**
@@ -19,6 +21,9 @@ export const leadershipDiag = () => ({
  * PostgreSQL releases the lock automatically and another deployment can take over.
  */
 export async function acquireWorkerLeadership(): Promise<boolean> {
+  if (leader && lockClient) return true;
+  attempts++;
+
   if (!pool) {
     lastError = 'DATABASE_URL missing; distributed leadership unavailable';
     console.warn(`[leadership] ${lastError}`);
@@ -26,23 +31,27 @@ export async function acquireWorkerLeadership(): Promise<boolean> {
     return true;
   }
 
+  let client: PoolClient | null = null;
   try {
-    const client = await pool.connect();
+    client = await pool.connect();
     const result = await client.query(
       `SELECT pg_try_advisory_lock(hashtext($1)) AS acquired`,
       [LOCK_NAME],
     );
     if (!result.rows[0]?.acquired) {
       client.release();
+      client = null;
       leader = false;
+      lastError = null;
       console.warn(`[leadership] follower mode — another deployment owns ${LOCK_NAME}`);
       return false;
     }
 
     lockClient = client;
+    client = null;
     leader = true;
     lastError = null;
-    client.on('error', error => {
+    lockClient.on('error', error => {
       lastError = error.message;
       console.error('[leadership] lock connection lost; exiting for clean failover:', error.message);
       process.exit(1);
@@ -50,8 +59,11 @@ export async function acquireWorkerLeadership(): Promise<boolean> {
     console.log(`[leadership] leader lock acquired: ${LOCK_NAME}`);
     return true;
   } catch (error) {
+    if (client) client.release(true);
     lastError = (error as Error).message;
-    throw new Error(`worker leadership failed: ${lastError}`);
+    leader = false;
+    console.error(`[leadership] acquisition attempt failed: ${lastError}`);
+    return false;
   }
 }
 
