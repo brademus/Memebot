@@ -16,6 +16,12 @@ async function boot() {
 
   // index.ts owns the leader worker lifecycle and starts immediately when imported.
   await import('./index');
+
+  // Starts after the worker import and waits before its first tick, allowing initDb
+  // to finish. It captures 3/5/10/15-minute score snapshots and resolves each from
+  // its own exact 60-minute-forward price instead of discovery-price outcomes.
+  const { startForwardEvidenceCollector } = await import('./tuning/snapshots');
+  startForwardEvidenceCollector();
 }
 
 boot().catch(error => {
