@@ -7,6 +7,7 @@ import { startDecisionOutcomeTracker } from './outcomes';
 import { startModelEvaluator } from './evaluation';
 import { startPairwiseRankLearner } from './rank-learner';
 import { finalizeSignalSchema } from './schema-finalizer';
+import { validateSignalModelConfig } from './validate';
 
 let started = false;
 const diag = { startedAt: null as string | null, sweeps: 0, evaluated: 0, lastError: null as string | null };
@@ -16,8 +17,14 @@ export function startModelRuntime() {
   if (started) return;
   started = true;
   setTimeout(async () => {
-    try { await finalizeSignalSchema(); }
-    catch (error) { diag.lastError = (error as Error).message; console.error('[signal-v3] schema finalizer', diag.lastError); return; }
+    try {
+      validateSignalModelConfig();
+      await finalizeSignalSchema();
+    } catch (error) {
+      diag.lastError = (error as Error).message;
+      console.error('[signal-v3] startup validation', diag.lastError);
+      return;
+    }
     startTradeEventWriter();
     startRegimeEngine();
     startSignalEnsemble();
