@@ -5,7 +5,7 @@ import { ExecutionEvidence } from '../types';
 import { executionSettings, quoteExecutableEntry, quoteExecutableExit } from './execution';
 import { quoteCategory, quotePhase } from './quote-status';
 
-export type PaperSignal = 'trigger' | 'conviction' | 'bb_smart' | 'bb_organic' | 'bb_pregrad' | 'bb_secondwave';
+export type PaperSignal = 'trigger' | 'conviction' | 'bb_smart' | 'bb_organic' | 'bb_pregrad' | 'bb_secondwave' | 'model';
 
 export async function openPaper(
   ca: string, symbol: string, signal: PaperSignal, markPrice: number, score: number | null,

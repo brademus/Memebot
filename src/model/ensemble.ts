@@ -5,6 +5,7 @@ import { activeTokens } from '../store';
 import { quoteExecutableEntry } from '../paper/execution';
 import { CompetingRiskHazards, ExecutionEvidence, MarketRegime, SignalDecision, SignalFeatureVector, TokenRecord } from '../types';
 import { analyzeEntityGraph } from './entity-graph';
+import { openPaper } from '../paper/paper';
 import { buildSignalFeatures } from './features';
 import { clamp01, round, softmax, standardDeviation } from './math';
 import { learnedRankScore } from './rank-learner';
@@ -29,6 +30,14 @@ export function startSignalEnsemble() {
 
 export function decisionAllowsRecommendation(token: TokenRecord, now = Date.now()): boolean {
   if (!cfg().signal_model.enabled) return recommendationEligibleSource(token.source);
+  // SHADOW MODE (default): the model evaluates, records observations, and paper-
+  // trades its allowed picks — but does NOT veto the live board. It was shipped
+  // block-by-default with cold-start thresholds (top-10%% cohort, uncertainty
+  // ceiling unreachable without calibration history), which emptied Best Buys for
+  // ~18h and starved the paper/lane outcome loops. Per the project laws, a new
+  // signal EARNS live control by beating the incumbent lanes on the paper
+  // scoreboard — flip signal_model.mode to 'enforce' when it does.
+  if (cfg().signal_model.mode !== 'enforce') return recommendationEligibleSource(token.source);
   const decision = token.modelDecision;
   if (!decision || token.modelDecisionAt === null) return false;
   return decision.modelVersion === MODEL_VERSION && decision.allow && decision.expiresAt >= now
@@ -102,6 +111,8 @@ async function evaluate(token: TokenRecord, now: number): Promise<SignalDecision
     uncertainty: round(uncertainty), alphaScore: round(cohort.alpha),
     cohortPercentile: round(cohort.percentile), cohortSize: cohort.size, execution,
   };
+  if (decision.allow && token.priceUsd > 0)
+    openPaper(token.ca, token.symbol, 'model' as any, token.priceUsd, token.score);  // scoreboard entry — model vs lanes, head-to-head
   token.modelDecision = decision;
   token.modelDecisionAt = now;
   diag.evaluated++;

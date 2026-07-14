@@ -40,9 +40,19 @@ export function rateLimit(name: string, max: number, windowMs: number): RequestH
   };
 }
 
-// Kept as a compatibility middleware for existing route registration. Dashboard,
-// diagnostics, tuning, reports and wallet management are intentionally open.
-export const adminOnly: RequestHandler = (_req, _res, next) => next();
+// MUTATING routes (wallet add/remove) require ADMIN_KEY again. This was removed as
+// "intentionally open" — but the smart-wallet list drives what the bot recommends,
+// so an open POST /api/wallets on a public URL is a signal-poisoning vector: anyone
+// with the URL could inject wallets the bot then follows, or wipe the tracked set.
+// The dashboard doesn't call these endpoints, so requiring the key costs nothing.
+// Reads stay open; only writes are gated. If ADMIN_KEY is unset, writes are refused.
+import { env } from '../config';
+export const adminOnly: RequestHandler = (req, res, next) => {
+  if (!env.ADMIN_KEY) { res.status(503).json({ error: 'ADMIN_KEY not configured — mutating endpoints disabled' }); return; }
+  const supplied = req.header('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1] || (req.query.key as string) || '';
+  if (supplied !== env.ADMIN_KEY) { res.status(401).json({ error: 'unauthorized' }); return; }
+  next();
+};
 
 export const publicApiLimit = rateLimit('api', 180, 60_000);
 export const expensiveApiLimit = rateLimit('expensive', 8, 60_000);

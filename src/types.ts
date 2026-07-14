@@ -283,6 +283,7 @@ export interface AppConfig {
   paper: { require_jupiter_quote: boolean; target_multiple: number; stop_multiple: number; max_hold_hours: number; position_sol: number; max_liquidity_pct: number; min_position_usd: number; slippage_bps: number; max_price_impact_pct: number; quote_timeout_ms: number; min_forward_samples_per_lane: number };
   signal_model: {
     enabled: boolean;
+    mode: 'shadow' | 'enforce';
     require_transaction_simulation: boolean;
     min_rank_percentile: number;
     min_target_before_stop: number;
