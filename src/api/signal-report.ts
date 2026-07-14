@@ -3,6 +3,7 @@ import { ensembleDiag } from '../model/ensemble';
 import { evaluationDiag } from '../model/evaluation';
 import { observationDiag } from '../model/observations';
 import { decisionOutcomeDiag } from '../model/outcomes';
+import { rankLearnerDiag } from '../model/rank-learner';
 import { regimeDiag } from '../model/regime';
 import { modelRuntimeDiag } from '../model/runtime';
 import { tradeEventDiag } from '../market/trade-events';
@@ -22,8 +23,7 @@ export async function buildSignalReport(days = 7) {
   const query = async (sql: string, parameters: unknown[] = []) => (await pool!.query(sql, parameters)).rows;
 
   const decisionFunnel = await query(
-    `SELECT COUNT(*)::int AS evaluated,
-            COUNT(*) FILTER (WHERE preliminary_pass)::int AS preliminary_pass,
+    `SELECT COUNT(*)::int AS evaluated,COUNT(*) FILTER (WHERE preliminary_pass)::int AS preliminary_pass,
             COUNT(*) FILTER (WHERE execution IS NOT NULL)::int AS execution_probed,
             COUNT(*) FILTER (WHERE allow)::int AS allowed,
             ROUND(AVG(target_before_stop_probability)::numeric,4) AS avg_target_probability,
@@ -58,8 +58,7 @@ export async function buildSignalReport(days = 7) {
   );
   const graphCalibration = await query(
     `SELECT width_bucket((observation.entity_features->>'graphRisk')::float,0,1,5) AS risk_band,
-            COUNT(*)::int AS n,
-            ROUND(AVG(outcome.multiple)::numeric,3) AS avg_multiple_60m,
+            COUNT(*)::int AS n,ROUND(AVG(outcome.multiple)::numeric,3) AS avg_multiple_60m,
             ROUND((COUNT(*) FILTER (WHERE outcome.multiple>=2))::numeric/NULLIF(COUNT(*),0)*100,2) AS pct_2x
        FROM signal_observations observation JOIN signal_observation_outcomes outcome
          ON outcome.observation_id=observation.id AND outcome.horizon_minutes=60
@@ -106,28 +105,22 @@ export async function buildSignalReport(days = 7) {
     `SELECT evaluated_at,train_rows,test_rows,metrics,regime_metrics,placebo_metrics,passed_falsification,notes
        FROM model_evaluations WHERE model_version=$1 ORDER BY evaluated_at DESC LIMIT 10`, [MODEL_VERSION],
   );
+  const learnedParameters = await query(
+    `SELECT kind,active,sample_count,trained_at,metrics,parameters
+       FROM model_parameters WHERE model_version=$1 ORDER BY trained_at DESC LIMIT 10`, [MODEL_VERSION],
+  ).catch(() => []);
 
   return {
     readiness,
     runtime: modelRuntimeDiag(),
     layers: {
-      regime: regimeDiag(),
-      ensemble: ensembleDiag(),
-      tradeSequence: tradeEventDiag(),
-      observations: observationDiag(),
-      decisionOutcomes: decisionOutcomeDiag(),
-      evaluation: evaluationDiag(),
+      regime: regimeDiag(), ensemble: ensembleDiag(), learnedRank: rankLearnerDiag(),
+      tradeSequence: tradeEventDiag(), observations: observationDiag(),
+      decisionOutcomes: decisionOutcomeDiag(), evaluation: evaluationDiag(),
     },
-    decisionFunnel: decisionFunnel[0] || {},
-    abstentionReasons,
-    firstEventPerformance,
-    regimePerformance,
-    graphCalibration,
-    burstCalibration,
-    rankCalibration,
-    executionPerformance,
-    observationCoverage,
-    evaluations,
-    interpretation: 'A production call requires fresh agreement across survival, cohort rank, temporal entity graph, event-time flow, regime, uncertainty and a built/simulated route. Evaluation is chronological and reports creator-isolated test rows plus shuffled-label and time-shift placebos.',
+    decisionFunnel: decisionFunnel[0] || {}, abstentionReasons,
+    firstEventPerformance, regimePerformance, graphCalibration, burstCalibration,
+    rankCalibration, executionPerformance, observationCoverage, evaluations, learnedParameters,
+    interpretation: 'A production call requires fresh agreement across survival, cohort rank, temporal entity graph, event-time flow, regime, uncertainty and a built/simulated route. Learned pairwise ranking activates only after chronological validation beats its placebo; otherwise the fixed interpretable rank remains active.',
   };
 }
