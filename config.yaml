@@ -132,7 +132,7 @@ paper:
 # abstain, not a lower-quality alert.
 signal_model:
   enabled: true
-  mode: shadow                        # shadow = evaluate/record/paper-trade but don't veto the board; 'enforce' only after the model BEATS the lanes on the paper scoreboard (>=30 closed model trades)
+  mode: shadow                        # enforce is additionally gated in code: >=100 resolved executable calls, a later 30-call holdout, >=2 regimes, passed placebos, target/median lift, and controlled severe losses
   require_transaction_simulation: true
   min_rank_percentile: 0.90
   min_target_before_stop: 0.08
