@@ -18,8 +18,11 @@ export function observationKeys(ageMinutes: number, curveProgress: number): stri
   const keys: string[] = [];
   for (const age of SCORE_SNAPSHOT_AGES_MIN)
     if (ageMinutes >= age && ageMinutes < age + SNAPSHOT_CAPTURE_TOLERANCE_MIN) keys.push(`age_${age}m`);
-  for (const milestone of CURVE_MILESTONES)
-    if (curveProgress >= milestone) keys.push(`curve_${Math.round(milestone * 100)}pct`);
+  // Record only the highest milestone actually reached. Recording every lower milestone
+  // at the same later price falsely makes a token first observed at 51% look as though
+  // its 25% and 50% states were both measured.
+  const reached = [...CURVE_MILESTONES].filter(milestone => curveProgress >= milestone).pop();
+  if (reached !== undefined) keys.push(`curve_${Math.round(reached * 100)}pct`);
   return keys;
 }
 
@@ -27,11 +30,9 @@ export function startSignalObservationCollector() {
   if (!pool) return;
   const capture = () => captureAll().catch(error => { diag.lastError = (error as Error).message; });
   setTimeout(capture, 15_000);
-  const captureTimer = setInterval(capture, 5_000);
-  captureTimer.unref();
+  const captureTimer = setInterval(capture, 5_000); captureTimer.unref();
   setTimeout(() => resolveDue().catch(() => {}), 60_000);
-  const resolveTimer = setInterval(() => resolveDue().catch(() => {}), 60_000);
-  resolveTimer.unref();
+  const resolveTimer = setInterval(() => resolveDue().catch(() => {}), 60_000); resolveTimer.unref();
 }
 
 async function captureAll() {
@@ -75,8 +76,7 @@ async function captureAll() {
 
 async function resolveDue() {
   if (!pool || resolving) return;
-  resolving = true;
-  diag.lastError = null;
+  resolving = true; diag.lastError = null;
   try {
     const rows = await pool.query(
       `SELECT outcome.observation_id,outcome.horizon_minutes,outcome.attempts,observation.ca,observation.price_usd
@@ -85,7 +85,7 @@ async function resolveDue() {
         WHERE observation.model_version=$1 AND outcome.status='pending'
           AND observation.captured_at<=now()-(outcome.horizon_minutes||' minutes')::interval
           AND outcome.next_attempt_at<=now() AND observation.captured_at>now()-interval '10 days'
-        ORDER BY observation.captured_at LIMIT 250`, [MODEL_VERSION],
+        ORDER BY outcome.next_attempt_at,observation.captured_at LIMIT 250`, [MODEL_VERSION],
     );
     for (let index = 0; index < rows.rows.length; index += 8) {
       await Promise.all(rows.rows.slice(index, index + 8).map(async row => {
