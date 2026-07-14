@@ -1,14 +1,9 @@
-import { startServer } from './api/server';
 import { acquireWorkerLeadership } from './leadership';
+import { startStandbyServer, StandbyServer } from './standby';
 
-async function boot() {
-  const isLeader = await acquireWorkerLeadership();
-  if (!isLeader) {
-    startServer();
-    console.log('[memewatch] follower dashboard running; worker loops disabled');
-    return;
-  }
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+async function startLeaderWorker() {
   const { startBestBuysEngine } = await import('./api/bestbuys-runner');
   startBestBuysEngine();
   await import('./index');
@@ -20,6 +15,25 @@ async function boot() {
 
   const { startModelRuntime } = await import('./model/runtime');
   startModelRuntime();
+}
+
+async function boot() {
+  let standby: StandbyServer | null = null;
+  let attempt = 0;
+
+  while (!(await acquireWorkerLeadership())) {
+    attempt++;
+    if (!standby) standby = await startStandbyServer();
+    const delay = Math.min(15_000, 2_000 + attempt * 1_000) + Math.floor(Math.random() * 1_000);
+    console.log(`[boot] standby follower; retrying worker leadership in ${delay}ms`);
+    await sleep(delay);
+  }
+
+  if (standby) {
+    console.log('[boot] leadership available; promoting standby into active scanner');
+    await standby.close();
+  }
+  await startLeaderWorker();
 }
 
 boot().catch(error => {
