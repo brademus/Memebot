@@ -5,6 +5,7 @@ import { burstFeatures } from './burst';
 import { alphaScore, competingRiskHazards } from './ensemble';
 import { classifyRegime } from './regime';
 import { observationKeys } from './observations';
+import { rankVector, trainPairwiseRanker } from './rank-learner';
 import { MarketRegime, SignalFeatureVector, TokenRecord } from '../types';
 
 const regime: MarketRegime = {
@@ -33,6 +34,18 @@ test('high-quality features improve target hazards and alpha rank', () => {
   assert.ok(high.target_2x + high.target_3x > low.target_2x + low.target_3x);
   assert.ok(high.rug < low.rug);
   assert.ok(alphaScore(good, regime) > alphaScore(bad, regime));
+});
+
+test('pairwise rank learning orders later winners and beats directional placebo', () => {
+  const rows = Array.from({ length: 120 }, (_, group) => [
+    { at: group * 2, group: `cohort-${group}`, multiple: 2.5, vector: rankVector(good) },
+    { at: group * 2 + 1, group: `cohort-${group}`, multiple: 0.6, vector: rankVector(bad) },
+  ]).flat();
+  const trained = trainPairwiseRanker(rows.slice(0, 180), rows.slice(180));
+  assert.ok(trained.trainPairs >= 90);
+  assert.ok(trained.validationPairs >= 30);
+  assert.ok(trained.validationAccuracy > 0.9);
+  assert.ok(trained.validationAccuracy > trained.placeboAccuracy + 0.3);
 });
 
 test('shared funding roots collapse wallets into one risky economic entity', () => {
