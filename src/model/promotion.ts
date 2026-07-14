@@ -76,11 +76,20 @@ export function assessPromotion(samples: PromotionSample[], falsificationPassed:
   const incumbent = valid.filter(sample => !sample.signal.startsWith('model') && sample.entryAt >= holdoutStart);
   const regimes = new Set(model.map(sample => sample.regime).filter((value): value is string => !!value)).size;
 
-  const modelTargetRate = rate(model, sample => sample.verifiedTarget);
+  // REVIEW FIX: the comparison metrics must come from the HOLDOUT slice, not the
+  // full model history. As written, "holdout" only gated a count while the lift
+  // tests ran on all 30-day model samples vs incumbents measured only inside the
+  // holdout window — asymmetric windows (regime drift contaminates the comparison
+  // in either direction) and an early hot streak could carry promotion even when
+  // the model's LATEST 30 calls are mediocre. Now both sides are evaluated over
+  // the same time window: the model's most recent resolved calls vs incumbent
+  // calls entered in that same window. Full-history volume (minResolvedExecutable)
+  // and regime coverage still apply to the complete sample.
+  const modelTargetRate = rate(holdout, sample => sample.verifiedTarget);
   const incumbentTargetRate = rate(incumbent, sample => sample.verifiedTarget);
-  const modelMedianReturn = median(model.map(sample => sample.multiple));
+  const modelMedianReturn = median(holdout.map(sample => sample.multiple));
   const incumbentMedianReturn = median(incumbent.map(sample => sample.multiple));
-  const modelSevereLossRate = rate(model, sample => sample.multiple <= 0.5);
+  const modelSevereLossRate = rate(holdout, sample => sample.multiple <= 0.5);
   const incumbentSevereLossRate = rate(incumbent, sample => sample.multiple <= 0.5);
 
   const reasons: string[] = [];
