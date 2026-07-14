@@ -4,7 +4,7 @@ import { TradeEvent } from '../types';
 interface PendingTradeEvent extends TradeEvent { ca: string; eventId: string }
 const pending: PendingTradeEvent[] = [];
 let flushing = false;
-const diag = { queued: 0, written: 0, dropped: 0, lastFlush: null as string | null, lastError: null as string | null };
+const diag = { written: 0, dropped: 0, lastFlush: null as string | null, lastError: null as string | null };
 
 export const tradeEventDiag = () => ({ ...diag, queued: pending.length });
 
@@ -28,9 +28,7 @@ export function startTradeEventWriter() {
   setTimeout(() => flush().catch(() => {}), 2_000);
 }
 
-export async function flushTradeEvents() {
-  await flush();
-}
+export async function flushTradeEvents() { await flush(); }
 
 async function flush() {
   if (!pool || flushing || !pending.length) return;
@@ -41,11 +39,11 @@ async function flush() {
       const batch = pending.splice(0, 250);
       const values: unknown[] = [];
       const tuples = batch.map((event, index) => {
-        const offset = index * 13;
+        const offset = index * 12;
         values.push(
           event.eventId, event.ca, new Date(event.at), event.buy ? 'buy' : 'sell', event.wallet || null,
           finiteOrNull(event.solAmount), finiteOrNull(event.tokenAmount), finiteOrNull(event.priceUsd),
-          finiteOrNull(event.curveSol), event.slot || null, event.signature || null, 'pumpfun', event.at,
+          finiteOrNull(event.curveSol), event.slot || null, event.signature || null, 'pumpfun',
         );
         return `($${offset + 1},$${offset + 2},$${offset + 3},$${offset + 4},$${offset + 5},$${offset + 6},$${offset + 7},$${offset + 8},$${offset + 9},$${offset + 10},$${offset + 11},$${offset + 12})`;
       });
@@ -54,9 +52,7 @@ async function flush() {
            (event_id,ca,at,side,wallet,sol_amount,token_amount,price_usd,curve_sol,slot,signature,source)
          VALUES ${tuples.join(',')}
          ON CONFLICT (ca,event_id) DO NOTHING`,
-        // The last per-row item is only used for deterministic local event identity and
-        // is deliberately not sent to SQL.
-        values.filter((_, index) => (index + 1) % 13 !== 0),
+        values,
       );
       diag.written += batch.length;
     }
