@@ -52,14 +52,10 @@ test('shared funding roots collapse wallets into one risky economic entity', () 
 
 test('event-time model penalizes synchronized repeated-wallet churn', () => {
   const now = Date.now();
-  const concentrated = {
-    recentTrades: Array.from({ length: 20 }, (_, index) => ({ at: now - index * 300, buy: index < 15,
-      wallet: `bot-${index % 2}`, solAmount: 0.1 })),
-  } as TokenRecord;
-  const broad = {
-    recentTrades: Array.from({ length: 20 }, (_, index) => ({ at: now - index * 8_000, buy: index < 18,
-      wallet: `human-${index}`, solAmount: 0.1 })),
-  } as TokenRecord;
+  const concentrated = { recentTrades: Array.from({ length: 20 }, (_, index) => ({ at: now - index * 300, buy: index < 15,
+    wallet: `bot-${index % 2}`, solAmount: 0.1 })) } as TokenRecord;
+  const broad = { recentTrades: Array.from({ length: 20 }, (_, index) => ({ at: now - index * 8_000, buy: index < 18,
+    wallet: `human-${index}`, solAmount: 0.1 })) } as TokenRecord;
   const churn = burstFeatures(concentrated, now);
   const organic = burstFeatures(broad, now);
   assert.ok(churn.exhaustion > organic.exhaustion);
@@ -73,8 +69,9 @@ test('regime classifier identifies adverse and mania states', () => {
     aggregateBuyRatio: 1.7, medianLiquidityUsd: 30_000, routeHealth: 0.9, completeness: 1 }), 'mania');
 });
 
-test('observations include early clock and curve-state milestones', () => {
-  assert.ok(observationKeys(1.2, 0.51).includes('age_1m'));
-  assert.ok(observationKeys(1.2, 0.51).includes('curve_25pct'));
-  assert.ok(observationKeys(1.2, 0.51).includes('curve_50pct'));
+test('observations record the highest reached milestone without retrofilling lower states', () => {
+  const keys = observationKeys(1.2, 0.51);
+  assert.ok(keys.includes('age_1m'));
+  assert.ok(keys.includes('curve_50pct'));
+  assert.equal(keys.includes('curve_25pct'), false);
 });
