@@ -35,6 +35,9 @@ jobs:
       - name: Jupiter entry and exit tests
         run: node --test dist/paper/execution.test.js
 
+      - name: Jupiter quote classification tests
+        run: node --test dist/paper/quote-status.test.js
+
       - name: Best Buy lane tests
         run: node --test dist/api/bestbuys.test.js
 
@@ -43,6 +46,9 @@ jobs:
 
       - name: State-machine tests
         run: node --test dist/scoring/states.test.js
+
+      - name: Exact forward snapshot tests
+        run: node --test dist/tuning/snapshots.test.js
 
       - name: Dashboard JavaScript syntax
         run: node --check public/app.js && node --check public/no-admin.js && node --check public/observed-wins.js
