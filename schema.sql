@@ -219,3 +219,50 @@ CREATE INDEX IF NOT EXISTS idx_paper_signal ON paper_trades(signal);
 CREATE INDEX IF NOT EXISTS idx_paper_target_hit ON paper_trades(target_hit_at) WHERE target_hit_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_paper_observed_hit ON paper_trades(observed_target_hit_at) WHERE observed_target_hit_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_paper_executable ON paper_trades(execution_eligible, signal, entry_at DESC);
+
+-- Forward-evidence v2: keep post-patch recommendations and exact-time training rows
+-- separate from legacy discovery-price labels.
+ALTER TABLE tokens ADD COLUMN IF NOT EXISTS trigger_model_version TEXT;
+ALTER TABLE tokens ADD COLUMN IF NOT EXISTS conviction_model_version TEXT;
+ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS model_version TEXT NOT NULL DEFAULT 'legacy';
+ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS quote_attempted_at TIMESTAMPTZ;
+ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS quote_key_present BOOLEAN;
+
+CREATE TABLE IF NOT EXISTS score_snapshots (
+  id BIGSERIAL PRIMARY KEY,
+  ca TEXT NOT NULL REFERENCES tokens(ca),
+  snapshot_age_min INTEGER NOT NULL,
+  captured_age_seconds INTEGER NOT NULL,
+  captured_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  price_usd NUMERIC NOT NULL,
+  score NUMERIC NOT NULL,
+  raw JSONB NOT NULL,
+  source TEXT,
+  recommendation_eligible BOOLEAN NOT NULL DEFAULT true,
+  model_version TEXT NOT NULL,
+  forward_minutes INTEGER NOT NULL DEFAULT 60,
+  forward_price_usd NUMERIC,
+  forward_multiple NUMERIC,
+  resolved_at TIMESTAMPTZ,
+  resolve_status TEXT NOT NULL DEFAULT 'pending',
+  resolve_attempts INTEGER NOT NULL DEFAULT 0,
+  last_resolve_error TEXT,
+  next_resolve_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (ca, snapshot_age_min, model_version)
+);
+CREATE INDEX IF NOT EXISTS idx_score_snapshots_due
+  ON score_snapshots(resolve_status, next_resolve_at, captured_at);
+CREATE INDEX IF NOT EXISTS idx_score_snapshots_model
+  ON score_snapshots(model_version, snapshot_age_min, resolved_at);
+
+CREATE TABLE IF NOT EXISTS model_suggestions (
+  id BIGSERIAL PRIMARY KEY,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  model_version TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  payload JSONB NOT NULL,
+  evidence TEXT,
+  applied BOOLEAN NOT NULL DEFAULT false
+);
+CREATE INDEX IF NOT EXISTS idx_model_suggestions_recent
+  ON model_suggestions(model_version, created_at DESC);
