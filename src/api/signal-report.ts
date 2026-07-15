@@ -8,6 +8,7 @@ import { regimeDiag } from '../model/regime';
 import { modelRuntimeDiag } from '../model/runtime';
 import { tradeEventDiag } from '../market/trade-events';
 import { MODEL_VERSION } from '../model/version';
+import { paperEvidenceHealth, paperPersistenceRuntimeDiag } from '../paper/persistence-health';
 
 export async function buildSignalReport(days = 7) {
   const readiness = {
@@ -21,6 +22,7 @@ export async function buildSignalReport(days = 7) {
   if (!pool) return { readiness, note: 'No database attached; v3 live decisions can run but durable evidence is unavailable.' };
   const bounded = Math.max(1, Math.min(90, days));
   const query = async (sql: string, parameters: unknown[] = []) => (await pool!.query(sql, parameters)).rows;
+  const evidencePersistence = await paperEvidenceHealth();
 
   const decisionFunnel = await query(
     `SELECT COUNT(*)::int AS evaluated,COUNT(*) FILTER (WHERE preliminary_pass)::int AS preliminary_pass,
@@ -113,6 +115,7 @@ export async function buildSignalReport(days = 7) {
   return {
     readiness,
     runtime: modelRuntimeDiag(),
+    persistence: { runtime: paperPersistenceRuntimeDiag(), evidence: evidencePersistence },
     layers: {
       regime: regimeDiag(), ensemble: ensembleDiag(), learnedRank: rankLearnerDiag(),
       tradeSequence: tradeEventDiag(), observations: observationDiag(),
@@ -121,6 +124,6 @@ export async function buildSignalReport(days = 7) {
     decisionFunnel: decisionFunnel[0] || {}, abstentionReasons,
     firstEventPerformance, regimePerformance, graphCalibration, burstCalibration,
     rankCalibration, executionPerformance, observationCoverage, evaluations, learnedParameters,
-    interpretation: 'A production call requires fresh agreement across survival, cohort rank, temporal entity graph, event-time flow, regime, uncertainty and a built/simulated route. Learned pairwise ranking activates only after chronological validation beats its placebo; otherwise the fixed interpretable rank remains active.',
+    interpretation: 'A production call requires fresh agreement across survival, cohort rank, temporal entity graph, event-time flow, regime, uncertainty and a built/simulated route. Learned pairwise ranking activates only after chronological validation beats its placebo; otherwise the fixed interpretable rank remains active. Persistence health compares mature preliminary/allowed decisions with their required model_raw/model_executable paper rows.',
   };
 }

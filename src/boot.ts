@@ -15,6 +15,11 @@ async function startLeaderWorker() {
 
   const { startModelRuntime } = await import('./model/runtime');
   startModelRuntime();
+
+  // Persistence must be proven in production, not inferred from successful builds.
+  // This alarm compares mature model decisions with their expected paper evidence rows.
+  const { startPaperEvidenceHealthMonitor } = await import('./paper/persistence-health');
+  startPaperEvidenceHealthMonitor();
 }
 
 async function boot() {
