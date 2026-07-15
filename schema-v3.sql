@@ -218,3 +218,12 @@ CREATE TABLE IF NOT EXISTS model_evaluations (
   notes TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_model_evaluations_recent ON model_evaluations(model_version, evaluated_at DESC);
+
+-- FIX (review 2026-07-14): openPaper targets ON CONFLICT (ca, signal, model_version)
+-- but no matching unique index existed — only the legacy UNIQUE(ca, signal). Postgres
+-- rejects every such INSERT ('no unique or exclusion constraint matching the ON
+-- CONFLICT specification'), and the error was swallowed, so ZERO paper trades were
+-- recorded since v3 shipped: the entire promotion evidence stream was silently dead.
+ALTER TABLE paper_trades DROP CONSTRAINT IF EXISTS paper_trades_ca_signal_key;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_paper_trades_ca_signal_model
+  ON paper_trades(ca, signal, model_version);

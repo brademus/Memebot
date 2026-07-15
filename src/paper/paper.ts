@@ -39,7 +39,7 @@ export async function openPaper(
      screenedExecution?.simulationError || null, screenedExecution?.routeStabilityBps || null,
      screenedExecution?.executionScore || null, screenedExecution ? JSON.stringify(screenedExecution) : null,
      initialQuoteStatus],
-  ).catch(() => null);
+  ).catch((e: Error) => { console.error('[paper] insert failed:', e.message); return null; });
   if (!inserted?.rowCount) return;
 
   if (options.skipExecutionQuote) {
