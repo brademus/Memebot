@@ -35,7 +35,7 @@ export async function buildSignalReport(days = 7) {
     [MODEL_VERSION, String(bounded)],
   );
   const abstentionReasons = await query(
-    `SELECT reason,COUNT(*)::int AS n FROM signal_decisions,CROSS JOIN LATERAL unnest(reasons) AS reason
+    `SELECT reason,COUNT(*)::int AS n FROM signal_decisions CROSS JOIN LATERAL unnest(reasons) AS reason
       WHERE model_version=$1 AND evaluated_at>now()-($2||' days')::interval
       GROUP BY reason ORDER BY n DESC LIMIT 25`, [MODEL_VERSION, String(bounded)],
   );
