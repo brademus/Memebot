@@ -299,19 +299,40 @@ $('loadHistory').onclick = async () => {
   }
 };
 
-async function runTool(url, loading) {
+let lastToolText = '';
+async function copyToolText(btn) {
+  try {
+    await navigator.clipboard.writeText(lastToolText);
+    if (btn) { btn.textContent = 'COPIED ✓'; setTimeout(() => { btn.textContent = 'COPY'; }, 2000); }
+    return true;
+  } catch { if (btn) btn.textContent = 'copy failed — long-press to select'; return false; }
+}
+async function runTool(url, loading, autoCopy) {
   const output = $('toolOutput');
   output.classList.remove('hidden');
   output.textContent = loading;
   try {
     const data = await adminJson(url);
-    output.textContent = data.review || data.read || JSON.stringify(data, null, 2);
+    lastToolText = data.review || data.read || JSON.stringify(data, null, 2);
+    output.textContent = lastToolText;
+    // copy affordance: a tap-to-copy chip is the reliable path on iOS (clipboard
+    // writes must be close to a user gesture); the auto-attempt usually works too.
+    let chip = $('copyTool');
+    if (!chip) {
+      chip = document.createElement('button');
+      chip.id = 'copyTool'; chip.textContent = 'COPY';
+      chip.style.cssText = 'margin:6px 0;padding:6px 14px;background:var(--amber,#ffb000);color:#000;border:0;font:inherit;font-weight:700;cursor:pointer;border-radius:3px';
+      chip.onclick = () => copyToolText(chip);
+      output.parentNode.insertBefore(chip, output);
+    }
+    chip.style.display = '';
+    if (autoCopy) copyToolText(chip);
   } catch (error) {
     output.textContent = `Request failed: ${error.message}`;
   }
   output.scrollIntoView({ behavior: 'smooth' });
 }
-$('report').onclick = () => runTool('/api/report', 'Building private weekly report…');
+$('report').onclick = () => runTool('/api/report', 'Building private weekly report…', true);   // auto-copies the JSON
 $('aiReview').onclick = () => runTool('/api/ai-review', 'Running private AI review…');
 $('systemMonitor').onclick = () => runTool('/api/system-monitor', 'Reading private system state…');
 

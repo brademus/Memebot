@@ -40,7 +40,7 @@ bundle:
   enabled: true
   cluster_merge_enabled: true
   cluster_max_buyers: 30
-  max_insider_supply_pct: 25
+  max_insider_supply_pct: 22    # re-applied 2026-07-15: learner evidence (42 passed tokens at 15-25% insiders -> 0 winners, avg 0.72x, n>=30 bar met); the suggest-only conversion silently deactivated this TIGHTENING
   max_funded_snipers: 2
   count_all_slot0_as_insider: false
   total_supply: 1000000000
@@ -49,17 +49,23 @@ age:
   max_token_age_minutes: 240
   freshness_half_life_minutes: 90
 
+# APPLIED 2026-07-15 from the model's suggestion (suggest-only governance: a human
+# applies; this is that application). Evidence: 11,416 exact-forward-time rows /
+# 83 forward 3x winners — far past the law bars (>=60 samples / >=12 winners).
+# Directions all +1 under exact-forward labeling (the old freshness/buy_pressure
+# inversions were artifacts of the old outcome labeling). Youden J 0.2: weak but
+# real separation; floor set from the same fit. Revert = git revert this commit.
 weights:
-  velocity: 25
-  organic: 20
-  social: 15
-  buy_pressure: 15
-  freshness: 10
-  smart_money: 15
+  velocity: 17.3
+  organic: 30.7
+  social: 15.7
+  buy_pressure: 19.5
+  freshness: 6.9
+  smart_money: 9.9
 
 states:
   heating_score_min: 50
-  trigger_score_min: 65
+  trigger_score_min: 44          # applied from suggestion 2026-07-15 (was 65 seed — provably unreachable: 0 triggers all window)
   trigger_min_trades: 12
   trigger_min_unique_buyers: 12
   trigger_buy_ratio_min: 1.3
