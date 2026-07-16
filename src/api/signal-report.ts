@@ -102,7 +102,8 @@ export async function buildSignalReport(days = 7) {
   const observationCoverage = await query(
     `SELECT observation_key,source,COUNT(*)::int AS captured,
             COUNT(*) FILTER (WHERE outcome.status='resolved')::int AS resolved_labels,
-            COUNT(*) FILTER (WHERE outcome.status='unresolved')::int AS unresolved_labels
+            COUNT(*) FILTER (WHERE outcome.status='unresolved')::int AS unresolved_labels,
+            COUNT(*) FILTER (WHERE outcome.status='pending')::int AS pending_labels
        FROM signal_observations observation LEFT JOIN signal_observation_outcomes outcome ON outcome.observation_id=observation.id
       WHERE observation.model_version=$1 AND observation.captured_at>now()-($2||' days')::interval
       GROUP BY observation_key,source ORDER BY observation_key,source`, [MODEL_VERSION, String(bounded)],
@@ -129,6 +130,6 @@ export async function buildSignalReport(days = 7) {
     decisionFunnel: decisionFunnel[0] || {}, abstentionReasons,
     firstEventPerformance, regimePerformance, graphCalibration, burstCalibration,
     rankCalibration, executionPerformance, observationCoverage, evaluations, learnedParameters,
-    interpretation: 'A production call requires fresh agreement across survival, cohort rank, temporal entity graph, event-time flow, regime, uncertainty and a built/simulated route. PumpPortal trade subscriptions are metered; when they are not configured, Helius reconstructs recent transaction sequences and Dexscreener supplies aggregate flow. Learned pairwise ranking activates only after chronological validation beats its placebo. Persistence health compares mature preliminary/allowed decisions with their required model_raw/model_executable paper rows.',
+    interpretation: 'preliminary_pass is the statistical shadow-candidate set. Missing graph, flow, or simulation evidence does not erase that research cohort; production allow remains fail-closed until measured entity and event-time evidence plus a built/simulated route pass. PumpPortal is the direct stream, Helius reconstructs wallet-level events when available, and Dexscreener supplies aggregate scoring inputs. Persistence health compares mature preliminary/allowed decisions with model_raw/model_executable evidence.',
   };
 }
