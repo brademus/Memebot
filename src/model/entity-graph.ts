@@ -3,7 +3,7 @@ import { pool } from '../db';
 import { heliusTxs, heliusTxsToCreation } from '../helius';
 import { EntityGraphFeatures, TokenRecord } from '../types';
 import { MODEL_VERSION } from './version';
-import { clamp01, mean, round, standardDeviation } from './math';
+import { clamp01, round, standardDeviation } from './math';
 
 const CEX_FUNDERS = new Set([
   '5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9',
@@ -35,6 +35,17 @@ export interface EntityGraphInput {
   totalSupply: number;
   checkedAt?: number;
 }
+
+const retryAfter = new Map<string, number>();
+const diag = {
+  attempts: 0,
+  completed: 0,
+  noTransactions: 0,
+  noBuyers: 0,
+  lastSuccess: null as string | null,
+  lastError: null as string | null,
+};
+export const entityGraphDiag = () => ({ ...diag, retrying: retryAfter.size });
 
 export function aggregateEntityGraph(input: EntityGraphInput): EntityGraphFeatures {
   const checkedAt = input.checkedAt || Date.now();
@@ -101,51 +112,90 @@ export function aggregateEntityGraph(input: EntityGraphInput): EntityGraphFeatur
 }
 
 export async function analyzeEntityGraph(token: TokenRecord, force = false): Promise<EntityGraphFeatures | null> {
-  if (!pool || !token.ca || !token.creator) return token.entityGraph;
-  if (!force && token.entityGraph && Date.now() - token.entityGraph.checkedAt < 20 * 60_000) return token.entityGraph;
+  if (!pool || !token.ca) return token.entityGraph;
+  const now = Date.now();
+  if (!force && token.entityGraph && now - token.entityGraph.checkedAt < 20 * 60_000) return token.entityGraph;
+  if (!force && (retryAfter.get(token.ca) || 0) > now) return token.entityGraph;
+  diag.attempts++;
+  diag.lastError = null;
 
-  const mintTransactions = await heliusTxsToCreation(token.ca, 5, 'bg');
-  if (!mintTransactions.length) return token.entityGraph;
-  const minimumSlot = Math.min(...mintTransactions.map((tx: any) => Number(tx.slot) || Number.MAX_SAFE_INTEGER));
-  const amounts = new Map<string, number>();
-  for (const tx of mintTransactions) {
-    if ((Number(tx.slot) || 0) > minimumSlot + 3) continue;
-    for (const transfer of tx.tokenTransfers || []) {
-      if (transfer.mint !== token.ca || !transfer.toUserAccount || transfer.toUserAccount === token.creator) continue;
-      amounts.set(transfer.toUserAccount, (amounts.get(transfer.toUserAccount) || 0) + Math.max(0, Number(transfer.tokenAmount) || 0));
+  try {
+    const mintTransactions = await heliusTxsToCreation(token.ca, 5, 'bg');
+    if (!mintTransactions.length) diag.noTransactions++;
+    const amounts = discoverBuyerAmounts(token, mintTransactions);
+    const buyers = [...amounts.entries()]
+      .slice(0, Math.min(30, cfg().bundle.cluster_max_buyers))
+      .map(([wallet, tokenAmount]) => ({ wallet, tokenAmount }));
+    if (!buyers.length) {
+      diag.noBuyers++;
+      retryAfter.set(token.ca, now + 5 * 60_000);
+      return token.entityGraph;
     }
-  }
-  const buyers = [...amounts.entries()]
-    .sort((left, right) => right[1] - left[1])
-    .slice(0, Math.min(30, cfg().bundle.cluster_max_buyers))
-    .map(([wallet, tokenAmount]) => ({ wallet, tokenAmount }));
-  if (!buyers.length) return token.entityGraph;
 
-  const nodes: BuyerNode[] = [];
-  for (let index = 0; index < buyers.length; index += 5) {
-    const batch = await Promise.all(buyers.slice(index, index + 5).map(buyer => resolveFundingRoot(buyer.wallet)));
-    nodes.push(...batch);
+    const nodes: BuyerNode[] = [];
+    for (let index = 0; index < buyers.length; index += 5) {
+      const batch = await Promise.all(buyers.slice(index, index + 5).map(buyer => resolveFundingRoot(buyer.wallet)));
+      nodes.push(...batch);
+    }
+    const features = aggregateEntityGraph({ buyers, nodes, deployer: token.creator, totalSupply: cfg().bundle.total_supply });
+    token.entityGraph = features;
+    retryAfter.delete(token.ca);
+    diag.completed++;
+    diag.lastSuccess = new Date().toISOString();
+    await pool.query(
+      `INSERT INTO token_entity_features
+         (ca,model_version,checked_at,buyers_analyzed,independent_entities,independence_ratio,
+          largest_entity_buyer_pct,largest_entity_supply_pct,common_funder_buyer_pct,fresh_wallet_pct,
+          deployer_linked_pct,funding_time_concentration,graph_risk,roots,complete,details)
+       VALUES ($1,$2,to_timestamp($3/1000.0),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+       ON CONFLICT (ca) DO UPDATE SET
+         model_version=$2,checked_at=to_timestamp($3/1000.0),buyers_analyzed=$4,independent_entities=$5,
+         independence_ratio=$6,largest_entity_buyer_pct=$7,largest_entity_supply_pct=$8,
+         common_funder_buyer_pct=$9,fresh_wallet_pct=$10,deployer_linked_pct=$11,
+         funding_time_concentration=$12,graph_risk=$13,roots=$14,complete=$15,details=$16`,
+      [token.ca, MODEL_VERSION, features.checkedAt, features.buyersAnalyzed, features.independentEntities,
+       features.independenceRatio, features.largestEntityBuyerPct, features.largestEntitySupplyPct,
+       features.commonFunderBuyerPct, features.freshWalletPct, features.deployerLinkedPct,
+       features.fundingTimeConcentration, features.graphRisk, features.roots, features.complete,
+       JSON.stringify({ nodes: nodes.map(node => ({ ...node, tokenAmount: amounts.get(node.wallet) || 0 })) })],
+    );
+    return features;
+  } catch (error) {
+    diag.lastError = (error as Error).message;
+    retryAfter.set(token.ca, now + 5 * 60_000);
+    console.error('[entity-graph]', diag.lastError);
+    return token.entityGraph;
   }
-  const features = aggregateEntityGraph({ buyers, nodes, deployer: token.creator, totalSupply: cfg().bundle.total_supply });
-  token.entityGraph = features;
-  await pool.query(
-    `INSERT INTO token_entity_features
-       (ca,model_version,checked_at,buyers_analyzed,independent_entities,independence_ratio,
-        largest_entity_buyer_pct,largest_entity_supply_pct,common_funder_buyer_pct,fresh_wallet_pct,
-        deployer_linked_pct,funding_time_concentration,graph_risk,roots,complete,details)
-     VALUES ($1,$2,to_timestamp($3/1000.0),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-     ON CONFLICT (ca) DO UPDATE SET
-       model_version=$2,checked_at=to_timestamp($3/1000.0),buyers_analyzed=$4,independent_entities=$5,
-       independence_ratio=$6,largest_entity_buyer_pct=$7,largest_entity_supply_pct=$8,
-       common_funder_buyer_pct=$9,fresh_wallet_pct=$10,deployer_linked_pct=$11,
-       funding_time_concentration=$12,graph_risk=$13,roots=$14,complete=$15,details=$16`,
-    [token.ca, MODEL_VERSION, features.checkedAt, features.buyersAnalyzed, features.independentEntities,
-     features.independenceRatio, features.largestEntityBuyerPct, features.largestEntitySupplyPct,
-     features.commonFunderBuyerPct, features.freshWalletPct, features.deployerLinkedPct,
-     features.fundingTimeConcentration, features.graphRisk, features.roots, features.complete,
-     JSON.stringify({ nodes: nodes.map(node => ({ ...node, tokenAmount: amounts.get(node.wallet) || 0 })) })],
-  ).catch(error => console.error('[entity-graph] persist', error.message));
-  return features;
+}
+
+function discoverBuyerAmounts(token: TokenRecord, transactions: any[]): Map<string, number> {
+  const amounts = new Map<string, number>();
+  const add = (wallet: string | null | undefined, amount: number) => {
+    if (!wallet || wallet === token.creator || amounts.has(wallet) && amounts.size >= cfg().bundle.cluster_max_buyers) return;
+    amounts.set(wallet, (amounts.get(wallet) || 0) + Math.max(0, amount));
+  };
+
+  // Helius returns newest-first. Sort ascending and retain the earliest distinct fee
+  // payers with a positive token delta. The former minimum-slot+3 filter frequently
+  // sampled a page that did not reach creation and therefore returned zero buyers.
+  const sorted = [...transactions].sort((left, right) => (Number(left.timestamp) || 0) - (Number(right.timestamp) || 0));
+  for (const tx of sorted) {
+    const wallet = String(tx.feePayer || '') || null;
+    if (!wallet) continue;
+    let net = 0;
+    for (const transfer of tx.tokenTransfers || []) {
+      if (transfer.mint !== token.ca) continue;
+      const amount = Math.max(0, Number(transfer.tokenAmount) || 0);
+      if (transfer.toUserAccount === wallet) net += amount;
+      if (transfer.fromUserAccount === wallet) net -= amount;
+    }
+    if (net > 0) add(wallet, net);
+    if (amounts.size >= cfg().bundle.cluster_max_buyers) break;
+  }
+
+  for (const trade of token.recentTrades) if (trade.buy) add(trade.wallet, Number(trade.tokenAmount) || 0);
+  for (const wallet of token.earlyBuyers) add(wallet, 0);
+  return amounts;
 }
 
 async function resolveFundingRoot(wallet: string): Promise<BuyerNode> {
@@ -197,7 +247,7 @@ async function resolveFundingRoot(wallet: string): Promise<BuyerNode> {
        first_funded_at=CASE WHEN $5::bigint IS NULL THEN wallet_funding_roots.first_funded_at ELSE to_timestamp($5/1000.0) END,
        funding_amount_sol=$6,funding_source=$7,confidence=$8,checked_at=now()`,
     [wallet, root, immediateFunder, firstActivityAt, fundedAt, fundingAmountSol, fundingSource, confidence],
-  ).catch(() => {});
+  ).catch(error => console.error('[entity-graph] funding persist', error.message));
   return node;
 }
 
