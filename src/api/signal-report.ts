@@ -1,11 +1,13 @@
 import { pool } from '../db';
 import { ensembleDiag } from '../model/ensemble';
+import { entityGraphDiag } from '../model/entity-graph';
 import { evaluationDiag } from '../model/evaluation';
 import { observationDiag } from '../model/observations';
 import { decisionOutcomeDiag } from '../model/outcomes';
 import { rankLearnerDiag } from '../model/rank-learner';
 import { regimeDiag } from '../model/regime';
 import { modelRuntimeDiag } from '../model/runtime';
+import { heliusTradeBackfillDiag } from '../market/helius-trade-backfill';
 import { tradeEventDiag } from '../market/trade-events';
 import { MODEL_VERSION } from '../model/version';
 import { paperEvidenceHealth, paperPersistenceRuntimeDiag } from '../paper/persistence-health';
@@ -14,6 +16,8 @@ export async function buildSignalReport(days = 7) {
   const readiness = {
     modelVersion: MODEL_VERSION,
     jupiterKeyConfigured: !!process.env.JUPITER_API_KEY,
+    pumpPortalTradeStreamConfigured: !!process.env.PUMPPORTAL_API_KEY,
+    heliusTradeFallbackConfigured: !!process.env.HELIUS_API_KEY,
     simulationWalletConfigured: !!process.env.SIMULATION_WALLET,
     solanaRpcConfigured: !!(process.env.SOLANA_RPC_URL || process.env.HELIUS_API_KEY),
     privateKeyRequired: false,
@@ -118,12 +122,13 @@ export async function buildSignalReport(days = 7) {
     persistence: { runtime: paperPersistenceRuntimeDiag(), evidence: evidencePersistence },
     layers: {
       regime: regimeDiag(), ensemble: ensembleDiag(), learnedRank: rankLearnerDiag(),
-      tradeSequence: tradeEventDiag(), observations: observationDiag(),
+      tradeSequence: { writer: tradeEventDiag(), heliusFallback: heliusTradeBackfillDiag() },
+      entityGraph: entityGraphDiag(), observations: observationDiag(),
       decisionOutcomes: decisionOutcomeDiag(), evaluation: evaluationDiag(),
     },
     decisionFunnel: decisionFunnel[0] || {}, abstentionReasons,
     firstEventPerformance, regimePerformance, graphCalibration, burstCalibration,
     rankCalibration, executionPerformance, observationCoverage, evaluations, learnedParameters,
-    interpretation: 'A production call requires fresh agreement across survival, cohort rank, temporal entity graph, event-time flow, regime, uncertainty and a built/simulated route. Learned pairwise ranking activates only after chronological validation beats its placebo; otherwise the fixed interpretable rank remains active. Persistence health compares mature preliminary/allowed decisions with their required model_raw/model_executable paper rows.',
+    interpretation: 'A production call requires fresh agreement across survival, cohort rank, temporal entity graph, event-time flow, regime, uncertainty and a built/simulated route. PumpPortal trade subscriptions are metered; when they are not configured, Helius reconstructs recent transaction sequences and Dexscreener supplies aggregate flow. Learned pairwise ranking activates only after chronological validation beats its placebo. Persistence health compares mature preliminary/allowed decisions with their required model_raw/model_executable paper rows.',
   };
 }
