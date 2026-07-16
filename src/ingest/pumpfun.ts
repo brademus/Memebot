@@ -22,16 +22,20 @@ function normalizeToken(value: unknown): number | null {
 }
 
 function seedCurve(t: any, msg: any) {
+  const now = Date.now();
   const solInCurve = Number(msg.vSolInBondingCurve || 0);
+  const tokensInCurve = Number(msg.vTokensInBondingCurve || 0);
   const mcapSol = Number(msg.marketCapSol || 0);
   t.curveSol = solInCurve;
   t.liquidityUsd = solInCurve * SOL_USD;
   t.mcapUsd = mcapSol * SOL_USD;
+  if (solInCurve > 0 && tokensInCurve > 0) t.priceUsd = (solInCurve / tokensInCurve) * SOL_USD;
+  if (t.priceUsd > 0) t.marketUpdatedAt = now;
   t.dex = 'pumpfun';
   t.dexId = 'pumpfun';
   if (msg.initialBuy || msg.solAmount) t.buys5m = 1;
   if (msg.initialBuy) t.devBuyPct = Math.min(100, (Number(msg.initialBuy) / 1e9) * 100);
-  t.curveSamples = [{ sol: solInCurve, at: Date.now() }];
+  t.curveSamples = [{ sol: solInCurve, at: now }];
 }
 
 function applyCurveTrade(msg: any) {
@@ -44,8 +48,10 @@ function applyCurveTrade(msg: any) {
     t.liquidityUsd = t.curveSol * SOL_USD;
   }
   if (msg.marketCapSol) t.mcapUsd = Number(msg.marketCapSol) * SOL_USD;
-  if (msg.vSolInBondingCurve && msg.vTokensInBondingCurve)
+  if (msg.vSolInBondingCurve && msg.vTokensInBondingCurve) {
     t.priceUsd = (Number(msg.vSolInBondingCurve) / Number(msg.vTokensInBondingCurve)) * SOL_USD;
+    t.marketUpdatedAt = now;
+  }
 
   const wallet = String(msg.traderPublicKey || msg.user || msg.trader || '') || null;
   const buy = msg.txType === 'buy';
