@@ -5,6 +5,16 @@ import { burstFeatures } from './burst';
 import { clamp01, round } from './math';
 import { recommendationEligibleSource } from './version';
 
+export function graphEvidenceReady(token: TokenRecord): boolean {
+  return token.entityGraph?.complete === true
+    || !!(token.bundle && token.bundle.slot0Buyers >= 3 && Number.isFinite(token.bundle.insiderPct));
+}
+
+export function flowEvidenceReady(token: TokenRecord, now = Date.now()): boolean {
+  const events = (token.recentTrades || []).filter(event => event.at >= now - 5 * 60_000).length;
+  return events >= 3 || Math.max(0, Number(token.buys5m) || 0) + Math.max(0, Number(token.sells5m) || 0) >= 6;
+}
+
 export function buildSignalFeatures(token: TokenRecord, regime: MarketRegime, now = Date.now()): SignalFeatureVector {
   const burst = burstFeatures(token, now);
   const ageMinutes = Math.max(0, (now - token.firstSeen) / 60_000);
@@ -14,15 +24,16 @@ export function buildSignalFeatures(token: TokenRecord, regime: MarketRegime, no
     : token.gradAt ? 1 : clamp01(token.mcapUsd / 100_000);
   const curveSpeed1m = normalizedCurveSpeed(token, now, 60_000);
   const curveSpeed3m = normalizedCurveSpeed(token, now, 180_000);
-  const trades = Math.max(1, token.totalBuys + token.totalSells);
+  const trades = Math.max(1, token.totalBuys + token.totalSells, token.buys5m + token.sells5m);
   const capitalEfficiency = token.dex === 'pumpfun'
     ? clamp01((bonded / trades) / 0.45)
     : clamp01(Math.log1p(token.vol5m / 2_000) / Math.log(51));
   const liquidityDepth = clamp01(Math.log1p(Math.max(0, token.liquidityUsd)) / Math.log(250_001));
   const buyPressure = clamp01(((token.buys5m + 1) / (token.sells5m + 1) - 0.7) / 2.3);
+  const observedBreadth = Math.max(token.uniqueBuyers.length, Number(token.uniqueBuyerSamples[token.uniqueBuyerSamples.length - 1]) || 0);
   const organicBreadth = trades > 0
-    ? clamp01(0.55 * Math.log1p(token.uniqueBuyers.length) / Math.log(81)
-      + 0.45 * clamp01(token.uniqueBuyers.length / trades / 0.7))
+    ? clamp01(0.55 * Math.log1p(observedBreadth) / Math.log(81)
+      + 0.45 * clamp01(observedBreadth / trades / 0.7))
     : 0;
   const smart = weightedSmartHits(token.smartHits, 6 * 3600_000, now);
   const smartMoney = clamp01(smart.weight / 4);
@@ -31,9 +42,20 @@ export function buildSignalFeatures(token: TokenRecord, regime: MarketRegime, no
     ? clamp01(1 - token.earlyExited.length / token.earlyBuyers.length)
     : 0.5;
   const graph = token.entityGraph;
-  const buyerIndependence = graph?.independenceRatio ?? (token.bundle ? clamp01(1 - (token.bundle.fundedSnipers / Math.max(1, token.bundle.slot0Buyers))) : 0.35);
-  const graphRisk = graph?.graphRisk ?? (token.bundle ? clamp01((token.bundle.clusterPct ?? token.bundle.insiderPct) / 40) : 0.65);
-  const commonFunderPct = graph?.commonFunderBuyerPct ?? 0.5;
+  const bundleMeasured = !!(token.bundle && token.bundle.slot0Buyers >= 3);
+  const bundleIndependence = bundleMeasured
+    ? clamp01(1 - token.bundle!.fundedSnipers / Math.max(1, token.bundle!.slot0Buyers))
+    : 0.5;
+  const bundleRisk = bundleMeasured
+    ? clamp01(Number(token.bundle!.clusterPct ?? token.bundle!.insiderPct) / 40)
+    : 0.5;
+  // Unknown graph evidence is neutral, not automatically guilty. Enforcement still
+  // requires graphEvidenceReady(); the neutral proxy only permits honest shadow ranking.
+  const buyerIndependence = graph?.complete ? graph.independenceRatio : bundleIndependence;
+  const graphRisk = graph?.complete ? graph.graphRisk : bundleRisk;
+  const commonFunderPct = graph?.complete
+    ? graph.commonFunderBuyerPct
+    : bundleMeasured ? clamp01(token.bundle!.fundedSnipers / Math.max(1, token.bundle!.slot0Buyers)) : 0.5;
   const moved = token.firstScorePrice && token.priceUsd > 0 ? token.priceUsd / token.firstScorePrice - 1 : 0;
   const runupPenalty = clamp01(Math.max(0, moved) / 0.6 + Math.max(0, token.priceChange5m) / 100);
   const deployerClass = token.deployerRep?.cls || 'unlabeled';
@@ -45,8 +67,8 @@ export function buildSignalFeatures(token: TokenRecord, regime: MarketRegime, no
   );
   const known = [
     token.priceUsd > 0, token.liquidityUsd > 0, token.mcapUsd > 0,
-    token.subs?.raw != null, token.socials.fetched, token.bundle != null,
-    graph?.complete === true, burst.completeness >= 0.5,
+    token.subs?.raw != null, token.socials.fetched, graphEvidenceReady(token),
+    flowEvidenceReady(token, now), burst.completeness >= 0.35,
   ].filter(Boolean).length;
   const featureCompleteness = clamp01(known / 8 * 0.85 + regime.completeness * 0.15);
 
