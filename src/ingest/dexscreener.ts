@@ -1,7 +1,9 @@
 import { cfg } from '../config';
+import { recordAggregateFlowSample } from '../market/trade-events';
 import { allTokens } from '../store';
 import { TokenRecord } from '../types';
 import { backfillWalletEntryPrice } from '../wallets/ledger';
+import { getStreamMode } from './pumpfun';
 
 const BASE = 'https://api.dexscreener.com/latest/dex/tokens/';
 
@@ -55,12 +57,23 @@ async function enrich(batch: TokenRecord[], onUpdated: (t: TokenRecord) => void)
       if (pair.dexId && pair.dexId !== 'pumpfun') { t.dex = pair.dexId; t.dexId = pair.dexId; }
       t.priceChange5m = pair.priceChange?.m5 || 0;
       t.pairAddress = pair.pairAddress || t.pairAddress;
-      if (t.dex !== 'pumpfun') {
-        t.vol5m = pair.volume?.m5 || 0;
-        t.buys5m = pair.txns?.m5?.buys || 0;
-        t.sells5m = pair.txns?.m5?.sells || 0;
+
+      // PumpPortal token-level trades are metered and require PUMPPORTAL_API_KEY.
+      // In lite mode, use Dexscreener's rolling 5-minute aggregates so the incumbent
+      // state machine and v3 flow proxy do not remain permanently data-starved.
+      const useAggregateFlow = t.dex !== 'pumpfun' || getStreamMode() === 'lite';
+      if (useAggregateFlow) {
+        t.vol5m = Number(pair.volume?.m5) || 0;
+        t.buys5m = Number(pair.txns?.m5?.buys) || 0;
+        t.sells5m = Number(pair.txns?.m5?.sells) || 0;
         t.uniqueBuyerSamples.push(t.buys5m);
-        if (t.uniqueBuyerSamples.length > 6) t.uniqueBuyerSamples.shift();
+        if (t.uniqueBuyerSamples.length > 12) t.uniqueBuyerSamples.shift();
+        recordAggregateFlowSample(t.ca, {
+          buys: t.buys5m,
+          sells: t.sells5m,
+          volumeUsd: t.vol5m,
+          at: Date.now(),
+        });
       }
       onUpdated(t);
     }
