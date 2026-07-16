@@ -1,4 +1,6 @@
+import { env } from '../config';
 import { pool } from '../db';
+import { getStreamMode } from '../ingest/pumpfun';
 import { ensembleDiag } from '../model/ensemble';
 import { evaluationDiag } from '../model/evaluation';
 import { observationDiag } from '../model/observations';
@@ -11,11 +13,16 @@ import { MODEL_VERSION } from '../model/version';
 import { paperEvidenceHealth, paperPersistenceRuntimeDiag } from '../paper/persistence-health';
 
 export async function buildSignalReport(days = 7) {
+  const streamMode = getStreamMode();
   const readiness = {
     modelVersion: MODEL_VERSION,
     jupiterKeyConfigured: !!process.env.JUPITER_API_KEY,
     simulationWalletConfigured: !!process.env.SIMULATION_WALLET,
     solanaRpcConfigured: !!(process.env.SOLANA_RPC_URL || process.env.HELIUS_API_KEY),
+    pumpPortalTradeKeyConfigured: !!env.PUMPPORTAL_API_KEY,
+    pumpPortalStreamMode: streamMode,
+    walletLevelTradeEventsAvailable: streamMode === 'full',
+    aggregateFlowFallbackAvailable: true,
     privateKeyRequired: false,
     broadcastEnabled: false,
   };
@@ -98,7 +105,8 @@ export async function buildSignalReport(days = 7) {
   const observationCoverage = await query(
     `SELECT observation_key,source,COUNT(*)::int AS captured,
             COUNT(*) FILTER (WHERE outcome.status='resolved')::int AS resolved_labels,
-            COUNT(*) FILTER (WHERE outcome.status='unresolved')::int AS unresolved_labels
+            COUNT(*) FILTER (WHERE outcome.status='unresolved')::int AS unresolved_labels,
+            COUNT(*) FILTER (WHERE outcome.status='pending')::int AS pending_labels
        FROM signal_observations observation LEFT JOIN signal_observation_outcomes outcome ON outcome.observation_id=observation.id
       WHERE observation.model_version=$1 AND observation.captured_at>now()-($2||' days')::interval
       GROUP BY observation_key,source ORDER BY observation_key,source`, [MODEL_VERSION, String(bounded)],
@@ -124,6 +132,6 @@ export async function buildSignalReport(days = 7) {
     decisionFunnel: decisionFunnel[0] || {}, abstentionReasons,
     firstEventPerformance, regimePerformance, graphCalibration, burstCalibration,
     rankCalibration, executionPerformance, observationCoverage, evaluations, learnedParameters,
-    interpretation: 'A production call requires fresh agreement across survival, cohort rank, temporal entity graph, event-time flow, regime, uncertainty and a built/simulated route. Learned pairwise ranking activates only after chronological validation beats its placebo; otherwise the fixed interpretable rank remains active. Persistence health compares mature preliminary/allowed decisions with their required model_raw/model_executable paper rows.',
+    interpretation: 'preliminary_pass is the shadow statistical candidate set. Missing graph/flow evidence does not erase that research cohort, but production allow remains fail-closed until measured graph and flow inputs plus a built/simulated route pass. wallet_event_stream is only available when PUMPPORTAL_API_KEY is configured and funded; otherwise Dexscreener aggregate flow is used without pretending to have wallet identities. Persistence health compares mature preliminary/allowed decisions with their required model_raw/model_executable paper rows.',
   };
 }
