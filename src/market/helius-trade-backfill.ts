@@ -1,4 +1,4 @@
-import { cfg, env } from '../config';
+import { env } from '../config';
 import { heliusTxs } from '../helius';
 import { getStreamMode } from '../ingest/pumpfun';
 import { activeTokens } from '../store';
@@ -55,16 +55,18 @@ async function sweep() {
   diag.lastError = null;
   try {
     const now = Date.now();
-    const threshold = Math.max(25, cfg().states.heating_score_min - 8);
+    // Do not require a high score here. In lite mode the missing trade sequence is
+    // itself what suppresses organic/buy-pressure score components. Polling only high
+    // scores creates a circular starvation condition.
     const candidates = activeTokens()
-      .filter(token => token.dex === 'pumpfun' && token.score >= threshold)
+      .filter(token => token.dex === 'pumpfun' && token.priceUsd > 0 && (token.curveSol > 0 || token.vol5m > 0))
       .filter(token => {
         const last = lastPoll.get(token.ca) || 0;
         if (now - last < POLL_INTERVAL_MS - 1_000) return false;
         const latest = token.recentTrades[token.recentTrades.length - 1]?.at || 0;
         return getStreamMode() === 'lite' || now - latest > 75_000;
       })
-      .sort((left, right) => right.score - left.score)
+      .sort((left, right) => (right.score + Math.log1p(right.vol5m)) - (left.score + Math.log1p(left.vol5m)))
       .slice(0, MAX_TOKENS_PER_SWEEP);
 
     for (let index = 0; index < candidates.length; index += 5) {
