@@ -39,13 +39,18 @@ export function startForwardEvidenceCollector() {
   const captureTick = () => {
     for (const token of allTokens()) capture(token).catch(error => {
       diag.lastError = (error as Error).message;
+      console.error('[forward-evidence:capture]', diag.lastError);
     });
-    stampCurrentRecommendations().catch(() => {});
+    stampCurrentRecommendations().catch(error => console.error('[forward-evidence:stamp]', (error as Error).message));
   };
-  setTimeout(captureTick, 20_000);
-  setInterval(captureTick, 5_000);
-  setTimeout(() => resolveDue().catch(() => {}), 60_000);
-  setInterval(() => resolveDue().catch(() => {}), 60_000);
+  const firstCapture = setTimeout(captureTick, 20_000); firstCapture.unref();
+  const captureTimer = setInterval(captureTick, 5_000); captureTimer.unref();
+  const resolve = () => resolveDue().catch(error => {
+    diag.lastError = (error as Error).message;
+    console.error('[forward-evidence:resolve]', diag.lastError);
+  });
+  const firstResolve = setTimeout(resolve, 60_000); firstResolve.unref();
+  const resolveTimer = setInterval(resolve, 60_000); resolveTimer.unref();
 }
 
 async function capture(token: TokenRecord) {
@@ -61,7 +66,7 @@ async function capture(token: TokenRecord) {
     `INSERT INTO score_snapshots
        (ca, snapshot_age_min, captured_age_seconds, captured_at, price_usd, score,
         raw, source, recommendation_eligible, model_version, forward_minutes)
-     VALUES ($1,$2,$3,now(),$4,$5,$6,$7,$8,$9,$10)
+     VALUES ($1,$2::int,$3::int,now(),$4::numeric,$5::numeric,$6::jsonb,$7,$8,$9,$10::int)
      ON CONFLICT (ca, snapshot_age_min, model_version) DO NOTHING`,
     [
       token.ca,
@@ -90,7 +95,7 @@ async function resolveDue() {
          FROM score_snapshots
         WHERE model_version=$1
           AND resolve_status='pending'
-          AND captured_at <= now() - (forward_minutes || ' minutes')::interval
+          AND captured_at <= now() - make_interval(mins => forward_minutes)
           AND captured_at > now() - interval '72 hours'
           AND next_resolve_at <= now()
         ORDER BY captured_at ASC
@@ -107,23 +112,23 @@ async function resolveDue() {
           const retry = RETRY_MINUTES[Math.min(attempt - 1, RETRY_MINUTES.length - 1)];
           await pool!.query(
             `UPDATE score_snapshots
-                SET resolve_attempts=$2,
+                SET resolve_attempts=$2::int,
                     last_resolve_error='Dexscreener snapshot unavailable',
-                    next_resolve_at=now()+($3 || ' minutes')::interval,
-                    resolve_status=CASE WHEN $2 >= $4 THEN 'unresolved' ELSE 'pending' END
-              WHERE id=$1`,
-            [row.id, attempt, String(retry), MAX_RESOLVE_ATTEMPTS],
+                    next_resolve_at=now()+make_interval(mins => $3::int),
+                    resolve_status=CASE WHEN $2::int >= $4::int THEN 'unresolved' ELSE 'pending' END
+              WHERE id=$1::bigint`,
+            [row.id, attempt, retry, MAX_RESOLVE_ATTEMPTS],
           );
           return;
         }
         const entry = Number(row.price_usd);
         await pool!.query(
           `UPDATE score_snapshots
-              SET forward_price_usd=$2,
-                  forward_multiple=$2/NULLIF(price_usd,0),
+              SET forward_price_usd=$2::numeric,
+                  forward_multiple=$2::numeric/NULLIF(price_usd,0),
                   resolved_at=now(), resolve_status='resolved',
                   last_resolve_error=NULL
-            WHERE id=$1 AND resolve_status='pending'`,
+            WHERE id=$1::bigint AND resolve_status='pending'`,
           [row.id, snapshot.price],
         );
         if (entry > 0) diag.resolved++;
@@ -145,14 +150,14 @@ async function stampCurrentRecommendations() {
         `UPDATE tokens SET trigger_model_version=COALESCE(trigger_model_version,$2)
           WHERE ca=$1 AND triggered_at IS NOT NULL`,
         [token.ca, MODEL_VERSION],
-      ).catch(() => {});
+      );
     }
     if (token.convictionAt && token.convictionAt >= processStartedAt) {
       await pool.query(
         `UPDATE tokens SET conviction_model_version=COALESCE(conviction_model_version,$2)
           WHERE ca=$1 AND conviction_at IS NOT NULL`,
         [token.ca, MODEL_VERSION],
-      ).catch(() => {});
+      );
     }
   }
 }
