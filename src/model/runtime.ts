@@ -1,5 +1,6 @@
 import { activeTokens } from '../store';
 import { startTradeEventWriter } from '../market/trade-events';
+import { startHeliusTradeBackfill } from '../market/helius-trade-backfill';
 import { startRegimeEngine } from './regime';
 import { refreshSignalDecision, startSignalEnsemble } from './ensemble';
 import { startSignalObservationCollector } from './observations';
@@ -26,6 +27,7 @@ export function startModelRuntime() {
       return;
     }
     startTradeEventWriter();
+    startHeliusTradeBackfill();
     startRegimeEngine();
     startSignalEnsemble();
     startPairwiseRankLearner();
