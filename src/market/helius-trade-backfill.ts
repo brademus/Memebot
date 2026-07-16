@@ -82,7 +82,7 @@ async function backfillToken(token: TokenRecord, now: number) {
   const transactions = await heliusTxs(token.ca, 50, undefined, 'bg');
   diag.transactionsFetched += transactions.length;
   const events = transactions
-    .map(transaction => parseTrade(transaction, token))
+    .map(transaction => parseHeliusTrade(transaction, token))
     .filter((event): event is TradeEvent => !!event && event.at >= now - WINDOW_MS)
     .sort((left, right) => left.at - right.at);
 
@@ -94,7 +94,7 @@ async function backfillToken(token: TokenRecord, now: number) {
   }
 }
 
-function parseTrade(transaction: any, token: TokenRecord): TradeEvent | null {
+export function parseHeliusTrade(transaction: any, token: TokenRecord): TradeEvent | null {
   const wallet = String(transaction?.feePayer || '');
   const timestamp = Number(transaction?.timestamp || 0) * 1_000;
   const signature = String(transaction?.signature || '');
