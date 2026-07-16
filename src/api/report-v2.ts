@@ -123,7 +123,7 @@ export async function buildReport(days = 7): Promise<any> {
     WHERE t.gate_result='passed' AND t.first_seen > now()-($1||' days')::interval
     GROUP BY 1 ORDER BY 1`, [String(boundedDays)]);
 
-  const insiderCorrelationLast24h = await q(`SELECT CASE WHEN insider_pct IS NULL THEN 'unknown'
+  const insiderCorrelationLast24h = await q(`SELECT CASE WHEN insider_pct IS NULL THEN 'unverified'
         WHEN insider_pct<10 THEN '0-10%' WHEN insider_pct<20 THEN '10-20%' ELSE '20%+' END AS insider_band,
       COUNT(*) AS n,
       ROUND(AVG(o.multiple_from_first)::numeric,2) AS avg_multiple_4h,
@@ -133,16 +133,25 @@ export async function buildReport(days = 7): Promise<any> {
     WHERE t.gate_result='passed' AND t.first_seen > now()-interval '24 hours'
     GROUP BY insider_band ORDER BY insider_band`).catch(() => []);
 
+  const insiderVerificationCoverage = (await q(`SELECT
+      COUNT(*) FILTER (WHERE gate_result='passed')::int AS passed_tokens,
+      COUNT(*) FILTER (WHERE gate_result='passed' AND insider_pct IS NOT NULL)::int AS insider_verified,
+      COUNT(*) FILTER (WHERE gate_result='passed' AND entity_graph IS NOT NULL)::int AS graph_persisted,
+      ROUND(100.0*COUNT(*) FILTER (WHERE gate_result='passed' AND insider_pct IS NOT NULL)
+        /NULLIF(COUNT(*) FILTER (WHERE gate_result='passed'),0),2) AS insider_verified_pct
+    FROM tokens WHERE first_seen>now()-interval '24 hours'`).catch(() => [{}]))[0] || {};
+
   const walletSourcePerformance = await q(`SELECT CASE
       WHEN discovered_from IN ('winner_mining','cobuyer_expansion') THEN discovered_from
       WHEN discovered_from IS NULL THEN 'original'
       WHEN LENGTH(discovered_from)>=32 THEN 'own_winner_mining'
       ELSE discovered_from END AS source,
-      COUNT(*) AS wallets, COUNT(*) FILTER (WHERE active) AS active,
+      COUNT(*) AS wallets,
+      COUNT(*) FILTER (WHERE active) AS configured_active,
       ROUND(AVG(win_rate)::numeric,3) AS avg_win_rate,
       COUNT(*) FILTER (WHERE win_rate IS NOT NULL) AS measured,
       COUNT(*) FILTER (WHERE quality_verdict='ELITE') AS elite,
-      COUNT(*) FILTER (WHERE last_active>now()-interval '24 hours') AS active_today
+      COUNT(*) FILTER (WHERE last_active>now()-interval '24 hours') AS recently_active_24h
     FROM smart_wallets GROUP BY 1 ORDER BY wallets DESC`).catch(() => []);
 
   const deployerRepPerformance = await q(`SELECT COALESCE(t.deployer_rep,'unlabeled') AS rep,
@@ -162,7 +171,7 @@ export async function buildReport(days = 7): Promise<any> {
     generated: new Date().toISOString(),
     window: `last ${boundedDays} days`,
     currentModelVersion: MODEL_VERSION,
-    learningMode: 'suggest-only; no learned weights, floors, or gate overrides are applied automatically',
+    learningMode: 'suggest-only learner; production values are human-applied and versioned in config.yaml',
     totals,
     funnelHealth,
     sourcePerformance,
@@ -182,14 +191,16 @@ export async function buildReport(days = 7): Promise<any> {
     paperTrading: await paperScoreboard(boundedDays),
     paperQuoteStatuses: await paperQuoteStatusBreakdown(boundedDays),
     deployerRepPerformance,
+    insiderVerificationCoverage,
     insiderCorrelationLast24h,
     configInForce: {
+      source: 'config.yaml (human-applied governance)',
       weights: cfg().weights,
       triggerFloor: cfg().states.trigger_score_min,
       hardTopHolderCap: cfg().gates.hard_reject_top_holder_pct,
       insiderCeiling: cfg().bundle.max_insider_supply_pct,
       momentumRecommendationEligible: false,
     },
-    readme: 'forwardSnapshotPerformance and componentCalibration are the authoritative v2 training evidence. Every row is captured at age 3/5/10/15 minutes and labeled from its own exact 60-minute-forward price. modelSuggestions are advisory only. paperQuoteStatuses separates legacy, pre-key, unauthorized, rate-limited, no-route, price-impact, timeout and executable attempts. Momentum remains collected for research but cannot trigger, convict, or enter Best Buys.',
+    readme: 'forwardSnapshotPerformance and componentCalibration use exact 60-minute-forward labels captured at 1/2/3/5/10/15 minutes. Means are highly outlier-sensitive; use medians and hit rates for decisions. modelSuggestions are advisory until committed to config.yaml. walletSourcePerformance distinguishes configured_active wallets from wallets that actually traded in the last 24 hours. insider_band=unverified means no persisted bundle measurement, not a measured zero. Momentum remains research-only.',
   };
 }
