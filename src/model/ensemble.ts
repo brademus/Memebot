@@ -6,7 +6,7 @@ import { quoteExecutableEntry } from '../paper/execution';
 import { CompetingRiskHazards, ExecutionEvidence, MarketRegime, SignalDecision, SignalFeatureVector, TokenRecord } from '../types';
 import { analyzeEntityGraph } from './entity-graph';
 import { openPaper } from '../paper/paper';
-import { buildSignalFeatures } from './features';
+import { buildSignalFeatures, flowEvidenceReady, graphEvidenceReady } from './features';
 import { clamp01, round, softmax, standardDeviation } from './math';
 import { learnedRankScore } from './rank-learner';
 import { startPromotionGate, promotionReady, promotionStatus } from './promotion';
@@ -14,15 +14,18 @@ import { currentRegime } from './regime';
 import { DECISION_MAX_AGE_MS, MODEL_VERSION, recommendationEligibleSource } from './version';
 
 interface CalibrationBin { observations: number; posterior: number }
+interface DecisionReasonGroups { core: string[]; readiness: string[] }
+const FEEDER_REVISION = 'helius-plus-shadow-r2';
 const calibration = new Map<string, CalibrationBin>();
 const inFlight = new Map<string, Promise<SignalDecision | null>>();
 const diag = {
-  evaluated: 0, allowed: 0, abstained: 0, executionProbes: 0,
+  evaluated: 0, shadowCandidates: 0, executionReady: 0, allowed: 0, abstained: 0, executionProbes: 0,
   lastEvaluation: null as string | null, lastCalibration: null as string | null,
   lastError: null as string | null, reasons: {} as Record<string, number>,
 };
 export const ensembleDiag = () => ({
   ...diag,
+  feederRevision: FEEDER_REVISION,
   inFlight: inFlight.size,
   calibrationBins: calibration.size,
   promotion: promotionStatus(),
@@ -37,9 +40,6 @@ export function startSignalEnsemble() {
 
 export function decisionAllowsRecommendation(token: TokenRecord, now = Date.now()): boolean {
   if (!cfg().signal_model.enabled) return recommendationEligibleSource(token.source);
-  // Shadow mode never vetoes incumbent lanes. Even if configuration is switched to
-  // enforce, the incumbent board remains live until the cached promotion gate proves
-  // the model on executable holdout evidence and placebo-tested evaluations.
   if (cfg().signal_model.mode !== 'enforce' || !promotionReady())
     return recommendationEligibleSource(token.source);
   const decision = token.modelDecision;
@@ -81,15 +81,20 @@ async function evaluate(token: TokenRecord, now: number): Promise<SignalDecision
     0.30 * (1 - features.featureCompleteness)
     + 0.17 * (1 - Math.min(1, cohort.size / Math.max(1, cfg().signal_model.min_cohort_size * 2)))
     + 0.16 * (regime.kind === 'transition' ? 1 : regime.changeProbability)
-    + 0.13 * (token.entityGraph?.complete ? 0 : 1)
+    + 0.13 * (graphEvidenceReady(token) ? 0 : 1)
     + 0.12 * (1 - calibrated.confidence)
     + 0.12 * clamp01(standardDeviation(layerScores) / 0.35),
   );
-  const reasons = preliminaryReasons(token, features, regime, cohort.percentile, cohort.size,
-    targetBeforeStopProbability, downsideProbability, expectedValue, uncertainty);
-  const preliminaryPass = reasons.length === 0;
+  const grouped = decisionReasons(token, features, regime, cohort.percentile, cohort.size,
+    targetBeforeStopProbability, downsideProbability, expectedValue, uncertainty, now);
+  const preliminaryPass = grouped.core.length === 0;
+  const executionReady = preliminaryPass && grouped.readiness.length === 0;
+  const reasons = [...grouped.core, ...grouped.readiness];
+  if (preliminaryPass) diag.shadowCandidates++;
+  if (executionReady) diag.executionReady++;
+
   let execution: ExecutionEvidence | null = null;
-  if (preliminaryPass) {
+  if (executionReady) {
     const quote = await quoteExecutableEntry(token, token.priceUsd);
     diag.executionProbes++;
     execution = {
@@ -103,9 +108,10 @@ async function evaluate(token: TokenRecord, now: number): Promise<SignalDecision
     if (!execution.eligible) reasons.push(`execution:${execution.status}`);
     if (execution.executionScore < cfg().signal_model.min_execution_score)
       reasons.push(`execution_score:${execution.executionScore.toFixed(2)}`);
-    await persistExecutionProbe(token, execution).catch(() => {});
+    await persistExecutionProbe(token, execution).catch(error =>
+      console.error('[signal-ensemble] execution probe persist', (error as Error).message));
   }
-  const allow = preliminaryPass && !!execution?.eligible && reasons.length === 0;
+  const allow = executionReady && !!execution?.eligible && reasons.length === 0;
   const decision: SignalDecision = {
     modelVersion: MODEL_VERSION, evaluatedAt: now,
     expiresAt: now + cfg().signal_model.decision_ttl_seconds * 1000,
@@ -129,8 +135,8 @@ async function evaluate(token: TokenRecord, now: number): Promise<SignalDecision
     console.error('[signal-ensemble] persist', diag.lastError);
   });
 
-  // Raw shadow evidence measures the statistical stack before Jupiter availability.
-  // Executable shadow evidence is a separate lane and includes real entry/exit checks.
+  // The raw lane measures the statistical candidate before feeder/execution readiness.
+  // The executable lane remains fail-closed on measured graph/flow plus Jupiter.
   if (preliminaryPass && token.priceUsd > 0) {
     await openPaper(token.ca, token.symbol, 'model_raw', token.priceUsd, token.score, undefined, { skipExecutionQuote: true })
       .catch(error => console.error('[model-paper:raw]', (error as Error).message));
@@ -177,8 +183,6 @@ export function alphaScore(features: SignalFeatureVector, regime: MarketRegime):
     - regimePenalty + 0.18,
   );
   const learned = learnedRankScore(features);
-  // The learned model contributes only after passing chronological validation and its
-  // placebo gate. Keeping a majority fixed component limits sudden parameter drift.
   return learned === null ? fixed : clamp01(0.55 * fixed + 0.45 * learned);
 }
 
@@ -197,26 +201,32 @@ function cohortRank(token: TokenRecord, features: SignalFeatureVector, regime: M
   return { alpha: targetAlpha, percentile: clamp01(percentile), size: scores.length };
 }
 
-function preliminaryReasons(
+function decisionReasons(
   token: TokenRecord, features: SignalFeatureVector, regime: MarketRegime, percentile: number, cohortSize: number,
-  target: number, downside: number, expectedValue: number, uncertainty: number,
-): string[] {
+  target: number, downside: number, expectedValue: number, uncertainty: number, now: number,
+): DecisionReasonGroups {
   const model = cfg().signal_model;
-  const reasons: string[] = [];
-  if (!recommendationEligibleSource(token.source) || features.sourceEligible < 1) reasons.push('source_quarantined');
-  if (regime.kind === 'adverse') reasons.push('adverse_regime');
-  if (regime.kind === 'transition' && regime.changeProbability >= model.regime_change_abstain_threshold) reasons.push('regime_transition');
-  if (features.featureCompleteness < model.min_feature_completeness) reasons.push(`incomplete_features:${features.featureCompleteness.toFixed(2)}`);
-  if (features.graphRisk > model.max_graph_risk) reasons.push(`graph_risk:${features.graphRisk.toFixed(2)}`);
-  if (features.buyerIndependence < model.min_independent_entity_ratio) reasons.push(`entity_independence:${features.buyerIndependence.toFixed(2)}`);
-  if (features.burstExhaustion > model.max_burst_exhaustion) reasons.push(`burst_exhaustion:${features.burstExhaustion.toFixed(2)}`);
-  if (cohortSize < model.min_cohort_size) reasons.push(`cohort_small:${cohortSize}`);
-  if (percentile < model.min_rank_percentile) reasons.push(`rank:${percentile.toFixed(2)}`);
-  if (target < model.min_target_before_stop) reasons.push(`target_probability:${target.toFixed(3)}`);
-  if (downside > model.max_downside_probability) reasons.push(`downside:${downside.toFixed(2)}`);
-  if (expectedValue < model.min_expected_value) reasons.push(`expected_value:${expectedValue.toFixed(2)}`);
-  if (uncertainty > model.max_uncertainty) reasons.push(`uncertainty:${uncertainty.toFixed(2)}`);
-  return reasons;
+  const core: string[] = [];
+  const readiness: string[] = [];
+  if (!recommendationEligibleSource(token.source) || features.sourceEligible < 1) core.push('source_quarantined');
+  if (regime.kind === 'adverse') core.push('adverse_regime');
+  if (regime.kind === 'transition' && regime.changeProbability >= model.regime_change_abstain_threshold) core.push('regime_transition');
+  if (cohortSize < model.min_cohort_size) core.push(`cohort_small:${cohortSize}`);
+  if (percentile < model.min_rank_percentile) core.push(`rank:${percentile.toFixed(2)}`);
+  if (target < model.min_target_before_stop) core.push(`target_probability:${target.toFixed(3)}`);
+  if (downside > model.max_downside_probability) core.push(`downside:${downside.toFixed(2)}`);
+  if (expectedValue < model.min_expected_value) core.push(`expected_value:${expectedValue.toFixed(2)}`);
+
+  if (features.featureCompleteness < model.min_feature_completeness) readiness.push(`incomplete_features:${features.featureCompleteness.toFixed(2)}`);
+  if (!graphEvidenceReady(token)) readiness.push('graph_unavailable');
+  else {
+    if (features.graphRisk > model.max_graph_risk) readiness.push(`graph_risk:${features.graphRisk.toFixed(2)}`);
+    if (features.buyerIndependence < model.min_independent_entity_ratio) readiness.push(`entity_independence:${features.buyerIndependence.toFixed(2)}`);
+  }
+  if (!flowEvidenceReady(token, now)) readiness.push('flow_unavailable');
+  if (features.burstExhaustion > model.max_burst_exhaustion) readiness.push(`burst_exhaustion:${features.burstExhaustion.toFixed(2)}`);
+  if (uncertainty > model.max_uncertainty) readiness.push(`uncertainty:${uncertainty.toFixed(2)}`);
+  return { core, readiness };
 }
 
 function expectedUtility(hazards: CompetingRiskHazards, calibratedTarget: number, rawTarget: number): number {
@@ -264,12 +274,11 @@ async function persistExecutionProbe(token: TokenRecord, execution: ExecutionEvi
 
 async function persistDecision(token: TokenRecord, decision: SignalDecision) {
   if (!pool) return;
-  // Durable evidence is sampled once per five-minute state bucket. The live decision
-  // still refreshes every 45 seconds, but the database does not grow by one row per TTL.
   const bucket = Math.floor(decision.evaluatedAt / 300_000);
   const hash = crypto.createHash('sha256').update(JSON.stringify({
-    ca: token.ca, bucket, regime: decision.regime.id, alpha: round(decision.alphaScore, 2),
-    target: round(decision.targetBeforeStopProbability, 2), allow: decision.allow,
+    ca: token.ca, bucket, feeder: FEEDER_REVISION, regime: decision.regime.id,
+    alpha: round(decision.alphaScore, 2), target: round(decision.targetBeforeStopProbability, 2),
+    preliminary: decision.preliminaryPass, allow: decision.allow,
   })).digest('hex').slice(0, 24);
   const inserted = await pool.query(
     `INSERT INTO signal_decisions
