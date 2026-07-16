@@ -4,6 +4,7 @@ import { adminKeyMatches } from '../api/security';
 import { aggregateEntityGraph } from './entity-graph';
 import { burstFeatures } from './burst';
 import { alphaScore, competingRiskHazards } from './ensemble';
+import { buildSignalFeatures, flowEvidenceReady, graphEvidenceReady } from './features';
 import { assessPromotion, PROMOTION_THRESHOLDS, PromotionSample } from './promotion';
 import { classifyRegime } from './regime';
 import { observationKeys } from './observations';
@@ -29,6 +30,28 @@ const bad: SignalFeatureVector = {
   graphRisk: 0.9, burstQuality: 0.1, burstExhaustion: 0.9, walletEntropy: 0.1,
   flowRetention: 0.1, tradeAcceleration: 0.1, runupPenalty: 0.9, deployerRisk: 0.9, routePrior: 0.2,
 };
+
+function aggregateToken(now = Date.now()): TokenRecord {
+  return {
+    ca: 'aggregate-test', symbol: 'AGG', name: 'Aggregate', creator: null, source: 'pumpfun',
+    firstSeen: now - 3 * 60_000, deployerRep: null, gradAt: null, gradPeak: 0, gradTrough: 0,
+    fillMinutes: null, secondWaveAt: null, priceUsd: 0.0001, liquidityUsd: 15_000, mcapUsd: 60_000,
+    vol5m: 20_000, buys5m: 18, sells5m: 4, priceChange5m: 8, pairAddress: null,
+    dex: 'pumpfun', curveSol: 42, curveSamples: [{ sol: 38, at: now - 60_000 }, { sol: 42, at: now }],
+    uniqueBuyers: [], devBuyPct: 0, totalBuys: 0, totalSells: 0, recentTrades: [],
+    earlyBuyers: [], earlyExited: [], peakCurveSol: 42,
+    socials: { x: true, tg: true, web: false, fetched: true, tgMembers: 300 },
+    description: null, boostAmount: 0, tgSamples: [], tgGrowthPerMin: 0,
+    aiConviction: null, playType: null, laddersFired: [], triggeredAt: null, triggerPrice: null,
+    insiderKilled: false, convictionAt: null, dexId: 'pumpfun', gated: true, gateFailReason: null,
+    score: 60, peakScore: 60, firstScorePrice: 0.00009,
+    subs: { freshness: 1, liquidity: 1, buyPressure: 1, holderGrowth: 1, smartMoney: 0,
+      raw: { freshness: 1, velocity: 1, buy_pressure: 1, organic: 1, social: 1, smart_money: 0 } },
+    uniqueBuyerSamples: [4, 9, 18], bundle: null, entityGraph: null,
+    modelDecision: null, modelDecisionAt: null, aiNote: null, smartHits: [], ai: null,
+    state: 'HEATING', stateChangedAt: now, lastAlertScore: 0,
+  };
+}
 
 test('high-quality features improve target hazards and alpha rank', () => {
   const high = competingRiskHazards(good, regime);
@@ -106,6 +129,25 @@ test('event-time model penalizes synchronized repeated-wallet churn', () => {
   const organic = burstFeatures(broad, now);
   assert.ok(churn.exhaustion > organic.exhaustion);
   assert.ok(organic.walletEntropy > churn.walletEntropy);
+});
+
+test('aggregate flow fallback supplies honest shadow features without inventing wallets', () => {
+  const token = aggregateToken();
+  const burst = burstFeatures(token);
+  assert.equal(burst.tradeCount, 22);
+  assert.equal(burst.uniqueWallets, 18);
+  assert.equal(burst.interarrivalMeanSeconds, 0);
+  assert.ok(burst.completeness > 0.35);
+  assert.ok(burst.quality > 0);
+  assert.equal(flowEvidenceReady(token), true);
+});
+
+test('unknown graph evidence is neutral for shadow ranking but not execution-ready', () => {
+  const token = aggregateToken();
+  const features = buildSignalFeatures(token, regime);
+  assert.equal(graphEvidenceReady(token), false);
+  assert.equal(features.graphRisk, 0.5);
+  assert.equal(features.buyerIndependence, 0.5);
 });
 
 test('regime classifier identifies adverse and mania states', () => {
