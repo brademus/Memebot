@@ -227,3 +227,12 @@ CREATE INDEX IF NOT EXISTS idx_model_evaluations_recent ON model_evaluations(mod
 ALTER TABLE paper_trades DROP CONSTRAINT IF EXISTS paper_trades_ca_signal_key;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_paper_trades_ca_signal_model
   ON paper_trades(ca, signal, model_version);
+
+-- leadership priority (2026-07-15): the public domain is bound to ONE instance; if
+-- that instance loses the advisory-lock race, the domain serves standby stubs
+-- indefinitely (observed live: 8/8 requests -> standby). A waiting PRIMARY instance
+-- registers a claim here; a non-primary leader sees the fresh claim and yields.
+CREATE TABLE IF NOT EXISTS leadership_claims (
+  name TEXT PRIMARY KEY,
+  claimed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

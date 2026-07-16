@@ -76,3 +76,42 @@ export async function releaseWorkerLeadership(): Promise<void> {
   catch {}
   client.release();
 }
+
+
+// ===== DOMAIN-PRIORITY YIELD PROTOCOL =====
+// The public domain is bound to one Railway instance. If that instance loses the
+// lock race (leadership roulette on every rolling deploy), the domain serves
+// standby stubs until the next deploy. Fix: the domain-holding service sets
+// LEADERSHIP_PRIORITY=primary. While waiting, a primary registers a heartbeat
+// claim; a NON-primary leader that sees a fresh primary claim steps down
+// gracefully (SIGTERM path — hydration flushes, lock releases, primary acquires
+// within its retry loop). No lock stealing; plain cooperative yield.
+export const isPrimaryInstance = () => process.env.LEADERSHIP_PRIORITY === 'primary';
+
+export async function registerPrimaryClaim() {
+  if (!pool || !isPrimaryInstance()) return;
+  await pool.query(
+    `INSERT INTO leadership_claims (name, claimed_at) VALUES ('primary', now())
+     ON CONFLICT (name) DO UPDATE SET claimed_at = now()`).catch(() => {});
+}
+
+export async function clearPrimaryClaim() {
+  if (!pool) return;
+  await pool.query(`DELETE FROM leadership_claims WHERE name = 'primary'`).catch(() => {});
+}
+
+export function startYieldWatch() {
+  if (!pool || isPrimaryInstance() || !leader) return;   // primaries never yield
+  const timer = setInterval(async () => {
+    try {
+      const r = await pool!.query(
+        `SELECT 1 FROM leadership_claims WHERE name = 'primary' AND claimed_at > now() - interval '90 seconds'`);
+      if (r.rowCount) {
+        console.log('[leadership] fresh PRIMARY claim detected — yielding leadership for the domain-holding instance');
+        clearInterval(timer);
+        process.kill(process.pid, 'SIGTERM');   // graceful: hydration flush runs, lock releases on exit
+      }
+    } catch { /* never yield on error */ }
+  }, 30_000);
+  timer.unref();
+}

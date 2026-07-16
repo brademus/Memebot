@@ -1,4 +1,4 @@
-import { acquireWorkerLeadership } from './leadership';
+import { acquireWorkerLeadership, registerPrimaryClaim, clearPrimaryClaim, startYieldWatch, isPrimaryInstance } from './leadership';
 import { startStandbyServer, StandbyServer } from './standby';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -28,6 +28,7 @@ async function boot() {
 
   while (!(await acquireWorkerLeadership())) {
     attempt++;
+    await registerPrimaryClaim();   // a waiting primary signals the current leader to yield
     if (!standby) standby = await startStandbyServer();
     const delay = Math.min(15_000, 2_000 + attempt * 1_000) + Math.floor(Math.random() * 1_000);
     console.log(`[boot] standby follower; retrying worker leadership in ${delay}ms`);
@@ -38,6 +39,8 @@ async function boot() {
     console.log('[boot] leadership available; promoting standby into active scanner');
     await standby.close();
   }
+  if (isPrimaryInstance()) await clearPrimaryClaim();   // stop signaling once we lead
+  startYieldWatch();                                    // non-primary leaders yield to a waiting primary
   await startLeaderWorker();
 }
 
