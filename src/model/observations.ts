@@ -28,11 +28,18 @@ export function observationKeys(ageMinutes: number, curveProgress: number): stri
 
 export function startSignalObservationCollector() {
   if (!pool) return;
-  const capture = () => captureAll().catch(error => { diag.lastError = (error as Error).message; });
-  setTimeout(capture, 15_000);
+  const capture = () => captureAll().catch(error => {
+    diag.lastError = (error as Error).message;
+    console.error('[signal-observations:capture]', diag.lastError);
+  });
+  const firstCapture = setTimeout(capture, 15_000); firstCapture.unref();
   const captureTimer = setInterval(capture, 5_000); captureTimer.unref();
-  setTimeout(() => resolveDue().catch(() => {}), 60_000);
-  const resolveTimer = setInterval(() => resolveDue().catch(() => {}), 60_000); resolveTimer.unref();
+  const resolve = () => resolveDue().catch(error => {
+    diag.lastError = (error as Error).message;
+    console.error('[signal-observations:resolve]', diag.lastError);
+  });
+  const firstResolve = setTimeout(resolve, 60_000); firstResolve.unref();
+  const resolveTimer = setInterval(resolve, 60_000); resolveTimer.unref();
 }
 
 async function captureAll() {
@@ -55,7 +62,8 @@ async function captureAll() {
         `INSERT INTO signal_observations
            (ca,observation_key,captured_at,captured_age_seconds,price_usd,base_score,source,dex,
             regime_id,model_version,recommendation_eligible,feature_vector,burst_features,entity_features,decision)
-         VALUES ($1,$2,to_timestamp($3/1000.0),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+         VALUES ($1,$2,to_timestamp($3::double precision/1000.0),$4::int,$5::numeric,$6::numeric,$7,$8,$9,$10,$11,
+                 $12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb)
          ON CONFLICT (ca,observation_key,model_version) DO NOTHING RETURNING id`,
         [token.ca, key, now, Math.round(ageMinutes * 60), token.priceUsd, token.score, token.source,
          token.dex, regime.id, MODEL_VERSION, recommendationEligibleSource(token.source),
@@ -66,7 +74,8 @@ async function captureAll() {
       if (!id) continue;
       diag.captured++;
       for (const horizon of SIGNAL_FORWARD_HORIZONS_MIN) await pool.query(
-        `INSERT INTO signal_observation_outcomes (observation_id,horizon_minutes) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+        `INSERT INTO signal_observation_outcomes (observation_id,horizon_minutes)
+         VALUES ($1::bigint,$2::int) ON CONFLICT DO NOTHING`,
         [id, horizon],
       );
     }
@@ -83,7 +92,7 @@ async function resolveDue() {
          FROM signal_observation_outcomes outcome
          JOIN signal_observations observation ON observation.id=outcome.observation_id
         WHERE observation.model_version=$1 AND outcome.status='pending'
-          AND observation.captured_at<=now()-(outcome.horizon_minutes||' minutes')::interval
+          AND observation.captured_at<=now()-make_interval(mins => outcome.horizon_minutes)
           AND outcome.next_attempt_at<=now() AND observation.captured_at>now()-interval '10 days'
         ORDER BY outcome.next_attempt_at,observation.captured_at LIMIT 250`, [MODEL_VERSION],
     );
@@ -95,18 +104,20 @@ async function resolveDue() {
           const retry = RETRIES[Math.min(attempt - 1, RETRIES.length - 1)];
           const terminal = attempt >= MAX_ATTEMPTS;
           await pool!.query(
-            `UPDATE signal_observation_outcomes SET attempts=$3,last_error='market snapshot unavailable',
-              next_attempt_at=now()+($4||' minutes')::interval,status=$5
-              WHERE observation_id=$1 AND horizon_minutes=$2`,
-            [row.observation_id, row.horizon_minutes, attempt, String(retry), terminal ? 'unresolved' : 'pending'],
+            `UPDATE signal_observation_outcomes
+                SET attempts=$3::int,last_error='market snapshot unavailable',
+                    next_attempt_at=now()+make_interval(mins => $4::int),status=$5::text
+              WHERE observation_id=$1::bigint AND horizon_minutes=$2::int`,
+            [row.observation_id, row.horizon_minutes, attempt, retry, terminal ? 'unresolved' : 'pending'],
           );
           if (terminal) diag.unresolved++;
           return;
         }
         await pool!.query(
-          `UPDATE signal_observation_outcomes SET status='resolved',price_usd=$3,
-             multiple=$3/NULLIF($4,0),resolved_at=now(),last_error=NULL
-           WHERE observation_id=$1 AND horizon_minutes=$2`,
+          `UPDATE signal_observation_outcomes
+              SET status='resolved',price_usd=$3::numeric,
+                  multiple=$3::numeric/NULLIF($4::numeric,0),resolved_at=now(),last_error=NULL
+            WHERE observation_id=$1::bigint AND horizon_minutes=$2::int`,
           [row.observation_id, row.horizon_minutes, snapshot.price, row.price_usd],
         );
         diag.resolved++;
