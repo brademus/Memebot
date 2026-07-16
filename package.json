@@ -5,7 +5,7 @@
   "main": "dist/boot.js",
   "scripts": {
     "build": "tsc",
-    "test": "node --test dist/paper/execution.test.js dist/paper/quote-status.test.js dist/paper/persistence-health.test.js dist/market/helius-trade-backfill.test.js dist/api/bestbuys.test.js dist/scoring/score.test.js dist/scoring/states.test.js dist/tuning/snapshots.test.js dist/model/model.test.js",
+    "test": "node --test dist/paper/execution.test.js dist/paper/quote-status.test.js dist/paper/persistence-health.test.js dist/market/helius-trade-backfill.test.js dist/model/feeder-health.test.js dist/api/bestbuys.test.js dist/scoring/score.test.js dist/scoring/states.test.js dist/tuning/snapshots.test.js dist/model/model.test.js",
     "check": "npm run build && npm test",
     "start": "node dist/boot.js",
     "dev": "tsx src/boot.ts"
