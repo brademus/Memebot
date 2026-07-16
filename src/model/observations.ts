@@ -1,6 +1,6 @@
 import { pool } from '../db';
 import { fetchTokenSnapshot } from '../ingest/dexscreener';
-import { allTokens } from '../store';
+import { allTokens, getToken } from '../store';
 import { burstFeatures } from './burst';
 import { buildSignalFeatures } from './features';
 import { currentRegime } from './regime';
@@ -11,16 +11,17 @@ const attempted = new Set<string>();
 let resolving = false;
 const MAX_ATTEMPTS = 8;
 const RETRIES = [2, 5, 15, 30, 60, 180, 360, 720];
-const diag = { captured: 0, resolved: 0, unresolved: 0, lastCapture: null as string | null, lastResolve: null as string | null, lastError: null as string | null };
+const diag = {
+  captured: 0, resolved: 0, resolvedLive: 0, resolvedDex: 0, unresolved: 0,
+  captureErrors: 0, lastCapture: null as string | null, lastResolve: null as string | null,
+  lastError: null as string | null,
+};
 export const observationDiag = () => ({ ...diag, attempted: attempted.size });
 
 export function observationKeys(ageMinutes: number, curveProgress: number): string[] {
   const keys: string[] = [];
   for (const age of SCORE_SNAPSHOT_AGES_MIN)
     if (ageMinutes >= age && ageMinutes < age + SNAPSHOT_CAPTURE_TOLERANCE_MIN) keys.push(`age_${age}m`);
-  // Record only the highest milestone actually reached. Recording every lower milestone
-  // at the same later price falsely makes a token first observed at 51% look as though
-  // its 25% and 50% states were both measured.
   const reached = [...CURVE_MILESTONES].filter(milestone => curveProgress >= milestone).pop();
   if (reached !== undefined) keys.push(`curve_${Math.round(reached * 100)}pct`);
   return keys;
@@ -28,11 +29,15 @@ export function observationKeys(ageMinutes: number, curveProgress: number): stri
 
 export function startSignalObservationCollector() {
   if (!pool) return;
-  const capture = () => captureAll().catch(error => { diag.lastError = (error as Error).message; });
+  const capture = () => captureAll().catch(error => {
+    diag.lastError = (error as Error).message;
+    console.error('[signal-observations:capture]', diag.lastError);
+  });
   setTimeout(capture, 15_000);
   const captureTimer = setInterval(capture, 5_000); captureTimer.unref();
-  setTimeout(() => resolveDue().catch(() => {}), 60_000);
-  const resolveTimer = setInterval(() => resolveDue().catch(() => {}), 60_000); resolveTimer.unref();
+  setTimeout(() => resolveDue().catch(error => console.error('[signal-observations:resolve]', (error as Error).message)), 60_000);
+  const resolveTimer = setInterval(() => resolveDue().catch(error => console.error('[signal-observations:resolve]', (error as Error).message)), 60_000);
+  resolveTimer.unref();
 }
 
 async function captureAll() {
@@ -49,26 +54,33 @@ async function captureAll() {
       const identity = `${MODEL_VERSION}:${token.ca}:${key}`;
       if (attempted.has(identity)) continue;
       attempted.add(identity);
-      const features = buildSignalFeatures(token, regime, now);
-      const burst = burstFeatures(token, now);
-      const inserted = await pool.query(
-        `INSERT INTO signal_observations
-           (ca,observation_key,captured_at,captured_age_seconds,price_usd,base_score,source,dex,
-            regime_id,model_version,recommendation_eligible,feature_vector,burst_features,entity_features,decision)
-         VALUES ($1,$2,to_timestamp($3/1000.0),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-         ON CONFLICT (ca,observation_key,model_version) DO NOTHING RETURNING id`,
-        [token.ca, key, now, Math.round(ageMinutes * 60), token.priceUsd, token.score, token.source,
-         token.dex, regime.id, MODEL_VERSION, recommendationEligibleSource(token.source),
-         JSON.stringify(features), JSON.stringify(burst), token.entityGraph ? JSON.stringify(token.entityGraph) : null,
-         token.modelDecision ? JSON.stringify(token.modelDecision) : null],
-      );
-      const id = inserted.rows[0]?.id;
-      if (!id) continue;
-      diag.captured++;
-      for (const horizon of SIGNAL_FORWARD_HORIZONS_MIN) await pool.query(
-        `INSERT INTO signal_observation_outcomes (observation_id,horizon_minutes) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
-        [id, horizon],
-      );
+      try {
+        const features = buildSignalFeatures(token, regime, now);
+        const burst = burstFeatures(token, now);
+        const inserted = await pool.query(
+          `INSERT INTO signal_observations
+             (ca,observation_key,captured_at,captured_age_seconds,price_usd,base_score,source,dex,
+              regime_id,model_version,recommendation_eligible,feature_vector,burst_features,entity_features,decision)
+           VALUES ($1,$2,to_timestamp($3/1000.0),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+           ON CONFLICT (ca,observation_key,model_version) DO NOTHING RETURNING id`,
+          [token.ca, key, now, Math.round(ageMinutes * 60), token.priceUsd, token.score, token.source,
+           token.dex, regime.id, MODEL_VERSION, recommendationEligibleSource(token.source),
+           JSON.stringify(features), JSON.stringify(burst), token.entityGraph ? JSON.stringify(token.entityGraph) : null,
+           token.modelDecision ? JSON.stringify(token.modelDecision) : null],
+        );
+        const id = inserted.rows[0]?.id;
+        if (!id) continue;
+        diag.captured++;
+        for (const horizon of SIGNAL_FORWARD_HORIZONS_MIN) await pool.query(
+          `INSERT INTO signal_observation_outcomes (observation_id,horizon_minutes) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+          [id, horizon],
+        );
+      } catch (error) {
+        attempted.delete(identity);
+        diag.captureErrors++;
+        diag.lastError = (error as Error).message;
+        console.error('[signal-observations:capture]', diag.lastError);
+      }
     }
   }
   diag.lastCapture = new Date().toISOString();
@@ -79,7 +91,8 @@ async function resolveDue() {
   resolving = true; diag.lastError = null;
   try {
     const rows = await pool.query(
-      `SELECT outcome.observation_id,outcome.horizon_minutes,outcome.attempts,observation.ca,observation.price_usd
+      `SELECT outcome.observation_id,outcome.horizon_minutes,outcome.attempts,observation.ca,observation.price_usd,
+              EXTRACT(EPOCH FROM observation.captured_at)*1000 AS captured_at_ms
          FROM signal_observation_outcomes outcome
          JOIN signal_observations observation ON observation.id=outcome.observation_id
         WHERE observation.model_version=$1 AND outcome.status='pending'
@@ -89,7 +102,8 @@ async function resolveDue() {
     );
     for (let index = 0; index < rows.rows.length; index += 8) {
       await Promise.all(rows.rows.slice(index, index + 8).map(async row => {
-        const snapshot = await fetchTokenSnapshot(row.ca);
+        const dueAt = Number(row.captured_at_ms) + Number(row.horizon_minutes) * 60_000;
+        const snapshot = await resolveSnapshot(row.ca, dueAt);
         if (!snapshot || !Number.isFinite(snapshot.price) || snapshot.price <= 0) {
           const attempt = Number(row.attempts || 0) + 1;
           const retry = RETRIES[Math.min(attempt - 1, RETRIES.length - 1)];
@@ -110,6 +124,7 @@ async function resolveDue() {
           [row.observation_id, row.horizon_minutes, snapshot.price, row.price_usd],
         );
         diag.resolved++;
+        if (snapshot.source === 'live') diag.resolvedLive++; else diag.resolvedDex++;
       }));
     }
     diag.lastResolve = new Date().toISOString();
@@ -117,4 +132,18 @@ async function resolveDue() {
     diag.lastError = (error as Error).message;
     console.error('[signal-observations]', diag.lastError);
   } finally { resolving = false; }
+}
+
+async function resolveSnapshot(ca: string, dueAt: number): Promise<{ price: number; source: 'live' | 'dex' } | null> {
+  const now = Date.now();
+  const token = getToken(ca);
+  if (token && token.priceUsd > 0) {
+    const recentTradeAt = token.recentTrades[token.recentTrades.length - 1]?.at || 0;
+    const curveAt = token.curveSamples[token.curveSamples.length - 1]?.at || 0;
+    const updatedAt = Math.max(Number((token as any).marketUpdatedAt || 0), recentTradeAt, curveAt);
+    if (updatedAt >= dueAt - 2 * 60_000 && now - updatedAt <= 3 * 60_000)
+      return { price: token.priceUsd, source: 'live' };
+  }
+  const dex = await fetchTokenSnapshot(ca);
+  return dex && dex.price > 0 ? { price: dex.price, source: 'dex' } : null;
 }

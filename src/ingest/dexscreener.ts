@@ -2,6 +2,7 @@ import { cfg } from '../config';
 import { allTokens } from '../store';
 import { TokenRecord } from '../types';
 import { backfillWalletEntryPrice } from '../wallets/ledger';
+import { getStreamMode } from './pumpfun';
 
 const BASE = 'https://api.dexscreener.com/latest/dex/tokens/';
 
@@ -44,6 +45,7 @@ async function enrich(batch: TokenRecord[], onUpdated: (t: TokenRecord) => void)
       const dexPrice = parseFloat(pair.priceUsd || '0');
       if (dexPrice > 0) {
         t.priceUsd = dexPrice;
+        (t as any).marketUpdatedAt = Date.now();
         backfillWalletEntryPrice(t.ca, dexPrice).catch(() => {});
         if (t.gradAt) {
           if (dexPrice > t.gradPeak) t.gradPeak = dexPrice;
@@ -55,7 +57,10 @@ async function enrich(batch: TokenRecord[], onUpdated: (t: TokenRecord) => void)
       if (pair.dexId && pair.dexId !== 'pumpfun') { t.dex = pair.dexId; t.dexId = pair.dexId; }
       t.priceChange5m = pair.priceChange?.m5 || 0;
       t.pairAddress = pair.pairAddress || t.pairAddress;
-      if (t.dex !== 'pumpfun') {
+      // PumpPortal trade subscriptions are metered and absent in lite mode. Keep the
+      // score and model fed from Dexscreener aggregates until Helius reconstructs the
+      // individual sequence. In full mode, the exact websocket events remain canonical.
+      if (t.dex !== 'pumpfun' || getStreamMode() === 'lite') {
         t.vol5m = pair.volume?.m5 || 0;
         t.buys5m = pair.txns?.m5?.buys || 0;
         t.sells5m = pair.txns?.m5?.sells || 0;
