@@ -5,6 +5,7 @@ import { readLeaderAddress } from './leadership';
 // cache the leader address briefly so we don't hit Postgres per request
 let cachedAddr: string | null = null;
 let cachedAt = 0;
+let lastProxyError: string | null = null;
 async function leaderAddr(): Promise<string | null> {
   if (Date.now() - cachedAt < 20_000) return cachedAddr;
   cachedAddr = await readLeaderAddress();
@@ -31,9 +32,9 @@ export async function startStandbyServer(): Promise<StandbyServer> {
     if (addr) {
       const [host, port] = addr.split(':');
       const forwarded = http.request(
-        { host, port: Number(port) || 8080, path: req.url, method: req.method, headers: { ...req.headers, host: `${host}:${port}` }, family: 0, timeout: 25_000 },
+        { host, port: Number(port) || 8080, path: req.url, method: req.method, headers: { ...req.headers, host: `${host}:${port}` }, family: 0, timeout: 8_000 },
         upstream => { res.writeHead(upstream.statusCode || 502, upstream.headers); upstream.pipe(res); });
-      forwarded.on('error', () => { if (!res.headersSent) stub(req, res); });
+      forwarded.on('error', (e) => { lastProxyError = e.message; if (!res.headersSent) stub(req, res); });
       forwarded.on('timeout', () => forwarded.destroy());
       req.pipe(forwarded);
       return;
@@ -52,6 +53,7 @@ export async function startStandbyServer(): Promise<StandbyServer> {
         role: 'standby',
         scanning: false,
         message: 'Waiting to acquire worker leadership',
+        proxyDiag: { leaderAddr: cachedAddr, lastProxyError },   // visible from outside: WHY the stub
       }));
       return;
     }
