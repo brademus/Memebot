@@ -236,3 +236,4 @@ CREATE TABLE IF NOT EXISTS leadership_claims (
   name TEXT PRIMARY KEY,
   claimed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE leadership_claims ADD COLUMN IF NOT EXISTS value TEXT;

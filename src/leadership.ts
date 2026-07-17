@@ -115,3 +115,30 @@ export function startYieldWatch() {
   }, 30_000);
   timer.unref();
 }
+
+
+// ===== LEADER ADDRESS PUBLICATION (for the standby reverse proxy) =====
+// The leader publishes its Railway-private address to Postgres on a 60s heartbeat.
+// The standby proxies incoming traffic to it, so the public domain serves the REAL
+// dashboard regardless of which instance won the lock — no env configuration needed.
+let addrTimer: ReturnType<typeof setInterval> | null = null;
+export function startLeaderAddressPublication() {
+  if (!pool) return;
+  const host = process.env.RAILWAY_PRIVATE_DOMAIN || null;
+  if (!host) return;   // not on Railway (local dev) — standby stub remains the fallback
+  const addr = `${host}:${process.env.PORT || '8080'}`;
+  const publish = () => pool!.query(
+    `INSERT INTO leadership_claims (name, claimed_at, value) VALUES ('leader_addr', now(), $1)
+     ON CONFLICT (name) DO UPDATE SET claimed_at = now(), value = $1`, [addr]).catch(() => {});
+  publish();
+  addrTimer = setInterval(publish, 60_000);
+  addrTimer.unref();
+}
+
+export async function readLeaderAddress(): Promise<string | null> {
+  if (!pool) return null;
+  const r = await pool.query(
+    `SELECT value FROM leadership_claims WHERE name = 'leader_addr' AND claimed_at > now() - interval '150 seconds'`)
+    .catch(() => ({ rows: [] as any[] }));
+  return r.rows[0]?.value || null;
+}

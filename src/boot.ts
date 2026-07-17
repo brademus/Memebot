@@ -1,4 +1,4 @@
-import { acquireWorkerLeadership, registerPrimaryClaim, clearPrimaryClaim, startYieldWatch, isPrimaryInstance } from './leadership';
+import { acquireWorkerLeadership, registerPrimaryClaim, clearPrimaryClaim, startYieldWatch, isPrimaryInstance, startLeaderAddressPublication } from './leadership';
 import { startStandbyServer, StandbyServer } from './standby';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -41,6 +41,7 @@ async function boot() {
   }
   if (isPrimaryInstance()) await clearPrimaryClaim();   // stop signaling once we lead
   startYieldWatch();                                    // non-primary leaders yield to a waiting primary
+  startLeaderAddressPublication();                      // standby proxies the public domain to this address
   await startLeaderWorker();
 }
 
