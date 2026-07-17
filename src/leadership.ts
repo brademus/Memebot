@@ -1,8 +1,7 @@
-import type { PoolClient } from 'pg';
 import { pool } from './db';
 
 const LOCK_NAME = process.env.WORKER_LOCK_KEY || 'memewatch-production-worker-v1';
-let lockClient: PoolClient | null = null;
+const INSTANCE_ID = `${process.env.RAILWAY_REPLICA_ID || process.env.HOSTNAME || 'local'}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 let leader = false;
 let lastError: string | null = null;
 let attempts = 0;
@@ -21,7 +20,7 @@ export const leadershipDiag = () => ({
  * PostgreSQL releases the lock automatically and another deployment can take over.
  */
 export async function acquireWorkerLeadership(): Promise<boolean> {
-  if (leader && lockClient) return true;
+  if (leader) return true;
   attempts++;
 
   if (!pool) {
@@ -31,35 +30,45 @@ export async function acquireWorkerLeadership(): Promise<boolean> {
     return true;
   }
 
-  let client: PoolClient | null = null;
+  // LEASE-BASED leadership (replaces the session advisory lock). The advisory lock
+  // had a fatal flaw seen live: a hard-killed container's session can linger on the
+  // Postgres server, holding the lock as a ZOMBIE — every new instance then waits
+  // forever, the scanner is down, and nothing self-heals. A lease cannot zombie:
+  // the leader heartbeats claimed_at every 30s; acquisition succeeds only if the
+  // existing lease is EXPIRED (>90s stale) or already ours. Max stall after any
+  // crash: 90 seconds, then leadership transfers automatically.
   try {
-    client = await pool.connect();
-    const result = await client.query(
-      `SELECT pg_try_advisory_lock(hashtext($1)) AS acquired`,
-      [LOCK_NAME],
-    );
-    if (!result.rows[0]?.acquired) {
-      client.release();
-      client = null;
+    const r = await pool.query(
+      `INSERT INTO leadership_claims (name, claimed_at, value) VALUES ('lease', now(), $1)
+       ON CONFLICT (name) DO UPDATE SET claimed_at = now(), value = EXCLUDED.value
+         WHERE leadership_claims.claimed_at < now() - interval '90 seconds'
+            OR leadership_claims.value = EXCLUDED.value
+       RETURNING value`, [INSTANCE_ID]);
+    if (!r.rowCount || r.rows[0].value !== INSTANCE_ID) {
       leader = false;
       lastError = null;
-      console.warn(`[leadership] follower mode — another deployment owns ${LOCK_NAME}`);
+      console.warn(`[leadership] follower — a live lease is held by another instance`);
       return false;
     }
-
-    lockClient = client;
-    client = null;
     leader = true;
     lastError = null;
-    lockClient.on('error', error => {
-      lastError = error.message;
-      console.error('[leadership] lock connection lost; exiting for clean failover:', error.message);
-      process.exit(1);
-    });
-    console.log(`[leadership] leader lock acquired: ${LOCK_NAME}`);
+    // heartbeat keeps the lease alive; a failed heartbeat means we may have lost
+    // leadership (another instance can take an expired lease) — exit for a clean
+    // restart rather than risk two scanners.
+    const hb = setInterval(async () => {
+      try {
+        const beat = await pool!.query(
+          `UPDATE leadership_claims SET claimed_at = now() WHERE name = 'lease' AND value = $1`, [INSTANCE_ID]);
+        if (!beat.rowCount) {
+          console.error('[leadership] lease lost (taken by another instance) — exiting for clean failover');
+          process.exit(1);
+        }
+      } catch (e) { console.error('[leadership] heartbeat error:', (e as Error).message); }
+    }, 30_000);
+    hb.unref();
+    console.log(`[leadership] lease acquired: ${LOCK_NAME} as ${INSTANCE_ID}`);
     return true;
   } catch (error) {
-    if (client) client.release(true);
     lastError = (error as Error).message;
     leader = false;
     console.error(`[leadership] acquisition attempt failed: ${lastError}`);
@@ -67,14 +76,9 @@ export async function acquireWorkerLeadership(): Promise<boolean> {
   }
 }
 
-export async function releaseWorkerLeadership(): Promise<void> {
-  const client = lockClient;
-  lockClient = null;
+export async function releaseWorkerLeadership() {
   leader = false;
-  if (!client) return;
-  try { await client.query(`SELECT pg_advisory_unlock(hashtext($1))`, [LOCK_NAME]); }
-  catch {}
-  client.release();
+  if (pool) await pool.query(`DELETE FROM leadership_claims WHERE name = 'lease'`).catch(() => {});
 }
 
 
