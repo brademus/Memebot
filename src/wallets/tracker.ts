@@ -34,10 +34,15 @@ export function recordSmartBuy(
 ) {
   if (signal) recentHits.set(ca, atMs);
   let token = getToken(ca);
-  if (!token) {
+
+  // Candidate wallets are followed quietly while profitability evidence matures.
+  // They must not inject tokens into the bot's funnel until promoted to active.
+  if (!token && signal) {
     onDiscovery(ca);
     token = getToken(ca);
+    if (token) token.source = 'wallet';
   }
+
   recordWalletEntry(wallet, ca, atMs, token?.priceUsd || null).catch(() => {});
   if (pool) pool.query(`UPDATE smart_wallets SET last_active=to_timestamp($2/1000.0) WHERE wallet=$1`, [wallet, atMs]).catch(() => {});
   if (!signal) return;

@@ -44,13 +44,16 @@ export async function syncWebhook() {
   if (!url) return;
   const hookUrl = `${url}/api/helius-webhook`;
   try {
+    // Active wallets may generate trusted smart-money signals. Pump.fun activity
+    // candidates are streamed too, but remain observation-only until promoted.
     const active = await pool.query(
       `SELECT wallet,winners_hit,active FROM smart_wallets
         WHERE quality_verdict IS DISTINCT FROM 'REJECT'
-        ORDER BY active DESC,winners_hit DESC LIMIT $1`,
+           OR (type='pumpfun_candidate' AND quality_verdict IS NULL)
+        ORDER BY active DESC,winners_hit DESC,last_active DESC NULLS LAST LIMIT $1`,
       [cfg().wallets.max_tracked_wallets]);
     const addresses: string[] = active.rows.map((row: any) => row.wallet);
-    if (!addresses.length) { lastError = 'no active wallets yet'; return; }
+    if (!addresses.length) { lastError = 'no active or candidate wallets yet'; return; }
     trackedSet.clear();
     signalSet.clear();
     for (const row of active.rows) {
@@ -79,7 +82,7 @@ export async function syncWebhook() {
     lastSync = Date.now();
     lastError = null;
     addressCount = addresses.length;
-    console.log(`[wallets] webhook live — ${addresses.length} wallets streaming to ${hookUrl}`);
+    console.log(`[wallets] webhook live — ${addresses.length} active/candidate wallets streaming to ${hookUrl}`);
   } catch (error) {
     lastError = (error as Error).message;
     console.error('[wallets] webhook', lastError);
@@ -94,7 +97,7 @@ export function handleWebhook(authHeader: string | undefined, payload: any): num
     const atMs = tx.timestamp ? tx.timestamp * 1000 : Date.now();
     for (const transfer of tx.tokenTransfers || []) {
       if (!transfer.mint || !transfer.toUserAccount || QUOTE_MINTS.has(transfer.mint)) continue;
-      if (trackedSet.has(transfer.toUserAccount))
+      if (trackedSet.has(transfer.toUserAccount)) {
         recordSmartBuy(
           transfer.toUserAccount,
           transfer.mint,
@@ -102,6 +105,7 @@ export function handleWebhook(authHeader: string | undefined, payload: any): num
           signalSet.has(transfer.toUserAccount),
           atMs,
         );
+      }
     }
   }
   return 200;
