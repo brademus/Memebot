@@ -40,6 +40,13 @@ jobs:
           path: typescript-build.log
           retention-days: 7
 
+      - name: Retain compiled application
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiled-dist-${{ github.run_id }}
+          path: dist
+          retention-days: 2
+
       - name: Jupiter built and simulated entry and exit tests
         run: node --test dist/paper/execution.test.js
 
@@ -83,6 +90,7 @@ jobs:
         run: node --check public/app.js && node --check public/no-admin.js && node --check public/observed-wins.js
 
   postgres-persistence:
+    needs: build-and-test
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -114,8 +122,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: TypeScript build
-        run: npm run build
+      - name: Download tested application build
+        uses: actions/download-artifact@v4
+        with:
+          name: compiled-dist-${{ github.run_id }}
+          path: dist
 
       - name: Real Postgres paper persistence contract
         run: node --test dist/paper/persistence.integration.test.js
