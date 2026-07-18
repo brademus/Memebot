@@ -9,6 +9,7 @@ import { runAiReview } from '../ai/reviewer';
 import { geminiLastError, geminiConfigured } from '../ai/gemini';
 import { runSystemMonitor } from '../ai/monitor';
 import { buildAnalytics } from './analytics';
+import { buildCallsDashboard } from './calls';
 import { rankToken } from '../scoring/rank';
 import { currentBestBuys } from './bestbuys';
 import { getStreamMode } from '../ingest/pumpfun';
@@ -18,7 +19,7 @@ import { handleWebhook, webhookDiag } from '../wallets/webhook';
 import { prefilterDiag } from '../gates/prefilter';
 import { learningDiag } from '../tuning/filtertune';
 import { scorecalDiag } from '../tuning/scorecal';
-import { winnerMinerDiag } from '../wallets/winnerminer';
+import { runPumpfunActivityMining, winnerMinerDiag } from '../wallets/winnerminer';
 import { triggerAutopsy } from '../scoring/states';
 import { paperScoreboard, paperDiag } from '../paper/paper';
 import { momentumDiag } from '../ingest/momentum';
@@ -54,8 +55,7 @@ export function startServer() {
 
   app.use('/api', publicApiLimit);
 
-  // Expensive diagnostics and strategy internals are private. Both a bearer token
-  // and x-admin-key are accepted; comparisons use timing-safe equality.
+  // Strategy internals and write-like diagnostic actions remain private.
   app.use([
     '/api/tuning',
     '/api/report',
@@ -63,6 +63,7 @@ export function startServer() {
     '/api/ai-review',
     '/api/wallet-debug',
     '/api/discover',
+    '/api/wallet-activity-mine',
     '/api/status',
     '/api/wallets',
     '/api/wallet-rankings',
@@ -72,7 +73,7 @@ export function startServer() {
 
   app.get('/api/wallets', async (_req, res) => {
     try { res.json(await listSmartWallets()); }
-    catch (e) { res.status(500).json({ error: (e as Error).message }); }
+    catch (error) { res.status(500).json({ error: (error as Error).message }); }
   });
 
   app.post('/api/wallets', async (req, res) => {
@@ -84,8 +85,8 @@ export function startServer() {
     try {
       await addSmartWallet(wallet, type || 'unspecified');
       res.json({ ok: true, wallet });
-    } catch (e) {
-      res.status(500).json({ error: (e as Error).message });
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
     }
   });
 
@@ -93,14 +94,14 @@ export function startServer() {
     try {
       await removeSmartWallet(req.params.wallet);
       res.json({ ok: true });
-    } catch (e) {
-      res.status(500).json({ error: (e as Error).message });
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
     }
   });
 
   app.get('/api/missed', async (_req, res) => {
     try { res.json(await getMissedWinners()); }
-    catch (e) { res.json({ misses: [], summary: `missed-winners sweep failed: ${(e as Error).message}` }); }
+    catch (error) { res.json({ misses: [], summary: `missed-winners sweep failed: ${(error as Error).message}` }); }
   });
 
   app.get('/api/tokens', (_req, res) => res.json(payload()));
@@ -120,12 +121,12 @@ export function startServer() {
     const offset = Math.max(0, parseInt(String(req.query.offset || '0'), 10) || 0);
     try {
       const rows = await pool.query(
-        `SELECT ca, symbol, name, source, first_seen, gate_result, gate_fail_reason, last_state, last_score
+        `SELECT ca,symbol,name,source,first_seen,gate_result,gate_fail_reason,last_state,last_score
            FROM tokens ORDER BY first_seen DESC LIMIT 500 OFFSET $1`, [offset]);
       const count = await pool.query(`SELECT COUNT(*)::int AS n FROM tokens`);
       res.json({ total: count.rows[0].n, offset, rows: rows.rows });
-    } catch (e) {
-      res.status(500).json({ error: (e as Error).message });
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
     }
   });
 
@@ -133,8 +134,8 @@ export function startServer() {
     try {
       const days = Math.min(90, Math.max(1, parseInt(String(req.query.days || '7'), 10) || 7));
       res.json(await buildReport(days));
-    } catch (e) {
-      res.status(500).json({ error: (e as Error).message });
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
     }
   });
 
@@ -142,13 +143,15 @@ export function startServer() {
     if (!pool) { res.json({ active: 0, rows: [] }); return; }
     try {
       const rows = await pool.query(
-        `SELECT wallet, type, winners_hit, active, discovered_from, last_validated
-           FROM smart_wallets WHERE winners_hit > 0
-          ORDER BY active DESC, winners_hit DESC LIMIT 100`);
+        `SELECT wallet,type,winners_hit,active,discovered_from,last_validated,
+                quality_verdict,win_rate,round_trips,last_active
+           FROM smart_wallets
+          ORDER BY active DESC,quality_verdict DESC,winners_hit DESC,last_active DESC NULLS LAST
+          LIMIT 150`);
       const count = await pool.query(`SELECT COUNT(*)::int n FROM smart_wallets WHERE active`);
-      res.json({ active: count.rows[0].n, rows: rows.rows });
-    } catch (e) {
-      res.status(500).json({ error: (e as Error).message });
+      res.json({ active: count.rows[0].n, rows: rows.rows, diagnostics: winnerMinerDiag() });
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
     }
   });
 
@@ -158,14 +161,14 @@ export function startServer() {
       const snapshot = {
         funnel: {
           seenInMemory: all.length,
-          gatedOutInMemory: all.filter(t => t.gated === false).length,
-          watching: all.filter(t => t.gated === true && t.state !== 'DEAD').length,
-          liveTriggers: all.filter(t => t.state === 'TRIGGER').length,
+          gatedOutInMemory: all.filter(token => token.gated === false).length,
+          watching: all.filter(token => token.gated === true && token.state !== 'DEAD').length,
+          liveTriggers: all.filter(token => token.state === 'TRIGGER').length,
           uptimeMin: Math.round(process.uptime() / 60),
           hydrated: hydration.restored,
           effectiveFloor: cfg().states.trigger_score_min,
-          scoresNearFloor: all.filter(t => t.gated === true && t.score >= cfg().states.trigger_score_min - 10).length,
-          maxScoreNow: Math.max(0, ...all.filter(t => t.gated === true).map(t => t.score)),
+          scoresNearFloor: all.filter(token => token.gated === true && token.score >= cfg().states.trigger_score_min - 10).length,
+          maxScoreNow: Math.max(0, ...all.filter(token => token.gated === true).map(token => token.score)),
         },
         subsystems: {
           webhook: webhookDiag(),
@@ -184,8 +187,8 @@ export function startServer() {
       };
       const result = await runSystemMonitor(snapshot);
       res.json(result.read ? { read: result.read, snapshot } : { note: result.note, snapshot });
-    } catch (e) {
-      res.status(500).json({ error: (e as Error).message });
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
     }
   });
 
@@ -197,18 +200,18 @@ export function startServer() {
         ? 'GEMINI_API_KEY is not configured'
         : (geminiLastError() || 'the model returned no content');
       res.json({ note: `AI review unavailable: ${reason}` });
-    } catch (e) {
-      res.status(500).json({ error: (e as Error).message });
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
     }
   });
 
+  // Compatibility route retained for older clients. The focused dashboard uses /api/calls.
   app.get('/api/wins', async (_req, res) => {
     if (!pool) { res.json({ wins: [], note: 'attach Postgres to track wins' }); return; }
     try {
       const rows = await pool.query(`
-        SELECT ca, symbol, signal, entry_at, entry_score, entry_price,
-               execution_eligible, target_hit_at,
-               ROUND((peak_price / NULLIF(entry_price,0))::numeric, 2) AS best_multiple
+        SELECT ca,symbol,signal,entry_at,entry_score,entry_price,execution_eligible,target_hit_at,
+               ROUND((peak_price/NULLIF(entry_price,0))::numeric,2) AS best_multiple
           FROM paper_trades
          WHERE target_hit_at IS NOT NULL
          ORDER BY target_hit_at DESC LIMIT 100`);
@@ -221,72 +224,70 @@ export function startServer() {
                COUNT(*) FILTER (WHERE signal='conviction') AS conviction_observations
           FROM paper_trades`)).rows[0];
       res.json({ wins: rows.rows, summary });
-    } catch (e) {
-      res.status(500).json({ error: (e as Error).message });
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
     }
+  });
+
+  app.get('/api/calls', async (_req, res) => {
+    try { res.json(await buildCallsDashboard()); }
+    catch (error) { res.status(500).json({ error: (error as Error).message }); }
   });
 
   app.get('/api/evidence', async (req, res) => {
     try {
       const days = Math.min(180, Math.max(1, parseInt(String(req.query.days || '30'), 10) || 30));
       res.json({ days, lanes: await paperScoreboard(days), diagnostics: await paperDiag() });
-    } catch (e) {
-      res.status(500).json({ error: (e as Error).message });
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
     }
   });
 
   app.get('/api/bestbuys', (_req, res) => {
     const buys = currentBestBuys();
     const watching = activeTokens().length;
-    res.json({
-      buys,
-      watching,
-      note: buys.length ? null : `0 of ${watching} watched clear the opportunity bar.`,
-    });
+    res.json({ buys, watching, note: buys.length ? null : `0 of ${watching} watched clear the conviction bar.` });
   });
 
   app.get('/api/analytics', analyticsLimit, async (_req, res) => {
     try { res.json(await buildAnalytics()); }
-    catch (e) { res.status(500).json({ error: (e as Error).message }); }
+    catch (error) { res.status(500).json({ error: (error as Error).message }); }
   });
 
   app.get('/api/wallet-debug', async (_req, res) => {
-    const out: any = { helius_key_set: !!env.HELIUS_API_KEY, db: !!pool };
-    if (!pool) { res.json(out); return; }
+    const output: any = { helius_key_set: !!env.HELIUS_API_KEY, db: !!pool, activityMining: winnerMinerDiag() };
+    if (!pool) { res.json(output); return; }
     const step = async (name: string, fn: () => Promise<any>) => {
-      try { out[name] = await fn(); }
-      catch (e) { out[name] = `ERROR: ${(e as Error).message}`; }
+      try { output[name] = await fn(); }
+      catch (error) { output[name] = `ERROR: ${(error as Error).message}`; }
     };
-    await step('winners_3x_last7d', async () =>
-      (await pool!.query(`SELECT COUNT(DISTINCT t.ca)::int c FROM tokens t JOIN outcomes o ON o.ca=t.ca
-        WHERE o.multiple_from_first >= 3 AND t.first_seen > now() - interval '7 days'`)).rows[0].c);
-    await step('winners_unmined', async () =>
-      (await pool!.query(`SELECT COUNT(DISTINCT t.ca)::int c FROM tokens t JOIN outcomes o ON o.ca=t.ca
-        WHERE o.multiple_from_first >= 3 AND t.first_seen > now() - interval '7 days'
-          AND t.mined_at IS NULL`)).rows[0].c);
+    await step('pumpfun_trades_6h', async () =>
+      (await pool!.query(`SELECT COUNT(*)::int c FROM trade_events WHERE source='pumpfun' AND at>now()-interval '6 hours'`)).rows[0].c);
+    await step('active_pumpfun_wallets_6h', async () =>
+      (await pool!.query(`SELECT COUNT(DISTINCT wallet)::int c FROM trade_events WHERE source='pumpfun' AND wallet IS NOT NULL AND at>now()-interval '6 hours'`)).rows[0].c);
+    await step('smart_wallets_total', async () =>
+      (await pool!.query(`SELECT COUNT(*)::int c FROM smart_wallets`)).rows[0].c);
+    await step('smart_wallets_active', async () =>
+      (await pool!.query(`SELECT COUNT(*)::int c FROM smart_wallets WHERE active`)).rows[0].c);
+    await step('pumpfun_activity_promoted', async () =>
+      (await pool!.query(`SELECT COUNT(*)::int c FROM smart_wallets WHERE active AND type='pumpfun_activity'`)).rows[0].c);
+    await step('wallet_hits_total', async () =>
+      (await pool!.query(`SELECT COUNT(*)::int c FROM wallet_hits`)).rows[0].c);
     await step('sample_winner_and_early_buyers', async () => {
-      const result = await pool!.query(`SELECT t.ca, MAX(o.multiple_from_first) m
+      const result = await pool!.query(`SELECT t.ca,MAX(o.multiple_from_first) m
         FROM tokens t JOIN outcomes o ON o.ca=t.ca
-        WHERE o.multiple_from_first >= 3 AND t.first_seen > now() - interval '7 days'
+        WHERE o.multiple_from_first>=3 AND t.first_seen>now()-interval '7 days'
         GROUP BY t.ca ORDER BY m DESC LIMIT 1`);
       if (!result.rows.length) return 'no winners yet';
       const ca = result.rows[0].ca;
       const buyers = await earlyBuyers(ca, 3);
       return { ca, best_multiple: result.rows[0].m, early_buyers_found: buyers.length, sample: buyers.slice(0, 3) };
     });
-    await step('smart_wallets_total', async () =>
-      (await pool!.query(`SELECT COUNT(*)::int c FROM smart_wallets`)).rows[0].c);
-    await step('smart_wallets_active', async () =>
-      (await pool!.query(`SELECT COUNT(*)::int c FROM smart_wallets WHERE active`)).rows[0].c);
-    await step('wallet_hits_total', async () =>
-      (await pool!.query(`SELECT COUNT(*)::int c FROM wallet_hits`)).rows[0].c);
-    out.verdict = !env.HELIUS_API_KEY ? 'HELIUS_API_KEY missing'
-      : out.winners_3x_last7d === 0 ? 'no 3x winners logged yet'
-      : typeof out.sample_winner_and_early_buyers === 'object' && out.sample_winner_and_early_buyers.early_buyers_found === 0
-        ? 'Helius returned no early buyers'
-        : out.smart_wallets_total === 0 ? 'winner buyers exist but wallet inserts are missing'
-        : 'pipeline healthy';
-    res.json(out);
+    output.verdict = !env.HELIUS_API_KEY ? 'HELIUS_API_KEY missing'
+      : output.pumpfun_trades_6h === 0 ? 'Pump.fun trade stream has no recent rows'
+      : output.smart_wallets_active === 0 ? 'activity exists but no wallet has cleared profitability validation'
+      : 'pipeline healthy';
+    res.json(output);
   });
 
   app.get('/api/status', async (_req, res) => {
@@ -302,7 +303,7 @@ export function startServer() {
       db: !!pool,
       helius: !!env.HELIUS_API_KEY,
       gemini: !!env.GEMINI_API_KEY,
-      jupiter: !!process.env.JUPITER_API_KEY,
+      jupiter: !!env.JUPITER_API_KEY,
       geminiError: geminiLastError(),
       telegram: !!(env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID),
       walletTracking: !!pool && !!env.HELIUS_API_KEY,
@@ -324,19 +325,19 @@ export function startServer() {
 
   app.get('/api/discover', async (_req, res) => {
     try { res.json(await runDiscovery()); }
-    catch (e) { res.status(500).json({ error: (e as Error).message }); }
+    catch (error) { res.status(500).json({ error: (error as Error).message }); }
+  });
+
+  app.get('/api/wallet-activity-mine', async (_req, res) => {
+    try { res.json(await runPumpfunActivityMining()); }
+    catch (error) { res.status(500).json({ error: (error as Error).message }); }
   });
 
   app.get('/api/stats', async (_req, res) => {
     const all = allTokens();
     let lifetime = {
-      seen: 0,
-      killed: 0,
-      passed: 0,
-      triggered: 0,
-      convictions: 0,
-      triggered24h: 0,
-      convictions24h: 0,
+      seen: 0, killed: 0, passed: 0, triggered: 0, convictions: 0,
+      triggered24h: 0, convictions24h: 0,
     };
     if (pool) {
       try {
@@ -346,14 +347,14 @@ export function startServer() {
                  COUNT(*) FILTER (WHERE gate_result='passed')::int AS passed,
                  COUNT(*) FILTER (WHERE triggered_at IS NOT NULL)::int AS triggered,
                  COUNT(*) FILTER (WHERE conviction_at IS NOT NULL)::int AS convictions,
-                 COUNT(*) FILTER (WHERE triggered_at > now()-interval '24 hours')::int AS triggered24h,
-                 COUNT(*) FILTER (WHERE conviction_at > now()-interval '24 hours')::int AS convictions24h
+                 COUNT(*) FILTER (WHERE triggered_at>now()-interval '24 hours')::int AS triggered24h,
+                 COUNT(*) FILTER (WHERE conviction_at>now()-interval '24 hours')::int AS convictions24h
             FROM tokens`)).rows[0];
       } catch {}
     }
 
     const opportunities = currentBestBuys();
-    const liveConfirmed = all.filter(t => t.convictionAt !== null && !['DYING','DEAD','EXTENDED'].includes(t.state));
+    const liveConfirmed = all.filter(token => token.convictionAt !== null && !['DYING', 'DEAD', 'EXTENDED'].includes(token.state));
     res.json({
       seen: lifetime.seen || all.length,
       killed: lifetime.killed,
@@ -362,15 +363,14 @@ export function startServer() {
       confirmedConvictionsTotal: lifetime.convictions,
       triggers24h: lifetime.triggered24h,
       confirmedConvictions24h: lifetime.convictions24h,
-      liveTriggers: all.filter(t => t.state === 'TRIGGER').length,
+      liveTriggers: all.filter(token => token.state === 'TRIGGER').length,
       liveConfirmedConvictions: liveConfirmed.length,
       liveOpportunitySlots: opportunities.length,
-      liveWatchlist: all.filter(t => t.gated === true && t.state !== 'DEAD').length,
+      liveWatchlist: all.filter(token => token.gated === true && token.state !== 'DEAD').length,
       liveInMemory: all.length,
-      // Compatibility fields are explicit in meaning now.
-      gatedOut: lifetime.killed || all.filter(t => t.gated === false).length,
-      watching: all.filter(t => t.gated === true && t.state !== 'DEAD').length,
-      triggers: all.filter(t => t.state === 'TRIGGER').length,
+      gatedOut: lifetime.killed || all.filter(token => token.gated === false).length,
+      watching: all.filter(token => token.gated === true && token.state !== 'DEAD').length,
+      triggers: all.filter(token => token.state === 'TRIGGER').length,
       convictionsToday: convictionFiredToday(),
       convictionBudget: cfg().conviction?.max_alerts_per_day ?? 5,
       funnel: funnelSnapshot(all),
@@ -381,17 +381,17 @@ export function startServer() {
 }
 
 function funnelSnapshot(all: TokenRecord[]) {
-  const s = cfg().states;
-  const gated = all.filter(t => t.gated === true && !['DEAD','DYING','EXTENDED'].includes(t.state));
+  const settings = cfg().states;
+  const gated = all.filter(token => token.gated === true && !['DEAD', 'DYING', 'EXTENDED'].includes(token.state));
   const blocked = { lowScore: 0, lowRatio: 0, fewTrades: 0, tooYoung: 0, triggering: 0 };
-  for (const t of gated) {
-    const ageMin = (Date.now() - t.firstSeen) / 60_000;
-    const ratio = t.sells5m > 0 ? t.buys5m / t.sells5m : (t.buys5m > 0 ? 3 : 1);
-    if (t.state === 'TRIGGER') { blocked.triggering++; continue; }
-    if (t.score < s.trigger_score_min) blocked.lowScore++;
-    else if (ratio < s.trigger_buy_ratio_min) blocked.lowRatio++;
-    else if ((t.buys5m + t.sells5m) < s.trigger_min_trades) blocked.fewTrades++;
-    else if (ageMin < s.early_runner_min_age) blocked.tooYoung++;
+  for (const token of gated) {
+    const ageMin = (Date.now() - token.firstSeen) / 60_000;
+    const ratio = token.sells5m > 0 ? token.buys5m / token.sells5m : (token.buys5m > 0 ? 3 : 1);
+    if (token.state === 'TRIGGER') { blocked.triggering++; continue; }
+    if (token.score < settings.trigger_score_min) blocked.lowScore++;
+    else if (ratio < settings.trigger_buy_ratio_min) blocked.lowRatio++;
+    else if ((token.buys5m + token.sells5m) < settings.trigger_min_trades) blocked.fewTrades++;
+    else if (ageMin < settings.early_runner_min_age) blocked.tooYoung++;
   }
   return { gatedActive: gated.length, ...blocked };
 }
@@ -406,17 +406,17 @@ const payload = () => ({ tokens: serialize(), scans: recentScans().slice(0, 60),
 
 function seenFeed() {
   return allTokens()
-    .sort((a, b) => b.firstSeen - a.firstSeen)
+    .sort((left, right) => right.firstSeen - left.firstSeen)
     .slice(0, 150)
-    .map(t => ({
-      ca: t.ca,
-      symbol: t.symbol,
-      source: t.source,
-      status: t.gated === null ? 'PENDING' : t.gated === false ? 'KILLED' : t.state,
-      reason: t.gateFailReason,
-      ageMin: Math.round((Date.now() - t.firstSeen) / 60_000),
-      liq: Math.round(t.liquidityUsd),
-      score: t.gated === true ? t.score : null,
+    .map(token => ({
+      ca: token.ca,
+      symbol: token.symbol,
+      source: token.source,
+      status: token.gated === null ? 'PENDING' : token.gated === false ? 'KILLED' : token.state,
+      reason: token.gateFailReason,
+      ageMin: Math.round((Date.now() - token.firstSeen) / 60_000),
+      liq: Math.round(token.liquidityUsd),
+      score: token.gated === true ? token.score : null,
     }));
 }
 
@@ -424,49 +424,49 @@ const STATE_ORDER: Record<string, number> = { TRIGGER: 0, HEATING: 1, WATCHING: 
 
 function serialize() {
   return activeTokens()
-    .sort((a, b) => (STATE_ORDER[a.state] ?? 9) - (STATE_ORDER[b.state] ?? 9) || b.score - a.score)
-    .slice(0, 50)
+    .sort((left, right) => (STATE_ORDER[left.state] ?? 9) - (STATE_ORDER[right.state] ?? 9) || right.score - left.score)
+    .slice(0, 200)
     .map(pick);
 }
 
-function pick(t: TokenRecord) {
+function pick(token: TokenRecord) {
   return {
-    ca: t.ca,
-    symbol: t.symbol,
-    name: t.name,
-    source: t.source,
-    state: t.state,
-    score: t.score,
-    subs: t.subs,
-    ageMin: Math.round((Date.now() - t.firstSeen) / 60_000),
-    priceUsd: t.priceUsd,
-    liq: Math.round(t.liquidityUsd),
-    mcap: Math.round(t.mcapUsd),
-    ratio: t.mcapUsd > 0 ? +(t.liquidityUsd / t.mcapUsd).toFixed(3) : 0,
-    buys: t.buys5m,
-    sells: t.sells5m,
-    chg5m: t.priceChange5m,
-    movedPct: t.firstScorePrice && t.priceUsd ? +(((t.priceUsd / t.firstScorePrice) - 1) * 100).toFixed(1) : 0,
-    insider: t.bundle ? t.bundle.insiderPct : null,
-    funded: t.bundle ? t.bundle.fundedSnipers : 0,
-    smart: new Set(t.smartHits.map(h => h.wallet)).size,
-    smartElite: t.smartHits.some(h => (h.w || 1) > 1),
-    aiNote: t.aiNote,
-    pair: t.pairAddress,
-    rank: rankToken(t),
-    play: t.playType,
-    retention: t.earlyBuyers.length >= 5 ? +((1 - t.earlyExited.length / t.earlyBuyers.length)).toFixed(2) : null,
-    socials: t.socials,
-    devPct: +t.devBuyPct.toFixed(1),
-    conviction: t.convictionAt !== null,
-    aiRead: t.aiConviction ? {
-      verdict: t.aiConviction.verdict,
-      delta: t.aiConviction.delta,
-      reason: t.aiConviction.reason,
+    ca: token.ca,
+    symbol: token.symbol,
+    name: token.name,
+    source: token.source,
+    state: token.state,
+    score: token.score,
+    subs: token.subs,
+    ageMin: Math.round((Date.now() - token.firstSeen) / 60_000),
+    priceUsd: token.priceUsd,
+    liq: Math.round(token.liquidityUsd),
+    mcap: Math.round(token.mcapUsd),
+    ratio: token.mcapUsd > 0 ? +(token.liquidityUsd / token.mcapUsd).toFixed(3) : 0,
+    buys: token.buys5m,
+    sells: token.sells5m,
+    chg5m: token.priceChange5m,
+    movedPct: token.firstScorePrice && token.priceUsd ? +(((token.priceUsd / token.firstScorePrice) - 1) * 100).toFixed(1) : 0,
+    insider: token.bundle ? token.bundle.insiderPct : null,
+    funded: token.bundle ? token.bundle.fundedSnipers : 0,
+    smart: new Set(token.smartHits.map(hit => hit.wallet)).size,
+    smartElite: token.smartHits.some(hit => (hit.w || 1) > 1),
+    aiNote: token.aiNote,
+    pair: token.pairAddress,
+    rank: rankToken(token),
+    play: token.playType,
+    retention: token.earlyBuyers.length >= 5 ? +((1 - token.earlyExited.length / token.earlyBuyers.length)).toFixed(2) : null,
+    socials: token.socials,
+    devPct: +token.devBuyPct.toFixed(1),
+    conviction: token.convictionAt !== null,
+    aiRead: token.aiConviction ? {
+      verdict: token.aiConviction.verdict,
+      delta: token.aiConviction.delta,
+      reason: token.aiConviction.reason,
     } : null,
-    boost: t.boostAmount || 0,
-    tgGrowth: t.tgGrowthPerMin || 0,
-    convictionMissing: t.state === 'TRIGGER' && t.convictionAt === null
-      ? checkConviction(t).missing : null,
+    boost: token.boostAmount || 0,
+    tgGrowth: token.tgGrowthPerMin || 0,
+    convictionMissing: token.state === 'TRIGGER' && token.convictionAt === null
+      ? checkConviction(token).missing : null,
   };
 }
