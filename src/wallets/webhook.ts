@@ -49,7 +49,7 @@ export async function syncWebhook() {
     const active = await pool.query(
       `SELECT wallet,winners_hit,active FROM smart_wallets
         WHERE quality_verdict IS DISTINCT FROM 'REJECT'
-           OR type='pumpfun_candidate'
+           OR (type='pumpfun_candidate' AND quality_verdict IS NULL)
         ORDER BY active DESC,winners_hit DESC,last_active DESC NULLS LAST LIMIT $1`,
       [cfg().wallets.max_tracked_wallets]);
     const addresses: string[] = active.rows.map((row: any) => row.wallet);
