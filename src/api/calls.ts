@@ -3,9 +3,9 @@ import { pool } from '../db';
 const NORMALIZED_STAKE_USD = 100;
 const ALERT_SIGNALS = ['trigger', 'conviction'] as const;
 
-type CallStatus = 'open' | 'win' | 'loss' | 'unresolved';
+export type CallStatus = 'open' | 'win' | 'loss' | 'unresolved';
 
-interface PaperCallRow {
+export interface PaperCallRow {
   ca: string;
   symbol: string | null;
   signal: string;
@@ -138,7 +138,7 @@ export async function buildCallsDashboard() {
       FROM alert_calls
      WHERE call_number = 1
      ORDER BY entry_at DESC
-     LIMIT 1000`, [ALERT_SIGNALS]);
+     LIMIT 1000`, [Array.from(ALERT_SIGNALS)]);
 
   const calls = result.rows.map(normalizeDashboardCall);
   const current = calls.filter(call => call.status === 'open');
