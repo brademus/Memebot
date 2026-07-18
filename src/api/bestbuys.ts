@@ -80,7 +80,8 @@ export function currentBestBuys() {
     .filter(token => passesPersistence(token, now))
     .map(token => ({ token, rank: rankToken(token) }))
     .filter(({ token, rank }) => ['A+', 'A', 'B'].includes(rank.grade) && ['EARLY', 'FAIR'].includes(rank.timing)
-      && token.score >= config.min_score && token.totalBuys + token.totalSells >= config.min_trades
+      && token.score >= config.min_score
+      && Math.max(token.totalBuys + token.totalSells, token.buys5m + token.sells5m) >= config.min_trades
       && (token.uniqueBuyers.length >= config.min_unique_buyers || token.buys5m >= config.min_unique_buyers)
       && (token.dex !== 'pumpfun' || token.curveSol >= config.min_curve_sol)
       && token.devBuyPct <= config.max_dev_pct && hasIndependentOpportunityConfirmation(token, config)
