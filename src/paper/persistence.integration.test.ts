@@ -1,11 +1,27 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { initDb, pool } from '../db';
+import { ensureLeadershipSchema } from '../leadership';
 import { MODEL_VERSION } from '../model/version';
 import { openPaper } from './paper';
 
-test('paper and forward evidence SQL contracts execute in real Postgres', async () => {
+test('fresh database leadership, paper and forward evidence SQL contracts execute in real Postgres', async () => {
   assert.ok(pool, 'DATABASE_URL must be configured for the persistence integration test');
+
+  // Worker election happens before initDb() during production boot. Prove an empty or
+  // replaced Railway volume can create the coordination table without migrations.
+  await pool.query(`DROP TABLE IF EXISTS leadership_claims`);
+  await ensureLeadershipSchema();
+  const leadershipColumns = await pool.query(
+    `SELECT column_name FROM information_schema.columns
+      WHERE table_schema=current_schema() AND table_name='leadership_claims'
+      ORDER BY column_name`,
+  );
+  assert.deepEqual(
+    leadershipColumns.rows.map(row => row.column_name),
+    ['claimed_at', 'name', 'value'],
+  );
+
   await initDb();
 
   const ca = `integration-${Date.now()}`;
