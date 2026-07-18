@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { updateState } from './states';
+import { assessTrigger, updateState } from './states';
 import { MarketRegime, SignalDecision, SignalFeatureVector, TokenRecord } from '../types';
 import { MODEL_VERSION } from '../model/version';
+import { cfg } from '../config';
 
 const regime: MarketRegime = { id: 'test:normal', kind: 'normal', observedAt: Date.now(), launches1h: 500,
   passRate: 0.3, medianChange5m: 1, aggregateBuyRatio: 1.2, medianLiquidityUsd: 20_000,
@@ -41,11 +42,19 @@ test('keeps momentum-source tokens measurable but out of recommendations', () =>
   const candidate = token({ source: 'momentum' });
   assert.equal(updateState(candidate), 'HEATING');
 });
-test('classifies an uncalled 40 percent runner as extended before promotion', () => {
-  assert.equal(updateState(token({ priceUsd: 1.5 })), 'EXTENDED');
+test('qualified fast runners can trigger before the extension ceiling', () => {
+  const candidate = token({ priceUsd: 1.5 });
+  assert.equal(assessTrigger(candidate).ready, true);
+  assert.equal(updateState(candidate), 'TRIGGER');
+});
+test('uncalled runners beyond the configured ceiling remain observation-only', () => {
+  const price = 1 + (cfg().states.extended_pct + 5) / 100;
+  const candidate = token({ priceUsd: price });
+  assert.equal(assessTrigger(candidate).tooLate, true);
+  assert.equal(updateState(candidate), 'EXTENDED');
 });
 test('does not eject an already-triggered winner for becoming extended', () => {
-  const candidate = token({ state: 'TRIGGER', triggeredAt: Date.now() - 60_000, priceUsd: 1.5 });
+  const candidate = token({ state: 'TRIGGER', triggeredAt: Date.now() - 60_000, priceUsd: 2 });
   assert.equal(updateState(candidate), null);
   assert.equal(candidate.state, 'TRIGGER');
 });
