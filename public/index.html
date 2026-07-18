@@ -10,6 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css?v=20260712-final" />
   <link rel="stylesheet" href="/layout-fixes.css?v=20260712-final" />
+  <link rel="stylesheet" href="/dashboard-v2.css?v=20260718-1" />
 </head>
 <body>
 <header>
@@ -18,27 +19,86 @@
   <button id="back" class="ghost hidden" data-go="home">← Dashboard</button>
   <button id="sound" class="ghost">Sound off</button>
 </header>
+
 <main>
-<section id="home" class="view active">
-  <div class="hero"><p>MEMECOIN INTELLIGENCE</p><h1>See what matters.<br><span>Ignore the noise.</span></h1><small>Live opportunities, confirmed calls, observed 3x outcomes, executable evidence, tracked wallets, and every underlying signal.</small></div>
-  <div class="tiles">
-    <button class="tile primary" data-go="opportunities"><span class="tag">LIVE NOW</span><strong id="nOpp">0</strong><h2>Opportunities</h2><p>Confirmed convictions and earlier Best Buy lanes, clearly separated.</p><b>Open opportunities →</b></button>
-    <button class="tile" data-go="wins"><span class="tag">3X RESULTS</span><strong id="nWins">0</strong><h2>3x Calls</h2><p>All observed 3x calls, with Jupiter-verified entries labeled separately.</p><b>View results →</b></button>
-    <button class="tile" data-go="wallets"><span class="tag">SMART MONEY</span><strong id="nWallets">0</strong><h2>Wallet Tracker</h2><p>Top tracked traders and estimated performance today.</p><b>Follow the money →</b></button>
-    <button class="tile compact" data-go="watchlist"><strong id="nWatch">0</strong><h2>Live Watchlist</h2><p>Every coin that passed the safety gates.</p></button>
-    <button class="tile compact" data-go="performance"><strong id="nSeen">0</strong><h2>Performance</h2><p>Trigger counts, forward evidence, missed winners, and analytics.</p></button>
-    <button class="tile compact" data-go="scanned"><strong id="nKilled">0</strong><h2>All Scanned</h2><p>The complete feed, including rejected coins.</p></button>
-  </div>
-</section>
-<section id="opportunities" class="view"><div class="title"><p>LIVE NOW</p><h1>Opportunities <span id="oppCount">0</span></h1><small>A confirmed conviction has passed through TRIGGER. Earlier Smart Wallet, Organic, Pre‑Graduation and Second‑Wave cards have not.</small></div><div id="oppList" class="cards"></div></section>
-<section id="wins" class="view"><div class="title"><p>OBSERVED AND EXECUTABLE RESULTS</p><h1>3x Calls</h1><small>Historical observed 3x calls remain visible. Calls opened after Jupiter quoting was enabled are separately labeled as Jupiter-verified after slippage, price impact, modeled size and estimated fees.</small></div><div id="winStats" class="stats"></div><div id="winList" class="list"></div></section>
-<section id="wallets" class="view"><div class="title"><p>SMART MONEY</p><h1>Wallet Tracker</h1><small>Ranked by measured history, current activity, and conservative same-day realized SOL performance.</small></div><div id="walletStats" class="stats"></div><div id="walletList" class="list"></div></section>
-<section id="watchlist" class="view"><div class="title"><p>LIVE PIPELINE</p><h1>Watchlist</h1><small>All live coins that passed the rug and safety gates.</small></div><div class="filters"><button class="on" data-filter="ALL">All</button><button data-filter="TRIGGER">Trigger</button><button data-filter="HEATING">Heating</button><button data-filter="WATCHING">Watching</button></div><div class="table"><table><thead><tr><th>Coin</th><th>State</th><th>Score</th><th>Age</th><th>Liquidity</th><th>B:S</th><th>5m</th><th>Moved</th><th>Smart</th><th></th></tr></thead><tbody id="watchRows"></tbody></table></div></section>
-<section id="performance" class="view"><div class="title"><p>ACCOUNTABILITY</p><h1>Performance</h1><small>Trigger calls, confirmed convictions, executable 3x evidence, and what the bot missed.</small></div><div id="perfStats" class="stats"></div><div class="split"><div><h3>Forward evidence by lane</h3><div id="evidence" class="list"></div></div><div><h3>Missed winners</h3><div id="missed" class="list"></div></div></div><div class="tools"><button id="report">Weekly report</button><button id="aiReview">AI review</button><button id="systemMonitor">System monitor</button></div><pre id="toolOutput" class="hidden"></pre></section>
-<section id="scanned" class="view"><div class="title"><p>FULL TRANSPARENCY</p><h1>All Scanned</h1><small>Everything detected, including pending and rejected tokens.</small></div><div id="seenFeed" class="feed"></div><h3>Latest gate decisions</h3><div id="scanFeed" class="list"></div><button id="loadHistory" class="load">Load database history</button><div id="history" class="list"></div></section>
+  <section id="home" class="view active">
+    <div class="hero focusedHero">
+      <div><p>MEMECOIN INTELLIGENCE</p><h1>One clear<br><span>decision flow.</span></h1></div>
+      <small>Watch every qualified coin, see what the bot is preparing to call, track active alerts in real time, and audit every finished result.</small>
+    </div>
+
+    <div class="decisionFlow" aria-label="Bot decision flow">
+      <span>WATCHING</span><i>→</i><span>CONVICTION</span><i>→</i><span>BUY ALERT</span><i>→</i><span>WIN / LOSS</span>
+    </div>
+
+    <div class="focusTiles">
+      <button class="focusTile watchTile" data-go="watchlist">
+        <span class="tag">LIVE PIPELINE</span><strong id="nWatch">0</strong><h2>Watchlist</h2>
+        <p>Every coin the bot is actively watching after its safety gates.</p><b>Open watchlist →</b>
+      </button>
+      <button class="focusTile" data-go="convictions">
+        <span class="tag">WAITING FOR TIMING</span><strong id="nConvictions">0</strong><h2>Convictions</h2>
+        <p>Coins the bot likes enough to prepare a buy call, but has not alerted yet.</p><b>View convictions →</b>
+      </button>
+      <button class="focusTile" data-go="calls">
+        <span class="tag">ACTIVE ALERTS</span><strong id="nCalls">0</strong><h2>Current Calls</h2>
+        <p>Open buy alerts with live hypothetical profit or loss from the alert price.</p><b>Track calls →</b>
+      </button>
+      <button class="focusTile" data-go="results">
+        <span class="tag">ACCOUNTABILITY</span><strong id="nPnl">$0</strong><h2>Wins &amp; Losses</h2>
+        <p>Every resolved buy alert, the bot’s total hypothetical P&amp;L, and win rate.</p><b>Audit results →</b>
+      </button>
+      <button class="focusTile adminTile" data-go="admin">
+        <span class="tag">PRIVATE TOOLS</span><strong>ADMIN</strong><h2>Admin</h2>
+        <p>Weekly reports, AI review, system health, wallet diagnostics, and discovery controls.</p><b>Open admin →</b>
+      </button>
+    </div>
+  </section>
+
+  <section id="watchlist" class="view">
+    <div class="title"><div><p>LIVE PIPELINE</p><h1>Watchlist <span id="watchCount">0</span></h1></div><small>Every live coin that passed the bot’s safety gates. Wallet-discovered coins enter this exact same pipeline.</small></div>
+    <div class="filters"><button class="on" data-filter="ALL">All</button><button data-filter="TRIGGER">Triggered</button><button data-filter="HEATING">Heating</button><button data-filter="WATCHING">Watching</button></div>
+    <div class="table"><table><thead><tr><th>Coin</th><th>State</th><th>Score</th><th>Age</th><th>Liquidity</th><th>B:S</th><th>5m</th><th>Moved</th><th>Smart</th><th></th></tr></thead><tbody id="watchRows"></tbody></table></div>
+  </section>
+
+  <section id="convictions" class="view">
+    <div class="title"><div><p>WAITING FOR THE ENTRY</p><h1>Convictions <span id="convictionCount">0</span></h1></div><small>These coins have cleared the bot’s high-quality candidate logic. They are not buy alerts yet; the bot is waiting for its trigger conditions and timing.</small></div>
+    <div id="convictionStats" class="stats"></div>
+    <div id="convictionList" class="cards"></div>
+  </section>
+
+  <section id="calls" class="view">
+    <div class="title"><div><p>BUY ALERTS NOW OPEN</p><h1>Current Calls <span id="callCount">0</span></h1></div><small>P&amp;L is measured from the exact price stored when the bot issued its first buy alert. The headline comparison uses a normalized hypothetical $100 on every call.</small></div>
+    <div id="callStats" class="stats"></div>
+    <div id="callList" class="callGrid"></div>
+  </section>
+
+  <section id="results" class="view">
+    <div class="title"><div><p>FULL CALL ACCOUNTABILITY</p><h1>Wins &amp; Losses</h1></div><small>Every resolved buy alert is counted once. Results use a normalized hypothetical $100 per call so performance is comparable even when liquidity changes.</small></div>
+    <div id="resultStats" class="stats resultStats"></div>
+    <div id="unresolvedNote" class="notice hidden"></div>
+    <div class="resultSplit">
+      <div class="resultColumn"><div class="sectionHeading"><h2>Winners</h2><span id="winnerCount">0</span></div><div id="winnerList" class="resultList"></div></div>
+      <div class="resultColumn"><div class="sectionHeading"><h2>Losers</h2><span id="loserCount">0</span></div><div id="loserList" class="resultList"></div></div>
+    </div>
+  </section>
+
+  <section id="admin" class="view">
+    <div class="title"><div><p>PRIVATE OPERATIONS</p><h1>Admin</h1></div><small>These tools require the server’s ADMIN_KEY. The key is sent in a request header and stored only in this browser session.</small></div>
+    <div class="adminTools">
+      <button id="report"><b>Weekly report</b><small>Build and copy the latest seven-day report.</small></button>
+      <button id="aiReview"><b>AI review</b><small>Ask the reviewer to analyze current evidence.</small></button>
+      <button id="systemMonitor"><b>System monitor</b><small>Inspect worker, model, market, and persistence health.</small></button>
+      <button id="walletDebug"><b>Wallet diagnostics</b><small>Inspect Pump.fun activity, tracked wallets, and surfaced buys.</small></button>
+      <button id="runDiscovery"><b>Winner discovery</b><small>Run the established winner-first wallet discovery pass.</small></button>
+      <button id="activityMine"><b>Activity wallet scan</b><small>Find heavily active Pump.fun wallets and vet realized profitability now.</small></button>
+      <button id="walletRankings"><b>Wallet rankings</b><small>Show active, profitable, candidate, and rejected wallets.</small></button>
+      <button id="clearAdminKey" class="secondary"><b>Forget admin key</b><small>Clear the key stored in this browser session.</small></button>
+    </div>
+    <div class="toolPanel"><div class="toolPanelHead"><h2>Output</h2><button id="copyTool" class="ghost hidden">Copy</button></div><pre id="toolOutput">Choose an admin tool above.</pre></div>
+  </section>
 </main>
-<script src="/app.js?v=20260712-final" defer></script>
-<script src="/no-admin.js?v=20260713-1" defer></script>
-<script src="/observed-wins.js?v=20260713-1" defer></script>
+
+<script src="/app.js?v=20260718-1" defer></script>
 </body>
 </html>
