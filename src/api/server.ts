@@ -47,7 +47,6 @@ export function startServer() {
   app.use(express.json({ limit: '256kb' }));
   app.use(express.static(path.join(process.cwd(), 'public')));
 
-  // Helius has its own per-boot authorization and must not share browser limits.
   app.post('/api/helius-webhook', (req, res) => {
     const code = handleWebhook(req.header('authorization'), req.body);
     res.status(code).end();
@@ -55,7 +54,6 @@ export function startServer() {
 
   app.use('/api', publicApiLimit);
 
-  // Strategy internals and write-like diagnostic actions remain private.
   app.use([
     '/api/tuning',
     '/api/report',
@@ -146,7 +144,9 @@ export function startServer() {
         `SELECT wallet,type,winners_hit,active,discovered_from,last_validated,
                 quality_verdict,win_rate,round_trips,last_active
            FROM smart_wallets
-          ORDER BY active DESC,quality_verdict DESC,winners_hit DESC,last_active DESC NULLS LAST
+          ORDER BY active DESC,
+                   CASE quality_verdict WHEN 'ELITE' THEN 0 WHEN 'GOOD' THEN 1 WHEN 'MARGINAL' THEN 2 ELSE 3 END,
+                   winners_hit DESC,last_active DESC NULLS LAST
           LIMIT 150`);
       const count = await pool.query(`SELECT COUNT(*)::int n FROM smart_wallets WHERE active`);
       res.json({ active: count.rows[0].n, rows: rows.rows, diagnostics: winnerMinerDiag() });
@@ -205,7 +205,6 @@ export function startServer() {
     }
   });
 
-  // Compatibility route retained for older clients. The focused dashboard uses /api/calls.
   app.get('/api/wins', async (_req, res) => {
     if (!pool) { res.json({ wins: [], note: 'attach Postgres to track wins' }); return; }
     try {
@@ -425,7 +424,6 @@ const STATE_ORDER: Record<string, number> = { TRIGGER: 0, HEATING: 1, WATCHING: 
 function serialize() {
   return activeTokens()
     .sort((left, right) => (STATE_ORDER[left.state] ?? 9) - (STATE_ORDER[right.state] ?? 9) || right.score - left.score)
-    .slice(0, 200)
     .map(pick);
 }
 
