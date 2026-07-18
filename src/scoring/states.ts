@@ -37,8 +37,6 @@ export function triggerAutopsy() {
   };
 }
 
-// Compatibility export for diagnostics/tests. In the new lifecycle a trigger is an
-// entry-timing decision made only after the token entered the Convictions queue.
 export function assessTrigger(
   token: TokenRecord,
   now = Date.now(),
@@ -65,6 +63,9 @@ export function updateState(
       || (assessment.buyRatio <= states.dying_buy_ratio_max && ageMin > 10)
       || (token.dex === 'pumpfun' && token.peakCurveSol > CURVE_FILLED_SOL
         && token.curveSol < token.peakCurveSol * 0.85)) next = 'DYING';
+  // Once an alert has fired, removing it from the conviction queue must not move the
+  // live call backward into HEATING. Paper exits and the dying/dead rules close it.
+  else if (previous === 'TRIGGER' && token.triggeredAt) next = 'TRIGGER';
   else if (assessment.ready) next = 'TRIGGER';
   else if (assessment.tooLate) next = 'EXTENDED';
   else if (token.score >= states.heating_score_min || assessment.conviction.queued) next = 'HEATING';
