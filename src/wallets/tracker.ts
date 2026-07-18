@@ -40,6 +40,7 @@ export function recordSmartBuy(
   if (!token && signal) {
     onDiscovery(ca);
     token = getToken(ca);
+    if (token) token.source = 'wallet';
   }
 
   recordWalletEntry(wallet, ca, atMs, token?.priceUsd || null).catch(() => {});
