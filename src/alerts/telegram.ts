@@ -1,4 +1,5 @@
 import { cfg, env } from '../config';
+import { convictionQueueStatus } from '../scoring/conviction-queue';
 import { TokenRecord } from '../types';
 
 // The only buy alert in the public lifecycle. A token reaches this function only
@@ -12,8 +13,11 @@ export async function alertTrigger(token: TokenRecord) {
   const moved = token.firstScorePrice && token.priceUsd
     ? ((token.priceUsd / token.firstScorePrice - 1) * 100).toFixed(0) : '0';
   const ageMin = Math.round((Date.now() - token.firstSeen) / 60000);
-  const convictionHold = token.convictionAt
-    ? Math.max(0, Math.round((Date.now() - token.convictionAt) / 1000)) : 0;
+  // Use the live queue timestamp rather than persisted conviction_at. After a worker
+  // restart the token must re-enter and re-serve its hold; the alert must not claim
+  // that an older, interrupted observation window counted toward this entry.
+  const conviction = convictionQueueStatus(token.ca);
+  const convictionHold = Math.round(conviction.heldSeconds);
   const text = [
     `📣 BUY ALERT — $${token.symbol}  [${token.score}]`,
     `Conviction held ${convictionHold}s; entry timing now cleared.`,
