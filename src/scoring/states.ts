@@ -36,26 +36,71 @@ function earlyRunner(token: TokenRecord, states: ReturnType<typeof cfg>['states'
   return breadth && !bleeding;
 }
 
+export interface TriggerAssessment {
+  ready: boolean;
+  blockers: string[];
+  buyRatio: number;
+  movedPct: number;
+  evidenceReady: boolean;
+  persistenceReady: boolean;
+  tooLate: boolean;
+  sourceEligible: boolean;
+  modelAllows: boolean;
+}
+
+/**
+ * One authoritative trigger assessment used by the state machine and diagnostics.
+ * A fast runner can still trigger while the entry is inside the configured extension
+ * ceiling; once it is beyond that ceiling it remains observation-only.
+ */
+export function assessTrigger(token: TokenRecord, now = Date.now()): TriggerAssessment {
+  const states = cfg().states;
+  const buyRatio = token.sells5m > 0 ? token.buys5m / token.sells5m : token.buys5m > 0 ? 3 : 1;
+  const movedPct = token.firstScorePrice && token.priceUsd > 0
+    ? (token.priceUsd / token.firstScorePrice - 1) * 100 : 0;
+  const sourceEligible = recommendationEligibleSource(token.source);
+  const modelAllows = decisionAllowsRecommendation(token, now);
+  const evidenceReady = evidenceFloor(token, states);
+  const persistenceReady = passesPersistence(token, now) || earlyRunner(token, states);
+  const tooLate = !token.triggeredAt && movedPct >= states.extended_pct;
+  const blockers: string[] = [];
+
+  if (!sourceEligible) blockers.push('source is research-only');
+  if (!modelAllows) blockers.push('model enforcement abstained');
+  if (token.score < states.trigger_score_min) blockers.push(`score ${token.score.toFixed(1)} < ${states.trigger_score_min}`);
+  if (buyRatio < states.trigger_buy_ratio_min) blockers.push(`buy/sell ${buyRatio.toFixed(2)} < ${states.trigger_buy_ratio_min}`);
+  if (!evidenceReady) blockers.push('not enough trade/buyer evidence');
+  if (!persistenceReady) blockers.push('waiting for persistence');
+  if (tooLate) blockers.push(`already extended +${movedPct.toFixed(0)}%`);
+
+  return {
+    ready: blockers.length === 0,
+    blockers,
+    buyRatio,
+    movedPct,
+    evidenceReady,
+    persistenceReady,
+    tooLate,
+    sourceEligible,
+    modelAllows,
+  };
+}
+
 export function updateState(token: TokenRecord): TokenRecord['state'] | null {
   const states = cfg().states;
   const age = cfg().age;
   const previous = token.state;
   const ageMin = (Date.now() - token.firstSeen) / 60_000;
-  const buyRatio = token.sells5m > 0 ? token.buys5m / token.sells5m : token.buys5m > 0 ? 3 : 1;
-  const sourceEligible = recommendationEligibleSource(token.source);
-  const modelAllows = decisionAllowsRecommendation(token);
+  const assessment = assessTrigger(token);
 
   let next: TokenRecord['state'] = previous;
   if (ageMin > age.max_token_age_minutes) next = 'DEAD';
-  else if (token.firstScorePrice && token.priceUsd > 0
-      && (token.priceUsd / token.firstScorePrice - 1) * 100 >= states.extended_pct && !token.triggeredAt) next = 'EXTENDED';
   else if (token.insiderKilled
       || (token.peakScore - token.score >= states.dying_score_drop && token.peakScore >= states.heating_score_min)
-      || (buyRatio <= states.dying_buy_ratio_max && ageMin > 10)
+      || (assessment.buyRatio <= states.dying_buy_ratio_max && ageMin > 10)
       || (token.dex === 'pumpfun' && token.peakCurveSol > CURVE_FILLED_SOL && token.curveSol < token.peakCurveSol * 0.85)) next = 'DYING';
-  else if (sourceEligible && modelAllows
-      && token.score >= states.trigger_score_min && buyRatio >= states.trigger_buy_ratio_min
-      && evidenceFloor(token, states) && (passesPersistence(token) || earlyRunner(token, states))) next = 'TRIGGER';
+  else if (assessment.ready) next = 'TRIGGER';
+  else if (assessment.tooLate) next = 'EXTENDED';
   else if (token.score >= states.heating_score_min) next = 'HEATING';
   else next = 'WATCHING';
 
@@ -68,13 +113,13 @@ export function updateState(token: TokenRecord): TokenRecord['state'] | null {
       autopsyCoins.clear();
     }
     autopsy.aboveFloor++; autopsyCoins.add(token.ca);
-    if (!sourceEligible) autopsy.quarantine++;
-    else if (!modelAllows) autopsy.model_abstain++;
+    if (!assessment.sourceEligible) autopsy.quarantine++;
+    else if (!assessment.modelAllows) autopsy.model_abstain++;
     else if (next === 'DYING') autopsy.dying++;
     else {
-      if (buyRatio < states.trigger_buy_ratio_min) autopsy.buy_ratio++;
-      if (!evidenceFloor(token, states)) autopsy.evidence++;
-      if (!(passesPersistence(token) || earlyRunner(token, states))) autopsy.persistence++;
+      if (assessment.buyRatio < states.trigger_buy_ratio_min) autopsy.buy_ratio++;
+      if (!assessment.evidenceReady) autopsy.evidence++;
+      if (!assessment.persistenceReady) autopsy.persistence++;
     }
   }
   if (next !== previous) {

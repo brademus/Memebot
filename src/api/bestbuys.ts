@@ -18,12 +18,26 @@ export function isSecondWaveRetrace(price: number, peak: number, minRetrace: num
   const retrace = 1 - price / peak;
   return retrace >= minRetrace && retrace <= maxRetrace;
 }
+
+function hasSocial(token: TokenRecord): boolean {
+  return !!(token.socials.tg || token.socials.x || token.socials.web);
+}
+function cleanBundle(token: TokenRecord, config: ReturnType<typeof cfg>['bestbuys']): boolean {
+  if (!token.bundle) return false;
+  return token.bundle.fundedSnipers === 0
+    && (token.bundle.clusterPct ?? token.bundle.insiderPct) <= config.max_cluster_pct;
+}
+export function hasIndependentOpportunityConfirmation(token: TokenRecord, config = cfg().bestbuys): boolean {
+  return hasSocial(token) || cleanBundle(token, config) || smartCount(token, config) >= 1;
+}
+
 interface Slot { ca: string; enteredAt: number; peakScore: number; lane: 'organic' | 'smart' | 'pregrad' | 'secondwave' }
 const slots: Slot[] = [];
 const droppedAt = new Map<string, number>();
 const recommendationCandidates = () => activeTokens().filter(token => recommendationEligibleSource(token.source) && decisionAllowsRecommendation(token));
 const decisionStrength = (token: TokenRecord) => (token.modelDecision?.expectedValue || 0) * 4
-  + (token.modelDecision?.cohortPercentile || 0) * 2 + (token.modelDecision?.targetBeforeStopProbability || 0);
+  + (token.modelDecision?.cohortPercentile || 0) * 2 + (token.modelDecision?.targetBeforeStopProbability || 0)
+  + token.score / 100;
 
 export function currentBestBuys() {
   const config = cfg().bestbuys;
@@ -65,23 +79,28 @@ export function currentBestBuys() {
     .filter(token => !inSlots.has(token.ca) && (droppedAt.get(token.ca) || 0) < now - cooldownMs)
     .filter(token => passesPersistence(token, now))
     .map(token => ({ token, rank: rankToken(token) }))
-    .filter(({ token, rank }) => ['A+', 'A'].includes(rank.grade) && rank.timing === 'EARLY'
-      && token.score >= config.min_score && token.totalBuys + token.totalSells >= config.min_trades
-      && token.uniqueBuyers.length >= config.min_unique_buyers && token.curveSol >= config.min_curve_sol
-      && token.devBuyPct <= config.max_dev_pct && (!config.require_social || token.socials.tg || token.socials.x)
+    .filter(({ token, rank }) => ['A+', 'A', 'B'].includes(rank.grade) && ['EARLY', 'FAIR'].includes(rank.timing)
+      && token.score >= config.min_score
+      && Math.max(token.totalBuys + token.totalSells, token.buys5m + token.sells5m) >= config.min_trades
+      && (token.uniqueBuyers.length >= config.min_unique_buyers || token.buys5m >= config.min_unique_buyers)
+      && (token.dex !== 'pumpfun' || token.curveSol >= config.min_curve_sol)
+      && token.devBuyPct <= config.max_dev_pct && hasIndependentOpportunityConfirmation(token, config)
+      && (!config.require_social || hasSocial(token))
       && (!token.bundle || token.bundle.fundedSnipers === 0))
     .sort((left, right) => decisionStrength(right.token) - decisionStrength(left.token));
 
   for (const { token } of candidates) {
-    if (organicSlots().length < config.max_shown) slots.push({ ca: token.ca, enteredAt: now, peakScore: token.score, lane: 'organic' });
-    else {
+    if (organicSlots().length < config.max_shown) {
+      slots.push({ ca: token.ca, enteredAt: now, peakScore: token.score, lane: 'organic' });
+      inSlots.add(token.ca);
+    } else {
       const organic = organicSlots();
       const weakest = organic.reduce((minimum, slot) => decisionStrength(getToken(slot.ca)!) < decisionStrength(getToken(minimum.ca)!) ? slot : minimum, organic[0]);
       const incumbent = getToken(weakest.ca);
       const heldSeconds = (now - weakest.enteredAt) / 1000;
       if (incumbent && heldSeconds >= config.min_hold_seconds && decisionStrength(token) > decisionStrength(incumbent) + 0.25) {
-        droppedAt.set(weakest.ca, now); slots.splice(slots.indexOf(weakest), 1);
-        slots.push({ ca: token.ca, enteredAt: now, peakScore: token.score, lane: 'organic' });
+        droppedAt.set(weakest.ca, now); slots.splice(slots.indexOf(weakest), 1); inSlots.delete(weakest.ca);
+        slots.push({ ca: token.ca, enteredAt: now, peakScore: token.score, lane: 'organic' }); inSlots.add(token.ca);
       }
     }
   }
@@ -96,7 +115,7 @@ export function currentBestBuys() {
       .map(token => ({ token, count: smartCount(token, config) }))
       .filter(({ count }) => count >= config.smart_lane_min_wallets)
       .sort((left, right) => decisionStrength(right.token) - decisionStrength(left.token) || right.count - left.count);
-    if (smart.length) slots.push({ ca: smart[0].token.ca, enteredAt: now, peakScore: smart[0].token.score, lane: 'smart' });
+    if (smart.length) { slots.push({ ca: smart[0].token.ca, enteredAt: now, peakScore: smart[0].token.score, lane: 'smart' }); inSlots.add(smart[0].token.ca); }
   }
 
   if (config.pregrad_lane && !slots.some(slot => slot.lane === 'pregrad')) {
@@ -108,7 +127,7 @@ export function currentBestBuys() {
       .map(token => { const reference = token.curveSamples.find(sample => now - sample.at >= 180_000); return { token, climbing: !reference || token.curveSol > reference.sol }; })
       .filter(({ climbing }) => climbing)
       .sort((left, right) => decisionStrength(right.token) - decisionStrength(left.token));
-    if (near.length) slots.push({ ca: near[0].token.ca, enteredAt: now, peakScore: near[0].token.score, lane: 'pregrad' });
+    if (near.length) { slots.push({ ca: near[0].token.ca, enteredAt: now, peakScore: near[0].token.score, lane: 'pregrad' }); inSlots.add(near[0].token.ca); }
   }
 
   if (config.secondwave_lane && !slots.some(slot => slot.lane === 'secondwave')) {
@@ -120,26 +139,29 @@ export function currentBestBuys() {
       .filter(token => !token.bundle || (token.bundle.clusterPct ?? token.bundle.insiderPct) <= config.max_cluster_pct)
       .filter(token => (token.deployerRep?.cls ?? 'KNOWN') !== 'SERIAL_DEAD' && smartCount(token, config) >= 1 && !['DYING','DEAD'].includes(token.state))
       .sort((left, right) => decisionStrength(right) - decisionStrength(left));
-    if (wave.length) { wave[0].secondWaveAt = now; slots.push({ ca: wave[0].ca, enteredAt: now, peakScore: wave[0].score, lane: 'secondwave' }); }
+    if (wave.length) { wave[0].secondWaveAt = now; slots.push({ ca: wave[0].ca, enteredAt: now, peakScore: wave[0].score, lane: 'secondwave' }); inSlots.add(wave[0].ca); }
   }
 
   for (const slot of slots) if (slot.enteredAt === now) {
     const token = getToken(slot.ca);
-    if (token && token.priceUsd > 0) openPaper(token.ca, token.symbol, (`bb_${slot.lane}`) as PaperSignal, token.priceUsd, token.score, token.modelDecision?.execution || undefined);
+    if (token && token.priceUsd > 0) void openPaper(token.ca, token.symbol, (`bb_${slot.lane}`) as PaperSignal, token.priceUsd, token.score, token.modelDecision?.execution || undefined)
+      .catch(error => console.error('[bestbuys:paper]', (error as Error).message));
   }
 
   return slots.slice().sort((left, right) => left.enteredAt - right.enteredAt).map(slot => {
-    const token = getToken(slot.ca)!; const rank = rankToken(token); const smart = smartStats(token, config); const model = token.modelDecision!;
+    const token = getToken(slot.ca)!; const rank = rankToken(token); const smart = smartStats(token, config); const model = token.modelDecision;
     return {
       ca: token.ca, symbol: token.symbol, grade: rank.grade, timing: rank.timing, lane: slot.lane,
-      label: `${rank.label} · v3 ${(model.targetBeforeStopProbability * 100).toFixed(1)}% target-before-loss · ${(model.cohortPercentile * 100).toFixed(0)}th percentile`,
+      label: model
+        ? `${rank.label} · v3 ${(model.targetBeforeStopProbability * 100).toFixed(1)}% target-before-loss · ${(model.cohortPercentile * 100).toFixed(0)}th percentile`
+        : `${rank.label} · v3 evidence collecting`,
       confidence: rank.confidence, score: token.score, peakScore: slot.peakScore,
       heldMin: Math.round((now - slot.enteredAt) / 60_000), cautions: rank.cautions,
       liq: Math.round(token.liquidityUsd), buys: token.buys5m, sells: token.sells5m,
       smart: smart.wallets, smartElite: smart.elite, pair: token.pairAddress,
-      model: { version: model.modelVersion, targetBeforeStop: model.targetBeforeStopProbability,
+      model: model ? { version: model.modelVersion, targetBeforeStop: model.targetBeforeStopProbability,
         downside: model.downsideProbability, expectedValue: model.expectedValue, uncertainty: model.uncertainty,
-        percentile: model.cohortPercentile, regime: model.regime.kind, execution: model.execution },
+        percentile: model.cohortPercentile, regime: model.regime.kind, execution: model.execution } : null,
     };
   });
 }
