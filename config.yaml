@@ -40,7 +40,7 @@ bundle:
   enabled: true
   cluster_merge_enabled: true
   cluster_max_buyers: 30
-  max_insider_supply_pct: 22    # re-applied 2026-07-15: learner evidence (42 passed tokens at 15-25% insiders -> 0 winners, avg 0.72x, n>=30 bar met); the suggest-only conversion silently deactivated this TIGHTENING
+  max_insider_supply_pct: 22    # evidence-backed tightening remains active
   max_funded_snipers: 2
   count_all_slot0_as_insider: false
   total_supply: 1000000000
@@ -49,12 +49,7 @@ age:
   max_token_age_minutes: 240
   freshness_half_life_minutes: 90
 
-# APPLIED 2026-07-15 from the model's suggestion (suggest-only governance: a human
-# applies; this is that application). Evidence: 11,416 exact-forward-time rows /
-# 83 forward 3x winners — far past the law bars (>=60 samples / >=12 winners).
-# Directions all +1 under exact-forward labeling (the old freshness/buy_pressure
-# inversions were artifacts of the old outcome labeling). Youden J 0.2: weak but
-# real separation; floor set from the same fit. Revert = git revert this commit.
+# Applied from exact-forward-time evidence; learning remains suggest-only.
 weights:
   velocity: 17.3
   organic: 30.7
@@ -65,7 +60,7 @@ weights:
 
 states:
   heating_score_min: 50
-  trigger_score_min: 44          # applied from suggestion 2026-07-15 (was 65 seed — provably unreachable: 0 triggers all window)
+  trigger_score_min: 44
   trigger_min_trades: 12
   trigger_min_unique_buyers: 12
   trigger_buy_ratio_min: 1.3
@@ -73,7 +68,7 @@ states:
   early_runner_min_age: 2
   early_runner_min_buyers: 20
   early_runner_min_trades: 25
-  extended_pct: 40
+  extended_pct: 75              # 40% was pre-empting qualified fast runners before persistence matured
   dying_score_drop: 15
   dying_buy_ratio_max: 0.8
 
@@ -87,17 +82,17 @@ ai:
 
 bestbuys:
   max_shown: 3
-  min_score: 68
-  require_social: true
-  min_unique_buyers: 10
+  min_score: 60                 # B-or-better candidates may enter only with independent confirmation
+  require_social: false         # social OR clean bundle OR measured smart money is required in code
+  min_unique_buyers: 8
   min_trades: 15
-  min_curve_sol: 40
+  min_curve_sol: 30
   max_dev_pct: 7
-  exit_score: 56
+  exit_score: 52
   min_hold_seconds: 120
   reentry_cooldown_min: 15
   supersede_margin: 12
-  min_age_minutes: 4
+  min_age_minutes: 3
   min_retention: 0.65
   net_inflow_window_min: 3
   smart_lane: true
@@ -132,13 +127,11 @@ paper:
   quote_timeout_ms: 4000
   min_forward_samples_per_lane: 100
 
-# The legacy score is only a cheap candidate generator. Calls require all v3 layers:
-# competing-risk survival, cross-sectional rank, entity graph, event-time flow,
-# uncertainty calibration and a built/simulated Jupiter route. Missing evidence means
-# abstain, not a lower-quality alert.
+# The legacy score is a candidate generator. Signal Stack v3 remains shadow-only until
+# its executable promotion evidence clears the production gate.
 signal_model:
   enabled: true
-  mode: shadow                        # enforce is additionally gated in code: >=100 resolved executable calls, a later 30-call holdout, >=2 regimes, passed placebos, target/median lift, and controlled severe losses
+  mode: shadow
   require_transaction_simulation: true
   min_rank_percentile: 0.90
   min_target_before_stop: 0.08
@@ -190,13 +183,13 @@ limits:
 
 conviction:
   enabled: true
-  min_score: 72
-  min_trigger_hold_seconds: 90
+  min_score: 64
+  min_trigger_hold_seconds: 45
   require_clean_bundle: true
   min_smart_wallets: 1
   smart_wallet_window_min: 30
   require_social: true
-  max_run_pct: 25
+  max_run_pct: 80               # measured from trigger entry, not the much earlier first-score baseline
   max_alerts_per_day: 5
 
 learning:
