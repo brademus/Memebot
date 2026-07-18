@@ -84,11 +84,11 @@ export function startWinnerWalletMiner() {
 
 async function runWinnerMining() {
   if (!pool) return;
-  const w = cfg().wallets;
+  const settings = cfg().wallets;
   diag.lastRun = new Date().toISOString();
   diag.lastError = null;
 
-  // 1. The market's biggest movers right now nominate early buyers.
+  // The market's biggest movers nominate early buyers.
   const movers: { ca: string; chg: number }[] = [];
   for (const path of ['/pools?sort=h24_volume_usd_desc', '/trending_pools']) {
     try {
@@ -98,18 +98,17 @@ async function runWinnerMining() {
       for (const item of data.data || []) {
         const ca = (item.relationships?.base_token?.data?.id || '').replace(/^solana_/, '');
         const change = Number(item.attributes?.price_change_percentage?.h24) || 0;
-        if (ca && change >= w.winner_mining_min_pct) movers.push({ ca, chg: change });
+        if (ca && change >= settings.winner_mining_min_pct) movers.push({ ca, chg: change });
       }
     } catch { /* best effort */ }
   }
   diag.moversScanned = movers.length;
   if (!movers.length) return;
 
-  // 2. Pull early buyers, skipping wallets already known to the system.
   const candidates = new Map<string, number>();
   const tracked = new Set((await pool.query(`SELECT wallet FROM smart_wallets`).catch(() => ({ rows: [] as any[] })))
     .rows.map((row: any) => row.wallet));
-  for (const mover of movers.slice(0, w.winner_mining_max_mints)) {
+  for (const mover of movers.slice(0, settings.winner_mining_max_mints)) {
     const buyers = await earlyBuyers(mover.ca, 3).catch(() => [] as string[]);
     for (const buyer of buyers) {
       if (tracked.has(buyer)) continue;
@@ -118,9 +117,8 @@ async function runWinnerMining() {
   }
   diag.candidatesfound = candidates.size;
 
-  // 3. The wallet's own realized record decides whether it is tracked.
   let added = 0;
-  const ranked = [...candidates.entries()].sort((a, b) => b[1] - a[1]).slice(0, w.winner_mining_max_vet);
+  const ranked = [...candidates.entries()].sort((left, right) => right[1] - left[1]).slice(0, settings.winner_mining_max_vet);
   diag.vetted = 0;
   diag.rejected = 0;
   diag.marginal = 0;
@@ -152,8 +150,8 @@ export async function runPumpfunActivityMining() {
   diag.activityPromoted = 0;
   diag.activityRejected = 0;
 
-  // Heavy activity is measured directly from the Pump.fun trade stream. This is
-  // intentionally not a popularity list: candidates still need profitable exits.
+  // Heavy activity is measured from every Pump.fun trade event currently captured
+  // by the bot's full token stream. Activity nominates; realized profitability decides.
   const result = await pool.query(`
     WITH activity AS (
       SELECT wallet,
@@ -176,7 +174,9 @@ export async function runPumpfunActivityMining() {
     SELECT activity.*
       FROM activity
       LEFT JOIN smart_wallets known ON known.wallet=activity.wallet
-     ORDER BY known.active DESC NULLS LAST, activity.trades DESC, activity.tokens DESC, activity.buy_sol DESC
+     ORDER BY (known.wallet IS NULL) DESC,
+              (known.active IS FALSE) DESC,
+              activity.trades DESC,activity.tokens DESC,activity.buy_sol DESC
      LIMIT $5`, [String(ACTIVITY_LOOKBACK_HOURS), ACTIVITY_MIN_TRADES, ACTIVITY_MIN_BUYS, ACTIVITY_MIN_TOKENS, ACTIVITY_MAX_VET]);
 
   const candidates: PumpfunActivityCandidate[] = result.rows.map((row: any) => ({
@@ -190,17 +190,17 @@ export async function runPumpfunActivityMining() {
   }));
   diag.activityCandidates = candidates.length;
 
-  let changed = false;
+  let promotedAny = false;
   for (const activity of candidates) {
     const quality = await analyzeWallet(activity.wallet, 6);
     const promoted = qualifiesActivityWallet(quality, activity);
     diag.activityVetted++;
-    if (promoted) diag.activityPromoted++;
+    if (promoted) { diag.activityPromoted++; promotedAny = true; }
     else diag.activityRejected++;
 
     const nextType = promoted ? 'pumpfun_activity' : 'pumpfun_candidate';
     const source = `pumpfun_activity:${activity.trades}trades/${activity.tokens}tokens/${ACTIVITY_LOOKBACK_HOURS}h`;
-    const update = await pool.query(
+    await pool.query(
       `INSERT INTO smart_wallets
          (wallet,type,winners_hit,discovered_from,active,last_validated,quality_verdict,win_rate,round_trips,quality_checked_at,last_active)
        VALUES ($1,$2,0,$3,$4,now(),$5,$6,$7,now(),$8)
@@ -213,16 +213,14 @@ export async function runPumpfunActivityMining() {
          END,
          last_validated=now(),quality_verdict=EXCLUDED.quality_verdict,win_rate=EXCLUDED.win_rate,
          round_trips=EXCLUDED.round_trips,quality_checked_at=now(),
-         last_active=GREATEST(smart_wallets.last_active,EXCLUDED.last_active)
-       RETURNING active,type`,
+         last_active=COALESCE(GREATEST(smart_wallets.last_active,EXCLUDED.last_active),EXCLUDED.last_active,smart_wallets.last_active)`,
       [activity.wallet, nextType, source, promoted, quality.verdict, +quality.winRate.toFixed(3), quality.roundTrips, activity.lastTradeAt]);
-    changed = changed || !!update.rowCount;
 
     const verdict = promoted ? 'PROMOTED' : 'candidate only';
     console.log(`[activity-miner] ${verdict} ${activity.wallet.slice(0, 6)} — ${activity.trades} trades/${activity.tokens} tokens, `
       + `${quality.realizedPnlSol.toFixed(2)} SOL, ${(quality.realizedRoi * 100).toFixed(0)}% ROI, ${quality.verdict}`);
   }
 
-  if (changed) syncWebhook().catch(() => {});
+  if (promotedAny) syncWebhook().catch(() => {});
   return winnerMinerDiag();
 }
