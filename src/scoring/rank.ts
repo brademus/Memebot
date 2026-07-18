@@ -1,4 +1,5 @@
 import { TokenRecord } from '../types';
+import { cfg } from '../config';
 
 // Buy-quality rank shown per token. This is a COMPOSITE of what's measurable now,
 // with an explicit confidence flag — NOT a prediction that a coin will pump.
@@ -35,8 +36,9 @@ export function rankToken(t: TokenRecord): Rank {
   // ---- timing from state + how far it's moved since we first scored it ----
   const moved = t.firstScorePrice && t.priceUsd
     ? ((t.priceUsd / t.firstScorePrice) - 1) * 100 : 0;
+  const extensionCeiling = cfg().states.extended_pct;
   let timing: Rank['timing'] = 'FAIR';
-  if (t.state === 'EXTENDED' || moved >= 40) { timing = 'LATE'; cautions.push(`already +${moved.toFixed(0)}% since first signal`); }
+  if (t.state === 'EXTENDED' || moved >= extensionCeiling) { timing = 'LATE'; cautions.push(`already +${moved.toFixed(0)}% since first signal`); }
   else if (t.state === 'DYING') { timing = 'STALE'; cautions.push('momentum rolling over'); }
   else if (t.state === 'HEATING' || t.state === 'TRIGGER') timing = 'EARLY';
 
