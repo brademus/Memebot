@@ -1,5 +1,5 @@
 import { TokenRecord } from '../types';
-import { assessEntryTiming } from './conviction-queue';
+import { assessEntryTiming, ConvictionQueueStatus } from './conviction-queue';
 
 // Compatibility surface for older diagnostics. Conviction is now a pre-alert queue
 // state; there is no second post-buy conviction alert or separate daily budget.
@@ -9,8 +9,12 @@ export interface ConvictionResult {
   missing: string[];
 }
 
-export function checkConviction(token: TokenRecord, now = Date.now()): ConvictionResult {
-  const timing = assessEntryTiming(token, now);
+export function checkConviction(
+  token: TokenRecord,
+  now = Date.now(),
+  override?: ConvictionQueueStatus,
+): ConvictionResult {
+  const timing = assessEntryTiming(token, now, override);
   const confirmed: string[] = [];
   if (timing.conviction.queued) confirmed.push(`selected in ${timing.conviction.lane} conviction lane`);
   if (timing.conviction.holdReady) confirmed.push(`conviction held ${Math.round(timing.conviction.heldSeconds)}s`);
