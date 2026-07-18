@@ -1,4 +1,4 @@
-import { initDb, upsertToken, markTrigger, markConviction, freezeEarlySubs, saveRuntime, loadHydratable } from './db';
+import { initDb, upsertToken, markTrigger, freezeEarlySubs, saveRuntime, loadHydratable } from './db';
 import { openPaper, startPaperTrader } from './paper/paper';
 import { startPumpfunMonitor, setSolPrice, unsubscribeToken, subscribeToken, resubscribeAll, startSubscriptionReconciler } from './ingest/pumpfun';
 import { startDexscreenerPoller } from './ingest/dexscreener';
@@ -9,8 +9,8 @@ import { deployerRep } from './gates/deployer';
 import { checkBundle } from './gates/bundle';
 import { scoreToken } from './scoring/score';
 import { updateState } from './scoring/states';
-import { checkConviction, consumeBudget } from './scoring/conviction';
-import { alertTrigger, alertConviction } from './alerts/telegram';
+import { dropConvictionCandidate, isConvictionCandidate, refreshConvictionQueue } from './scoring/conviction-queue';
+import { alertTrigger } from './alerts/telegram';
 import { startOutcomeLogger } from './outcomes/logger';
 import { startLadderMonitor } from './alerts/ladder';
 import { startAutotune } from './tuning/autotune';
@@ -33,84 +33,81 @@ import { TokenRecord } from './types';
 const gateAttempts = new Map<string, number>();
 const lastGateAt = new Map<string, number>();
 const MAX_GATE_ATTEMPTS = 60;
-const GATE_COOLDOWN_MS = 45_000;   // efficiency: don't re-hit RugCheck/Helius every 10s poll
-// bundle re-check attempts: Helius indexing lags unpredictably, so ONE attempt at
-// 3-8min left 99.93% of tokens permanently unverified (21/29k coverage) — and the
-// verified-clean signal (2.69x avg) is the strongest one we have. Retry at
-// expanding ages until data exists, capped, and only for tokens worth the calls.
+const GATE_COOLDOWN_MS = 45_000;
+// Helius indexing lags unpredictably, so retry bundle verification at expanding ages.
 const bundleAttempts = new Map<string, number>();
-const BUNDLE_RETRY_AGES = [2, 5, 10, 18, 28, 40];   // more rungs w/ Developer-tier headroom — chase 100% insider coverage (unlocks conviction)
+const BUNDLE_RETRY_AGES = [2, 5, 10, 18, 28, 40];
 export const bundleCoverage = { attempts: 0, verified: 0 };
 
-// LAST-RESORT GUARDS: a stray rejection anywhere (a fetch we forgot to catch,
-// a webhook parse edge) must not take down a process holding live market state.
-process.on('unhandledRejection', (e) => console.error('[fatal-guard] unhandled rejection:', (e as Error)?.message || e));
-process.on('uncaughtException', (e) => {
-  console.error('[fatal-guard] uncaught exception, exiting for clean restart:', e.message, e.stack);
-  process.exit(1);   // Railway restarts us; a clean death beats corrupt state
+process.on('unhandledRejection', (error) =>
+  console.error('[fatal-guard] unhandled rejection:', (error as Error)?.message || error));
+process.on('uncaughtException', (error) => {
+  console.error('[fatal-guard] uncaught exception, exiting for clean restart:', error.message, error.stack);
+  process.exit(1);
 });
 
 async function main() {
   await initDb();
 
   // ===== WARM BOOT: rebuild the watchlist from the last runtime snapshot =====
-  // Deploys/restarts used to reset everything — every WATCHING coin lost its
-  // persistence timers and state, which suppressed triggers (a coin must SURVIVE
-  // to trigger, and each ship rebooted its world). Hydration runs BEFORE the
-  // pump.fun stream connects, so the socket's open-handler resubscribes the
-  // restored curve tokens automatically.
   try {
     const rows = await loadHydratable(Math.min(150, Math.floor(cfg().limits.max_tracked_tokens * 0.3)));
-    for (const r of rows) {
+    for (const row of rows) {
       if (hydrateToken(
-        { ca: r.ca, symbol: r.symbol, name: r.name, creator: r.creator, source: r.source,
-          firstSeenMs: Number(r.first_seen_ms), earlyBuyers: r.early_buyers || [] },
-        r.runtime)) hydration.restored++;
+        {
+          ca: row.ca, symbol: row.symbol, name: row.name, creator: row.creator, source: row.source,
+          firstSeenMs: Number(row.first_seen_ms), earlyBuyers: row.early_buyers || [],
+        },
+        row.runtime,
+      )) hydration.restored++;
     }
     hydration.at = new Date().toISOString();
-    if (hydration.restored)
+    if (hydration.restored) {
       console.log(`[hydrate] restored ${hydration.restored} tokens from the last snapshot — deploys no longer reset the watchlist`);
-    // CRITICAL: restored tokens were inserted AFTER the socket's open-handler ran,
-    // so they have NO trade subscription — subscribe them once the stream connects.
-    // Without this, hydrated coins show 0 buys/0 sells forever and can't score.
-    setTimeout(() => { const n = resubscribeAll(); if (n) console.log(`[hydrate] subscribed ${n} restored token streams`); }, 8_000);
-  } catch (e) { console.error('[hydrate]', (e as Error).message); }
+    }
+    setTimeout(() => {
+      const count = resubscribeAll();
+      if (count) console.log(`[hydrate] subscribed ${count} restored token streams`);
+    }, 8_000);
+  } catch (error) {
+    console.error('[hydrate]', (error as Error).message);
+  }
   startSubscriptionReconciler();
-  startPaperTrader();   // paper-trade P&L: mark-to-market + exits every 60s
+  startPaperTrader();
 
-  // continuous snapshot: every gated, non-dead token flushed every 45s, plus a
-  // final flush on SIGTERM (Railway sends it before every redeploy).
   setInterval(() => {
-    saveRuntime(allTokens().filter(t => t.gated === true && t.state !== 'DEAD')).catch(() => {});
+    saveRuntime(allTokens().filter(token => token.gated === true && token.state !== 'DEAD')).catch(() => {});
   }, 45_000);
   let shuttingDown = false;
-  const flushAndExit = async (sig: string) => {
-    if (shuttingDown) return; shuttingDown = true;
-    console.log(`[hydrate] ${sig} — flushing watchlist snapshot before exit`);
-    const guard = setTimeout(() => process.exit(0), 8_000);   // Railway kills after ~10s
-    try { await saveRuntime(allTokens().filter(t => t.gated === true && t.state !== 'DEAD')); } catch {}
-    clearTimeout(guard); process.exit(0);
+  const flushAndExit = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[hydrate] ${signal} — flushing watchlist snapshot before exit`);
+    const guard = setTimeout(() => process.exit(0), 8_000);
+    try {
+      await saveRuntime(allTokens().filter(token => token.gated === true && token.state !== 'DEAD'));
+    } catch {}
+    clearTimeout(guard);
+    process.exit(0);
   };
-  process.on('SIGTERM', () => { flushAndExit('SIGTERM'); });
-  process.on('SIGINT', () => { flushAndExit('SIGINT'); });
+  process.on('SIGTERM', () => { void flushAndExit('SIGTERM'); });
+  process.on('SIGINT', () => { void flushAndExit('SIGINT'); });
 
   startServer();
 
-  // one place cleans ALL per-token side state, whether a token is purged by the
-  // janitor OR evicted by the store cap — prevents slow map leaks on eviction.
   onTokenRemove((ca) => {
     gateAttempts.delete(ca);
     lastGateAt.delete(ca);
     bundleAttempts.delete(ca);
+    dropConvictionCandidate(ca, 'token removed');
     unsubscribeToken(ca);
   });
 
-  // keep a live SOL/USD price so curve SOL amounts convert to real USD for gating
   const refreshSol = async () => {
     try {
-      const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
-      const d: any = await r.json();
-      if (d?.solana?.usd > 0) setSolPrice(d.solana.usd);
+      const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
+      const data: any = await response.json();
+      if (data?.solana?.usd > 0) setSolPrice(data.solana.usd);
     } catch {}
   };
   await refreshSol();
@@ -118,178 +115,170 @@ async function main() {
   startOutcomeLogger();
   startLadderMonitor();
 
-  // wallet subsystems: discovery mines winners for smart wallets; tracker watches them live
   startWalletDiscovery();
   const walletSurface = (ca: string) => {
-    // a tracked wallet bought a token we're not watching — pull it in for gating.
-    // It rides the normal pipeline from here: gates, scoring, states, smart lane.
-    const t = addToken({ ca, symbol: ca.slice(0, 4) + '…', name: '(wallet-surfaced)', creator: null, source: 'dexscreener' });
-    if (t) {
-      subscribeToken(ca);   // curve tokens need the trade stream or they stay data-starved
+    const token = addToken({
+      ca,
+      symbol: ca.slice(0, 4) + '…',
+      name: '(wallet-surfaced)',
+      creator: null,
+      source: 'wallet',
+    });
+    if (token) {
+      subscribeToken(ca);
       console.log(`[wallets] smart wallet surfaced new token ${ca}`);
     }
   };
-  startWalletTracker(walletSurface);       // polling fallback (stands down when webhook is live)
-  startWalletWebhook(walletSurface);       // primary: real-time push for ALL active wallets
+  startWalletTracker(walletSurface);
+  startWalletWebhook(walletSurface);
   startMomentumScanner(async (ca) => {
-    // second discovery engine: runners + non-pump.fun launches. Seeded with a
-    // full pool snapshot, so gate immediately on the AMM path.
-    const t = getToken(ca);
-    if (t) { subscribeToken(ca); await tryGate(t); }   // if still on curve, stream its trades too
+    const token = getToken(ca);
+    if (token) {
+      subscribeToken(ca);
+      await tryGate(token);
+    }
   });
   startSocialScanner(async (ca) => {
-    // paid-boost discovery: real money promoting a coin = attention lead. Still
-    // rides every gate — paid promotion is not a safety pass.
-    const t = getToken(ca);
-    if (t) { subscribeToken(ca); await tryGate(t); }
+    const token = getToken(ca);
+    if (token) {
+      subscribeToken(ca);
+      await tryGate(token);
+    }
   });
   startAutotune();
-  startFilterLearner();   // the closed loop: filters measure their own mistakes and adjust
-  startScoreCalibrator();  // the closed loop: the SCORE fits itself to outcomes over time
-  startWinnerWalletMiner();  // find traders proven by the market's biggest movers, vet them, track the good ones
+  startFilterLearner();
+  startScoreCalibrator();
+  startWinnerWalletMiner();
 
-  // shared gate runner — called from BOTH the create event (curve-seeded liquidity)
-  // and the Dexscreener poller (AMM liquidity). Handles cooldown + retry + verdict.
-  const tryGate = async (t: TokenRecord) => {
-    if (t.gated !== null) return;
-    if (t.liquidityUsd <= 0) return;
-    // TRACTION FLOOR: most mints die with a handful of trades — don't spend
-    // RugCheck/Helius on a coin that hasn't shown life. With the full trade
-    // stream this check is free; the janitor purges never-woke mints early.
-    const tf = cfg().traction_floor;
-    if (tf?.enabled && t.dex === 'pumpfun' && getStreamMode() === 'full') {
-      const trades = t.totalBuys + t.totalSells;
-      const bonded = t.curveSol - 30;   // fresh curve starts ~30 SOL virtual
-      if (trades < tf.min_trades && bonded < tf.min_bonded_sol) return;   // not a kill — just not yet
+  const tryGate = async (token: TokenRecord) => {
+    if (token.gated !== null || token.liquidityUsd <= 0) return;
+    const traction = cfg().traction_floor;
+    if (traction?.enabled && token.dex === 'pumpfun' && getStreamMode() === 'full') {
+      const trades = token.totalBuys + token.totalSells;
+      const bonded = token.curveSol - 30;
+      if (trades < traction.min_trades && bonded < traction.min_bonded_sol) return;
     }
-    const last = lastGateAt.get(t.ca) || 0;
+    const last = lastGateAt.get(token.ca) || 0;
     if (Date.now() - last < GATE_COOLDOWN_MS) return;
-    lastGateAt.set(t.ca, Date.now());
-    const attempts = (gateAttempts.get(t.ca) || 0) + 1;
-    gateAttempts.set(t.ca, attempts);
-    const fail = await runGates(t);
+    lastGateAt.set(token.ca, Date.now());
+    const attempts = (gateAttempts.get(token.ca) || 0) + 1;
+    gateAttempts.set(token.ca, attempts);
+    const fail = await runGates(token);
     if (fail === null) {
-      t.gated = true; t.state = 'WATCHING'; gateAttempts.delete(t.ca);
-      if (!t.deployerRep) deployerRep(t.creator).then(r => { if (r) t.deployerRep = r; }).catch(() => {});
-      recordScan({ ca: t.ca, symbol: t.symbol, verdict: 'PASS', reason: null, at: Date.now() });
-      console.log(`[gate] PASS  $${t.symbol} ${t.ca}`);
+      token.gated = true;
+      token.state = 'WATCHING';
+      gateAttempts.delete(token.ca);
+      if (!token.deployerRep) {
+        deployerRep(token.creator).then(result => { if (result) token.deployerRep = result; }).catch(() => {});
+      }
+      recordScan({ ca: token.ca, symbol: token.symbol, verdict: 'PASS', reason: null, at: Date.now() });
+      console.log(`[gate] PASS  $${token.symbol} ${token.ca}`);
     } else if (isTerminalFail(fail) || attempts >= MAX_GATE_ATTEMPTS) {
-      t.gated = false; t.gateFailReason = fail;
-      if (t.firstScorePrice === null && t.priceUsd > 0) t.firstScorePrice = t.priceUsd;
-      recordScan({ ca: t.ca, symbol: t.symbol, verdict: 'KILL', reason: fail, at: Date.now() });
-      console.log(`[gate] KILL  $${t.symbol} — ${fail}`);
-      await upsertToken(t);
+      token.gated = false;
+      token.gateFailReason = fail;
+      if (token.firstScorePrice === null && token.priceUsd > 0) token.firstScorePrice = token.priceUsd;
+      recordScan({ ca: token.ca, symbol: token.symbol, verdict: 'KILL', reason: fail, at: Date.now() });
+      console.log(`[gate] KILL  $${token.symbol} — ${fail}`);
+      await upsertToken(token);
     }
   };
 
-  // Dexscreener callback: DATA ONLY (enrichment + gate attempts for AMM-path tokens).
-  // Scoring/state runs on its own loop below so curve tokens without a Dexscreener
-  // pair still score and transition — they were frozen after gating before this.
-  startDexscreenerPoller(async (t: TokenRecord) => {
-    await tryGate(t);
+  startDexscreenerPoller(async (token: TokenRecord) => {
+    await tryGate(token);
   });
 
-  // SCORING LOOP — every 5s over all gated tokens, independent of any data source.
+  // Lifecycle loop:
+  // Watchlist -> Conviction queue -> entry timing -> one buy alert/current call.
   setInterval(async () => {
-    for (const t of allTokens()) {
-      if (t.gated !== true || t.state === 'DEAD') continue;
-      // prune the rolling trade window even when no new trades arrive (decay to zero)
-      const cutoff = Date.now() - 5 * 60_000;
-      while (t.recentTrades.length && t.recentTrades[0].at < cutoff) t.recentTrades.shift();
-      if (t.dex === 'pumpfun') {
-        t.buys5m = t.recentTrades.filter(x => x.buy).length;
-        t.sells5m = t.recentTrades.length - t.buys5m;
+    // Queue ownership is backend-driven. Dashboard traffic is never required for a
+    // coin to become a conviction or progress toward a buy alert.
+    refreshConvictionQueue();
+
+    for (const token of allTokens()) {
+      if (token.gated !== true || token.state === 'DEAD') continue;
+      const now = Date.now();
+      const cutoff = now - 5 * 60_000;
+      while (token.recentTrades.length && token.recentTrades[0].at < cutoff) token.recentTrades.shift();
+      if (token.dex === 'pumpfun') {
+        token.buys5m = token.recentTrades.filter(trade => trade.buy).length;
+        token.sells5m = token.recentTrades.length - token.buys5m;
       }
-      // LATE BUNDLE RE-CHECK: at gate time (seconds old) Helius hasn't indexed the
-      // token yet, so the insider check came back empty on ~99% of tokens. Re-run
-      // once at 3-8 min. Report data: insider-clean tokens averaged 2.69x vs 0.88x
-      // unknown — this is the single strongest per-token signal we have.
-      const ageMinB = (Date.now() - t.firstSeen) / 60000;
-      const rung = bundleAttempts.get(t.ca) || 0;
-      const worthIt = t.score >= 25 || t.state !== 'WATCHING';   // Developer tier: verify more of the funnel (lower bar, limiter guards RPS)
-      if (t.bundle === null && worthIt && rung < BUNDLE_RETRY_AGES.length && ageMinB >= BUNDLE_RETRY_AGES[rung]) {
-        bundleAttempts.set(t.ca, rung + 1);
+
+      const ageMin = (now - token.firstSeen) / 60_000;
+      const rung = bundleAttempts.get(token.ca) || 0;
+      const worthIt = token.score >= 25 || token.state !== 'WATCHING';
+      if (token.bundle === null && worthIt && rung < BUNDLE_RETRY_AGES.length && ageMin >= BUNDLE_RETRY_AGES[rung]) {
+        bundleAttempts.set(token.ca, rung + 1);
         bundleCoverage.attempts++;
-        checkBundle(t).then(res => {
-          if (t.bundle !== null) bundleCoverage.verified++;
-          if (!res.pass) {
-            t.insiderKilled = true;   // sticky — state machine holds DYING from here
-            t.state = 'DYING';        // insider structure found late — off the screen, slot-ejected
-            console.log(`[bundle-late] $${t.symbol} — ${res.reason}`);
+        checkBundle(token).then(result => {
+          if (token.bundle !== null) bundleCoverage.verified++;
+          if (!result.pass) {
+            token.insiderKilled = true;
+            token.state = 'DYING';
+            dropConvictionCandidate(token.ca, result.reason);
+            console.log(`[bundle-late] $${token.symbol} — ${result.reason}`);
           }
-          upsertToken(t).catch(() => {});
+          upsertToken(token).catch(() => {});
         }).catch(() => {});
       }
-      scoreToken(t);
-      // FREEZE early sub-scores ONCE at a fixed young age. The live `subs` column
-      // is overwritten as a token matures, so training on it teaches the model
-      // what mature winners look like (too late). early_subs captures what a coin
-      // looked like WHILE STILL YOUNG — the only snapshot that can predict.
-      const ageMinF = (Date.now() - t.firstSeen) / 60000;
-      if (t.gated === true && !(t as any).earlyFrozen && ageMinF >= cfg().calibration.freeze_age_min) {
-        (t as any).earlyFrozen = true;
-        freezeEarlySubs(t.ca, t.subs).catch(() => {});
+
+      scoreToken(token);
+      const freezeAge = (now - token.firstSeen) / 60_000;
+      if (!(token as any).earlyFrozen && freezeAge >= cfg().calibration.freeze_age_min) {
+        (token as any).earlyFrozen = true;
+        freezeEarlySubs(token.ca, token.subs).catch(() => {});
       }
-      // keep DB labels fresh — scores were only written on state changes, so
-      // never-transitioned tokens carried stale near-zero labels into the report
-      if (!('lastUpsertAt' in (t as any)) || Date.now() - (t as any).lastUpsertAt > 10 * 60_000) {
-        (t as any).lastUpsertAt = Date.now();
-        upsertToken(t).catch(() => {});
+      if (!('lastUpsertAt' in (token as any)) || now - (token as any).lastUpsertAt > 10 * 60_000) {
+        (token as any).lastUpsertAt = now;
+        upsertToken(token).catch(() => {});
       }
-      const changed = updateState(t);
+
+      // Prepare analysis while the token waits in Convictions, before the alert.
+      if (isConvictionCandidate(token.ca)) {
+        if (!token.aiNote) generateNote(token).catch(() => {});
+        if (!token.aiConviction) aiConvictionRead(token).catch(() => {});
+      }
+
+      const changed = updateState(token, now);
       if (changed === 'TRIGGER') {
-        if (!t.triggeredAt) { t.triggeredAt = Date.now(); t.triggerPrice = t.priceUsd; }
-        markTrigger(t.ca, t.priceUsd);
-        openPaper(t.ca, t.symbol, 'trigger', t.priceUsd, t.score);   // paper-buy the instant we call it
-        alertTrigger(t);                        // alert fires IMMEDIATELY
-        generateNote(t).catch(() => {});        // analyst note follows async, shows on dashboard
-        aiConvictionRead(t).catch(() => {});    // AI narrative read -> bounded, logged score nudge
-        console.log(`[state] 🎯 TRIGGER $${t.symbol} score=${t.score}`);
-      }
-      // CONVICTION: evaluated every tick while a token holds TRIGGER. Fires at most
-      // once per token, only when ALL independent confirmations agree (verified-clean
-      // insiders, smart-wallet buys, held through the burst, still early, socials).
-      if (t.state === 'TRIGGER' && !t.convictionAt) {
-        const cv = checkConviction(t);
-        if (cv.pass) {
-          t.convictionAt = Date.now();
-          consumeBudget();
-          markConviction(t.ca, t.priceUsd);
-          openPaper(t.ca, t.symbol, 'conviction', t.priceUsd, t.score);
-          alertConviction(t, cv.confirmed);
-          upsertToken(t).catch(() => {});
-          console.log(`[state] 🔥 CONVICTION $${t.symbol} — ${cv.confirmed.join('; ')}`);
+        if (!token.triggeredAt) {
+          token.triggeredAt = now;
+          token.triggerPrice = token.priceUsd;
         }
+        await markTrigger(token.ca, token.priceUsd);
+        await openPaper(token.ca, token.symbol, 'trigger', token.priceUsd, token.score);
+        await alertTrigger(token);
+        dropConvictionCandidate(token.ca, 'alerted');
+        console.log(`[state] 📣 BUY ALERT $${token.symbol} score=${token.score}`);
       }
-      if (changed) upsertToken(t).catch(() => {});
+      if (changed) upsertToken(token).catch(() => {});
     }
   }, 5000);
 
   startPumpfunMonitor(async (ca) => {
-    const t = getToken(ca);
-    if (t) {
-      console.log(`[pumpfun] new mint $${t.symbol} ${ca}`);
-      // gate immediately using curve-seeded liquidity — no wait for Dexscreener
-      await tryGate(t);
+    const token = getToken(ca);
+    if (token) {
+      console.log(`[pumpfun] new mint $${token.symbol} ${ca}`);
+      await tryGate(token);
     }
   });
 
-  // SSE push every 2s — dashboard stays live without hammering per-token
   setInterval(broadcast, 2000);
 
-  // janitor: most pump.fun mints die on the curve with zero liquidity — purge
-  // anything still PENDING after 45min so the store stays full of live candidates
   setInterval(() => {
     const now = Date.now();
-    const pendingCutoff = now - (cfg().traction_floor?.pending_purge_min ?? 45) * 60_000;   // no traction by now = dead mint
-    const killedCutoff = now - 30 * 60_000;    // killed: keep 30min for the seen feed
-    const deadCutoff = now - 5 * 3600_000;     // DEAD (aged out): gone after 5h (durable copy is in Postgres)
+    const pendingCutoff = now - (cfg().traction_floor?.pending_purge_min ?? 45) * 60_000;
+    const killedCutoff = now - 30 * 60_000;
+    const deadCutoff = now - 5 * 3600_000;
     let purged = 0;
-    const drop = (ca: string) => { removeToken(ca); purged++; };   // side-map + unsub cleanup runs via onTokenRemove
-    for (const t of allTokens()) {
-      if (t.gated === null && t.firstSeen < pendingCutoff) drop(t.ca);
-      else if (t.gated === false && t.firstSeen < killedCutoff) drop(t.ca);
-      else if (t.state === 'DEAD' && t.firstSeen < deadCutoff) drop(t.ca);
+    const drop = (ca: string) => {
+      removeToken(ca);
+      purged++;
+    };
+    for (const token of allTokens()) {
+      if (token.gated === null && token.firstSeen < pendingCutoff) drop(token.ca);
+      else if (token.gated === false && token.firstSeen < killedCutoff) drop(token.ca);
+      else if (token.state === 'DEAD' && token.firstSeen < deadCutoff) drop(token.ca);
     }
     if (purged) console.log(`[janitor] purged ${purged} stale tokens`);
   }, 5 * 60_000);
@@ -297,12 +286,15 @@ async function main() {
   console.log('[memewatch] running');
 }
 
-// fails that can't self-heal with time vs. ones that can (liquidity grows on the curve)
 function isTerminalFail(reason: string): boolean {
-  return ['mint_authority_active', 'freeze_authority_active', 'sell_sim_failed',
-          'deployer_blacklisted'].some(r => reason.startsWith(r)) ||
-         reason.startsWith('top_holder_') || reason.startsWith('deployer_fresh') ||
-         reason.startsWith('deployer_hyper');
+  return ['mint_authority_active', 'freeze_authority_active', 'sell_sim_failed', 'deployer_blacklisted']
+    .some(prefix => reason.startsWith(prefix))
+    || reason.startsWith('top_holder_')
+    || reason.startsWith('deployer_fresh')
+    || reason.startsWith('deployer_hyper');
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+main().catch(error => {
+  console.error(error);
+  process.exit(1);
+});
