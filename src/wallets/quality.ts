@@ -2,12 +2,8 @@ import { env } from '../config';
 import { heliusTxsToCreation } from '../helius';
 
 // WALLET QUALITY ANALYZER — judge a wallet on ITS OWN record, not just overlap
-// with our winners. This breaks the circular blind spot: discovery can only find
-// wallets that were early on coins WE already logged as winners, so a great trader
-// who bought a 20x we never saw is invisible. By scoring a candidate's independent
-// memecoin P&L from its raw Helius history, we can (a) reject wallets that merely
-// got lucky on one of our winners, and (b) admit wallets surfaced by weaker signals
-// (co-buying) if their own record is strong.
+// with our winners. Discovery sources may nominate a wallet, but promotion requires
+// independently measured round trips, positive realized SOL P&L, and positive ROI.
 
 const WSOL = 'So11111111111111111111111111111111111111112';
 
@@ -15,7 +11,11 @@ export interface WalletQuality {
   wallet: string;
   tokensTraded: number;
   roundTrips: number;
+  wins: number;
   winRate: number;
+  realizedPnlSol: number;
+  deployedSol: number;
+  realizedRoi: number;
   medianHoldMin: number | null;
   flags: string[];
   verdict: 'ELITE' | 'GOOD' | 'MARGINAL' | 'REJECT';
@@ -34,11 +34,25 @@ export interface WalletDayPerformance {
   measured: boolean;
 }
 
+const rounded = (value: number, decimals = 4) => {
+  const factor = 10 ** decimals;
+  return Math.round(value * factor) / factor;
+};
+
 export async function analyzeWallet(wallet: string, maxPages = 6): Promise<WalletQuality> {
   const txs = await heliusTxsToCreation(wallet, maxPages);
   const q: WalletQuality = {
-    wallet, tokensTraded: 0, roundTrips: 0, winRate: 0,
-    medianHoldMin: null, flags: [], verdict: 'REJECT',
+    wallet,
+    tokensTraded: 0,
+    roundTrips: 0,
+    wins: 0,
+    winRate: 0,
+    realizedPnlSol: 0,
+    deployedSol: 0,
+    realizedRoi: 0,
+    medianHoldMin: null,
+    flags: [],
+    verdict: 'REJECT',
   };
   if (txs.length < 8) { q.flags.push('thin_history'); return q; }
 
@@ -79,13 +93,16 @@ export async function analyzeWallet(wallet: string, maxPages = 6): Promise<Walle
 
   const holds: number[] = [];
   let wins = 0, roundTrips = 0, fast = 0, bags = 0;
+  let realizedPnlSol = 0, deployedSol = 0;
   for (const [, m] of perMint) {
     if (m.tokIn <= 0) continue;
     q.tokensTraded++;
     const exitedFraction = m.tokOut / Math.max(m.tokIn, 1);
-    if (exitedFraction >= 0.5 && m.firstBuyHadSol) {
+    if (exitedFraction >= 0.5 && m.firstBuyHadSol && m.solOut > 0) {
       roundTrips++;
       const pnl = m.solIn - m.solOut;
+      realizedPnlSol += pnl;
+      deployedSol += m.solOut;
       if (pnl > 0) wins++;
       if (m.lastSellAt && m.firstAt) {
         const holdMin = (m.lastSellAt - m.firstAt) / 60000;
@@ -98,7 +115,11 @@ export async function analyzeWallet(wallet: string, maxPages = 6): Promise<Walle
   }
 
   q.roundTrips = roundTrips;
+  q.wins = wins;
   q.winRate = roundTrips > 0 ? wins / roundTrips : 0;
+  q.realizedPnlSol = rounded(realizedPnlSol);
+  q.deployedSol = rounded(deployedSol);
+  q.realizedRoi = deployedSol > 0 ? rounded(realizedPnlSol / deployedSol) : 0;
   if (holds.length) {
     holds.sort((a, b) => a - b);
     q.medianHoldMin = Math.round(holds[Math.floor(holds.length / 2)]);
@@ -106,10 +127,15 @@ export async function analyzeWallet(wallet: string, maxPages = 6): Promise<Walle
   if (fast > roundTrips * 0.6 && roundTrips >= 3) q.flags.push('fast_flipper');
   if (bags > q.tokensTraded * 0.5 && q.tokensTraded >= 4) q.flags.push('bag_holder');
   if (q.medianHoldMin !== null && q.medianHoldMin < 60) q.flags.push('early_buyer');
+  if (roundTrips >= 3 && q.realizedPnlSol <= 0) q.flags.push('negative_realized_pnl');
+  if (roundTrips >= 5 && q.realizedRoi < 0.03) q.flags.push('low_realized_roi');
 
-  if (roundTrips >= 8 && q.winRate >= 0.55 && !q.flags.includes('bag_holder')) q.verdict = 'ELITE';
-  else if (roundTrips >= 5 && q.winRate >= 0.45) q.verdict = 'GOOD';
-  else if (roundTrips >= 3 && q.winRate >= 0.35) q.verdict = 'MARGINAL';
+  const profitable = q.realizedPnlSol > 0 && q.realizedRoi > 0;
+  if (roundTrips >= 8 && q.winRate >= 0.55 && q.realizedPnlSol >= 0.5 && q.realizedRoi >= 0.1
+      && !q.flags.includes('bag_holder')) q.verdict = 'ELITE';
+  else if (roundTrips >= 5 && q.winRate >= 0.45 && q.realizedPnlSol >= 0.15 && q.realizedRoi >= 0.03
+      && !q.flags.includes('bag_holder')) q.verdict = 'GOOD';
+  else if (roundTrips >= 3 && q.winRate >= 0.35 && profitable) q.verdict = 'MARGINAL';
   else q.verdict = 'REJECT';
   return q;
 }
