@@ -209,8 +209,9 @@ async function main() {
           if (!result.pass) {
             token.insiderKilled = true;
             token.state = 'DYING';
-            dropConvictionCandidate(token.ca, result.reason);
-            console.log(`[bundle-late] $${token.symbol} — ${result.reason}`);
+            const reason = result.reason || 'late bundle verification failed';
+            dropConvictionCandidate(token.ca, reason);
+            console.log(`[bundle-late] $${token.symbol} — ${reason}`);
           }
           upsertToken(token).catch(() => {});
         }).catch(() => {});
