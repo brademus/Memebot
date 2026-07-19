@@ -10,15 +10,18 @@ The dashboard and worker use one enforced decision lifecycle:
 4. **Wins & Losses** — resolved calls classified by stored exit versus entry.
 5. **Admin** — authenticated reports and diagnostic actions.
 
-A Watchlist token cannot emit a buy alert directly. It must first be admitted to a conviction lane. Organic convictions are observed for 120 seconds, smart-wallet convictions for up to 60 seconds, and pre-graduation or second-wave convictions for up to 90 seconds. After that hold, the entry gate still requires:
+A Watchlist token cannot emit a buy alert directly. It must first be admitted to a conviction lane. The higher-coverage policy begins considering organic candidates after one minute and uses a 30-second conviction observation hold. Smart-wallet candidates may be considered after 45 seconds of age and also serve the conviction hold before entry. After that hold, the entry gate still requires:
 
-- the lane's score floor;
-- at least a 1.3 buy-to-sell ratio;
+- a B-or-better rank and the lane's score floor;
+- independent confirmation from a real social, a clean measured bundle, or profitable tracked-wallet activity;
+- at least a 1.25 buy-to-sell ratio;
 - sufficient trade and buyer evidence;
 - buyer persistence and no material curve outflow;
-- a five-minute move no hotter than the configured 45% chase ceiling;
-- an entry below the 75% extension ceiling; and
+- a five-minute move no hotter than the configured 100% chase ceiling;
+- an entry below the 250% first-signal extension ceiling; and
 - continued source and model eligibility.
+
+The queue can now hold up to 25 organic convictions instead of three. This raises coverage without changing the hard mint-authority, freeze-authority, honeypot, liquidity, holder-concentration, deployer, funded-sniper, developer-bag, or curve-outflow protections.
 
 Only the worker can admit, evict, supersede, or advance a conviction. Dashboard and API reads are projections of existing queue state and cannot restart an observation hold or cause a coin to qualify.
 
