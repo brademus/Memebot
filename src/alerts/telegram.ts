@@ -1,4 +1,6 @@
 import { cfg, env } from '../config';
+import { MODEL_VERSION } from '../model/version';
+import { recordLatestPaperEvent } from '../paper/call-events';
 import { convictionQueueStatus } from '../scoring/conviction-queue';
 import { TokenRecord } from '../types';
 
@@ -20,13 +22,29 @@ const skipped = (reason: string): AlertDeliveryResult => ({
   completedAt: Date.now(),
 });
 
+async function persistDelivery(token: TokenRecord, result: AlertDeliveryResult): Promise<AlertDeliveryResult> {
+  await recordLatestPaperEvent(
+    token.ca,
+    'trigger',
+    MODEL_VERSION,
+    token,
+    result.sent ? 'alert_delivery_succeeded' : result.attempted ? 'alert_delivery_failed' : 'alert_delivery_skipped',
+    'alert_delivery',
+    token.priceUsd || null,
+    result.sent ? 'telegram accepted the buy alert' : result.skippedReason || result.error,
+    result,
+    result.completedAt,
+  ).catch(() => {});
+  return result;
+}
+
 // The only buy alert in the public lifecycle. A token reaches this function only
 // after it was selected into Convictions and then cleared the entry-timing gate.
 export async function alertTrigger(token: TokenRecord): Promise<AlertDeliveryResult> {
-  if (!cfg().alerts.telegram_on_trigger) return skipped('telegram_alerts_disabled');
-  if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) return skipped('telegram_credentials_missing');
+  if (!cfg().alerts.telegram_on_trigger) return persistDelivery(token, skipped('telegram_alerts_disabled'));
+  if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) return persistDelivery(token, skipped('telegram_credentials_missing'));
   if (token.score - token.lastAlertScore < cfg().alerts.realert_score_jump && token.lastAlertScore > 0) {
-    return skipped('realert_score_jump_not_met');
+    return persistDelivery(token, skipped('realert_score_jump_not_met'));
   }
   token.lastAlertScore = token.score;
 
@@ -55,25 +73,25 @@ export async function alertTrigger(token: TokenRecord): Promise<AlertDeliveryRes
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text, disable_web_page_preview: true }),
     });
-    return {
+    return persistDelivery(token, {
       attempted: true,
       sent: response.ok,
       statusCode: response.status,
       skippedReason: null,
       error: response.ok ? null : `telegram_http_${response.status}`,
       completedAt: Date.now(),
-    };
+    });
   } catch (error) {
     const message = (error as Error).message;
     console.error('[telegram]', message);
-    return {
+    return persistDelivery(token, {
       attempted: true,
       sent: false,
       statusCode: null,
       skippedReason: null,
       error: message,
       completedAt: Date.now(),
-    };
+    });
   }
 }
 
