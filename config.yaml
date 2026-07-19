@@ -40,7 +40,7 @@ bundle:
   enabled: true
   cluster_merge_enabled: true
   cluster_max_buyers: 30
-  max_insider_supply_pct: 22    # evidence-backed tightening remains active
+  max_insider_supply_pct: 22
   max_funded_snipers: 2
   count_all_slot0_as_insider: false
   total_supply: 1000000000
@@ -61,14 +61,14 @@ weights:
 states:
   heating_score_min: 50
   trigger_score_min: 44
-  trigger_min_trades: 12
-  trigger_min_unique_buyers: 12
-  trigger_buy_ratio_min: 1.3
+  trigger_min_trades: 10
+  trigger_min_unique_buyers: 8
+  trigger_buy_ratio_min: 1.25
   early_runner_enabled: true
-  early_runner_min_age: 2
-  early_runner_min_buyers: 20
-  early_runner_min_trades: 25
-  extended_pct: 75              # 40% was pre-empting qualified fast runners before persistence matured
+  early_runner_min_age: 1
+  early_runner_min_buyers: 12
+  early_runner_min_trades: 15
+  extended_pct: 250             # rank-level warning; final entry timing uses conviction-relative and absolute ceilings
   dying_score_drop: 15
   dying_buy_ratio_max: 0.8
 
@@ -81,33 +81,33 @@ ai:
   conviction_max_delta: 6
 
 bestbuys:
-  max_shown: 3
-  min_score: 60                 # B-or-better candidates may enter only with independent confirmation
+  max_shown: 25                 # enough queue capacity to pursue high daily call coverage
+  min_score: 50                 # C-grade entries require exceptional flow plus independent confirmation in code
   require_social: false         # social OR clean bundle OR measured smart money is required in code
-  min_unique_buyers: 8
-  min_trades: 15
-  min_curve_sol: 30
+  min_unique_buyers: 6
+  min_trades: 8
+  min_curve_sol: 28
   max_dev_pct: 7
-  exit_score: 52
-  min_hold_seconds: 120
-  reentry_cooldown_min: 15
-  supersede_margin: 12
-  min_age_minutes: 3
-  min_retention: 0.65
-  net_inflow_window_min: 3
+  exit_score: 44
+  min_hold_seconds: 30
+  reentry_cooldown_min: 3
+  supersede_margin: 8
+  min_age_minutes: 1
+  min_retention: 0.60
+  net_inflow_window_min: 2
   smart_lane: true
-  smart_lane_min_wallets: 2
+  smart_lane_min_wallets: 1
   smart_lane_window_min: 30
-  smart_lane_min_score: 55
-  smart_lane_min_age_min: 2
-  smart_lane_exit_score: 45
+  smart_lane_min_score: 48
+  smart_lane_min_age_min: 0.75
+  smart_lane_exit_score: 42
   pregrad_lane: true
-  pregrad_min_pct: 0.8
+  pregrad_min_pct: 0.65
   secondwave_lane: true
   secondwave_max_age_min: 180
-  secondwave_min_fill_min: 30
-  secondwave_min_retrace: 0.25
-  secondwave_max_retrace: 0.4
+  secondwave_min_fill_min: 20
+  secondwave_min_retrace: 0.20
+  secondwave_max_retrace: 0.45
   max_cluster_pct: 25
 
 alerts:
@@ -181,6 +181,8 @@ limits:
   max_tracked_tokens: 600
   dexscreener_batch_size: 30
 
+# Retained only for legacy configuration compatibility. The live lifecycle uses
+# bestbuys + conviction-queue and emits one BUY ALERT per token.
 conviction:
   enabled: true
   min_score: 64
@@ -189,7 +191,7 @@ conviction:
   min_smart_wallets: 1
   smart_wallet_window_min: 30
   require_social: true
-  max_run_pct: 80               # measured from trigger entry, not the much earlier first-score baseline
+  max_run_pct: 80
   max_alerts_per_day: 5
 
 learning:
@@ -206,7 +208,7 @@ momentum:
   min_vol24h_usd: 150000
   max_age_hours: 72
   min_change24h_pct: 50
-  max_change5m_pct: 45
+  max_change5m_pct: 100
 
 launch_signals:
   graduation_curve_sol: 69
