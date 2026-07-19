@@ -8,8 +8,8 @@ import { runGates } from './gates';
 import { deployerRep } from './gates/deployer';
 import { checkBundle } from './gates/bundle';
 import { scoreToken } from './scoring/score';
-import { updateState } from './scoring/states';
-import { dropConvictionCandidate, isConvictionCandidate, refreshConvictionQueue } from './scoring/conviction-queue';
+import { assessTrigger, updateState } from './scoring/states';
+import { convictionQueueStatus, dropConvictionCandidate, isConvictionCandidate, refreshConvictionQueue } from './scoring/conviction-queue';
 import { alertTrigger } from './alerts/telegram';
 import { startOutcomeLogger } from './outcomes/logger';
 import { startLadderMonitor } from './alerts/ladder';
@@ -229,14 +229,40 @@ async function main() {
         if (!token.aiConviction) aiConvictionRead(token).catch(() => {});
       }
 
-      const changed = updateState(token, now);
+      const stateBefore = token.state;
+      const conviction = convictionQueueStatus(token.ca, now);
+      const triggerAssessment = assessTrigger(token, now, conviction);
+      const changed = updateState(token, now, conviction);
       if (changed === 'TRIGGER') {
         if (!token.triggeredAt) {
           token.triggeredAt = now;
           token.triggerPrice = token.priceUsd;
         }
         await markTrigger(token.ca, token.priceUsd);
-        await openPaper(token.ca, token.symbol, 'trigger', token.priceUsd, token.score);
+        await openPaper(
+          token.ca,
+          token.symbol,
+          'trigger',
+          token.priceUsd,
+          token.score,
+          token.modelDecision?.execution || undefined,
+          {
+            telemetry: {
+              conviction,
+              triggerAssessment,
+              lifecycle: {
+                stateBefore,
+                stateAfter: token.state,
+                firstSeenAt: token.firstSeen,
+                convictionAt: token.convictionAt,
+                alertAt: now,
+                secondsFromFirstSeen: Math.max(0, Math.round((now - token.firstSeen) / 1000)),
+                secondsFromConviction: token.convictionAt
+                  ? Math.max(0, Math.round((now - token.convictionAt) / 1000)) : null,
+              },
+            },
+          },
+        );
         await alertTrigger(token);
         dropConvictionCandidate(token.ca, 'alerted');
         console.log(`[state] 📣 BUY ALERT $${token.symbol} score=${token.score}`);

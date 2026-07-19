@@ -2,6 +2,7 @@ import { pool } from '../db';
 import { cfg } from '../config';
 import { MODEL_VERSION } from '../model/version';
 import { paperQuoteStatusBreakdown, paperScoreboard } from '../paper/paper';
+import { paperTelemetryDiag } from '../paper/telemetry';
 import { scorecalDiag } from '../tuning/scorecal';
 import { learningDiag } from '../tuning/filtertune';
 import { forwardEvidenceDiag } from '../tuning/snapshots';
@@ -190,6 +191,7 @@ export async function buildReport(days = 7): Promise<any> {
     modelSuggestions: recentModelSuggestions,
     paperTrading: await paperScoreboard(boundedDays),
     paperQuoteStatuses: await paperQuoteStatusBreakdown(boundedDays),
+    callTelemetry: await paperTelemetryDiag(),
     deployerRepPerformance,
     insiderVerificationCoverage,
     insiderCorrelationLast24h,

@@ -22,6 +22,8 @@ export async function initDb() {
   await pool.query(base);
   const v3Path = path.join(process.cwd(), 'schema-v3.sql');
   if (fs.existsSync(v3Path)) await pool.query(fs.readFileSync(v3Path, 'utf8'));
+  const telemetryPath = path.join(process.cwd(), 'schema-telemetry.sql');
+  if (fs.existsSync(telemetryPath)) await pool.query(fs.readFileSync(telemetryPath, 'utf8'));
   console.log('[db] schema ready');
 }
 
