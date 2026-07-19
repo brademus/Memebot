@@ -26,7 +26,7 @@ function token(score: number): TokenRecord {
     liquidityUsd: 15_000,
     mcapUsd: 60_000,
     firstSeen: Date.now() - 2 * 60_000,
-  } as TokenRecord;
+  } as unknown as TokenRecord;
 }
 
 test('score 50 is B-grade and can reach the configured conviction floor', () => {
