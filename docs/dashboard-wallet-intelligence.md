@@ -8,7 +8,7 @@ The dashboard and worker use one enforced decision lifecycle:
 2. **Convictions** — candidates the backend has selected for a future buy alert, but whose entry timing is not ready.
 3. **Current Calls** — open buy alerts marked from the exact stored alert price.
 4. **Wins & Losses** — resolved calls classified by stored exit versus entry.
-5. **Admin** — authenticated reports and diagnostic actions.
+5. **Admin** — reports, diagnostics, wallet controls, and manual discovery actions.
 
 A Watchlist token cannot emit a buy alert directly. It must first be admitted to a conviction lane. The higher-coverage policy begins considering organic candidates after one minute and uses a 30-second conviction observation hold. Smart-wallet candidates may be considered after 45 seconds of age and also serve the conviction hold before entry. After that hold, the entry gate still requires:
 
@@ -28,6 +28,12 @@ Only the worker can admit, evict, supersede, or advance a conviction. Dashboard 
 Only after entry timing clears does the worker emit one **BUY ALERT**, record the alert price, and move the token into Current Calls. Current Calls reads only `trigger` paper rows. Legacy post-alert `conviction` rows and pre-alert `bb_*` evidence rows are never treated as calls. There is no second post-buy conviction alert.
 
 Call performance uses a normalized hypothetical **$100 per call**. This is not an executed portfolio claim. Calls closed because price tracking was lost are shown as unresolved and excluded from aggregate P&L and win rate.
+
+## Admin access
+
+Admin-key authentication is intentionally disabled for the current private-use phase. The Admin dashboard, reports, diagnostics, wallet list mutations, and manual discovery actions can be used without an `ADMIN_KEY` header or browser prompt. API rate limits remain active, and the Helius webhook continues to use its separate webhook authorization.
+
+This is an intentionally open configuration and should be revisited before sharing the deployment publicly or allowing untrusted users to access it.
 
 ## Pump.fun wallet lifecycle
 
@@ -50,6 +56,5 @@ After promotion, every detected buy from the wallet is surfaced into the existin
 - `DATABASE_URL` persists trade events, wallet candidates, paper calls, and outcomes.
 - `PUMPPORTAL_API_KEY` enables the full Pump.fun token-trade stream used by activity discovery.
 - `HELIUS_API_KEY` supplies wallet history and active/candidate wallet webhooks.
-- `ADMIN_KEY` protects weekly reports and diagnostic controls.
 
 When PumpPortal is in lite mode, new-token and migration monitoring still work, but activity-first wallet discovery will not have the full trade-event feed it needs.
