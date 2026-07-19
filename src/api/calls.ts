@@ -1,7 +1,7 @@
 import { pool } from '../db';
 
 const NORMALIZED_STAKE_USD = 100;
-const ALERT_SIGNALS = ['trigger', 'conviction'] as const;
+export const BUY_ALERT_SIGNAL = 'trigger' as const;
 
 export type CallStatus = 'open' | 'win' | 'loss' | 'unresolved';
 
@@ -119,26 +119,17 @@ export async function buildCallsDashboard() {
     };
   }
 
+  // A Current Call begins only when the entry gate emits the one BUY ALERT. Old
+  // post-alert `conviction` observations and pre-alert `bb_*` research lanes are
+  // deliberately excluded, even if those historical rows still exist in Postgres.
   const result = await pool.query<PaperCallRow>(`
-    WITH alert_calls AS (
-      SELECT ca,symbol,signal,entry_at,entry_score,entry_price,peak_price,last_price,last_at,
-             exit_price,exit_at,exit_reason,closed,execution_eligible,quote_status,target_hit_at,
-             observed_target_hit_at,position_usd,
-             ROW_NUMBER() OVER (
-               PARTITION BY ca
-               ORDER BY entry_at ASC,
-                        CASE signal WHEN 'trigger' THEN 0 WHEN 'conviction' THEN 1 ELSE 2 END
-             ) AS call_number
-        FROM paper_trades
-       WHERE signal = ANY($1::text[])
-    )
     SELECT ca,symbol,signal,entry_at,entry_score,entry_price,peak_price,last_price,last_at,
            exit_price,exit_at,exit_reason,closed,execution_eligible,quote_status,target_hit_at,
            observed_target_hit_at,position_usd
-      FROM alert_calls
-     WHERE call_number = 1
+      FROM paper_trades
+     WHERE signal=$1
      ORDER BY entry_at DESC
-     LIMIT 1000`, [Array.from(ALERT_SIGNALS)]);
+     LIMIT 1000`, [BUY_ALERT_SIGNAL]);
 
   const calls = result.rows.map(normalizeDashboardCall);
   const current = calls.filter(call => call.status === 'open');
