@@ -20,7 +20,9 @@ A Watchlist token cannot emit a buy alert directly. It must first be admitted to
 - an entry below the 75% extension ceiling; and
 - continued source and model eligibility.
 
-Only then does the worker emit one **BUY ALERT**, record the alert price, and move the token into Current Calls. There is no second post-buy conviction alert.
+Only the worker can admit, evict, supersede, or advance a conviction. Dashboard and API reads are projections of existing queue state and cannot restart an observation hold or cause a coin to qualify.
+
+Only after entry timing clears does the worker emit one **BUY ALERT**, record the alert price, and move the token into Current Calls. Current Calls reads only `trigger` paper rows. Legacy post-alert `conviction` rows and pre-alert `bb_*` evidence rows are never treated as calls. There is no second post-buy conviction alert.
 
 Call performance uses a normalized hypothetical **$100 per call**. This is not an executed portfolio claim. Calls closed because price tracking was lost are shown as unresolved and excluded from aggregate P&L and win rate.
 
