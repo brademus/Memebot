@@ -8,7 +8,7 @@ export function addToken(partial: Pick<TokenRecord, 'ca' | 'symbol' | 'name' | '
   if (tokens.size >= cfg().limits.max_tracked_tokens) evictOldest();
   const t: TokenRecord = {
     ...partial,
-    firstSeen: Date.now(),
+    firstSeen: Date.now(), marketCreatedAt: null, marketSamples: [],
     deployerRep: null, gradAt: null, gradPeak: 0, gradTrough: 0, fillMinutes: null, secondWaveAt: null,
     priceUsd: 0, liquidityUsd: 0, mcapUsd: 0, vol5m: 0, buys5m: 0, sells5m: 0, priceChange5m: 0,
     pairAddress: null, curveSol: 0, curveSamples: [], uniqueBuyers: [], devBuyPct: 0,
@@ -37,6 +37,8 @@ export function hydrateToken(base: { ca: string; symbol: string; name: string; c
   fresh.firstSeen = base.firstSeenMs;
   fresh.earlyBuyers = base.earlyBuyers || [];
   Object.assign(fresh, runtime || {});
+  fresh.marketSamples = Array.isArray(runtime?.marketSamples) ? runtime.marketSamples : [];
+  fresh.marketCreatedAt = Number(runtime?.marketCreatedAt) || null;
   fresh.entityGraph = runtime?.entityGraph || fresh.entityGraph;
   fresh.modelDecision = runtime?.modelDecision || null;
   fresh.modelDecisionAt = runtime?.modelDecisionAt || null;
