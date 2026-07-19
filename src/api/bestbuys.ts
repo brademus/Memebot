@@ -1,11 +1,9 @@
-// Compatibility wrapper: the old Best Buys endpoint now exposes the backend-owned
-// pre-alert Convictions queue. New lifecycle code lives under scoring because the
-// worker—not dashboard traffic—owns admission and entry timing.
+// Compatibility wrapper for the public `/api/bestbuys` route. The endpoint now
+// returns a read-only projection; only the worker may mutate the conviction queue.
+export { currentBestBuys, currentConvictions } from './convictions';
 export {
   assessEntryTiming,
   convictionQueueStatus,
-  currentBestBuys,
-  currentConvictions,
   dropConvictionCandidate,
   hasIndependentOpportunityConfirmation,
   isConvictionCandidate,
