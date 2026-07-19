@@ -8,10 +8,12 @@ import { weightedSmartHits } from '../wallets/tracker';
 import { GRADUATION_SOL } from '../constants';
 import { decisionAllowsRecommendation } from '../model/ensemble';
 import { recommendationEligibleSource } from '../model/version';
-import { passesPersistence } from './persistence';
+import { agedPersistenceReady, passesPersistence } from './persistence';
 import { rankToken } from './rank';
 
-export type ConvictionLane = 'organic' | 'smart' | 'pregrad' | 'secondwave';
+// Lanes are internal selection strategies. They all serialize into the same public
+// Convictions area and all clear the same final entry-timing gate before an alert.
+export type ConvictionLane = 'organic' | 'smart' | 'pregrad' | 'secondwave' | 'aged';
 
 interface ConvictionSlot {
   ca: string;
@@ -84,14 +86,23 @@ const decisionStrength = (token: TokenRecord) => (token.modelDecision?.expectedV
 
 function minimumHoldSeconds(lane: ConvictionLane): number {
   const configured = Math.max(30, cfg().bestbuys.min_hold_seconds);
+  if (lane === 'aged') return Math.max(configured, cfg().aged.conviction_hold_seconds);
   if (lane === 'smart') return Math.min(60, configured);
   if (lane === 'pregrad' || lane === 'secondwave') return Math.min(90, configured);
   return configured;
 }
 
 function scoreFloor(lane: ConvictionLane): number {
-  const config = cfg().bestbuys;
-  return lane === 'organic' ? config.min_score : config.smart_lane_min_score;
+  const config = cfg();
+  if (lane === 'aged') return config.aged.min_score;
+  return lane === 'organic' ? config.bestbuys.min_score : config.bestbuys.smart_lane_min_score;
+}
+
+function exitFloor(lane: ConvictionLane): number {
+  const config = cfg();
+  if (lane === 'smart') return config.bestbuys.smart_lane_exit_score;
+  if (lane === 'aged') return Math.max(config.bestbuys.exit_score, config.aged.min_score - 8);
+  return config.bestbuys.exit_score;
 }
 
 export function convictionQueueStatus(ca: string, now = Date.now()): ConvictionQueueStatus {
@@ -135,7 +146,12 @@ export function dropConvictionCandidate(ca: string, reason = 'removed'): boolean
 
 function evidenceFloor(token: TokenRecord): boolean {
   const states = cfg().states;
-  if (getStreamMode() === 'lite') return token.buys5m + token.sells5m >= states.trigger_min_trades;
+  // Exact PumpPortal wallet identities are only canonical for an on-curve Pump.fun
+  // token in healthy full mode. Every AMM venue, including aged revivals, uses the
+  // venue's aggregate transaction window for this minimum evidence check.
+  if (token.dex !== 'pumpfun' || getStreamMode() === 'lite') {
+    return token.buys5m + token.sells5m >= states.trigger_min_trades;
+  }
   return token.totalBuys + token.totalSells >= states.trigger_min_trades
     && token.uniqueBuyers.length >= states.trigger_min_unique_buyers;
 }
@@ -159,7 +175,8 @@ export function assessEntryTiming(
   const modelAllows = decisionAllowsRecommendation(token, now);
   const evidenceReady = evidenceFloor(token);
   const persistenceReady = passesPersistence(token, now);
-  const burstCooled = token.priceChange5m <= cfg().momentum.max_change5m_pct;
+  const chaseCeiling = token.source === 'aged' ? cfg().aged.max_change5m_pct : cfg().momentum.max_change5m_pct;
+  const burstCooled = token.priceChange5m <= chaseCeiling;
   const tooLate = !token.triggeredAt && movedPct >= states.extended_pct;
   const blockers: string[] = [];
 
@@ -172,7 +189,7 @@ export function assessEntryTiming(
   if (token.score < conviction.scoreFloor) blockers.push(`score ${token.score.toFixed(1)} < ${conviction.scoreFloor}`);
   if (buyRatio < states.trigger_buy_ratio_min) blockers.push(`buy/sell ${buyRatio.toFixed(2)} < ${states.trigger_buy_ratio_min}`);
   if (!evidenceReady) blockers.push('not enough trade/buyer evidence');
-  if (!persistenceReady) blockers.push('buyer persistence not confirmed');
+  if (!persistenceReady) blockers.push(token.source === 'aged' ? 'aged revival not yet sustained' : 'buyer persistence not confirmed');
   if (!burstCooled) blockers.push(`five-minute spike ${token.priceChange5m.toFixed(1)}% is too hot to chase`);
   if (tooLate) blockers.push(`already extended +${movedPct.toFixed(0)}%`);
 
@@ -206,10 +223,17 @@ async function admit(token: TokenRecord, lane: ConvictionLane, now: number) {
   console.log(`[conviction] queued $${token.symbol} lane=${lane} score=${token.score}`);
 }
 
+function agedMarketAgeEligible(token: TokenRecord, now: number): boolean {
+  if (!token.marketCreatedAt) return false;
+  const ageHours = (now - token.marketCreatedAt) / 3_600_000;
+  return ageHours >= cfg().aged.min_age_hours && ageHours <= cfg().aged.max_age_hours;
+}
+
 /** Refreshes the backend-owned conviction queue. It is called by the worker every
  * scoring cycle; dashboard traffic is not required for lifecycle progression. */
 export function refreshConvictionQueue(now = Date.now()) {
   const config = cfg().bestbuys;
+  const agedConfig = cfg().aged;
   const pruneBefore = now - config.reentry_cooldown_min * 60_000 * 2;
   for (const [ca, at] of droppedAt) if (at < pruneBefore) droppedAt.delete(ca);
 
@@ -227,9 +251,12 @@ export function refreshConvictionQueue(now = Date.now()) {
       if (token.bundle && token.bundle.fundedSnipers > 0) reason = 'insider detected';
       else if (token.insiderKilled) reason = 'insider detected';
       else if (token.state === 'DYING') reason = 'momentum died';
-      else if (token.score < (slot.lane === 'smart' ? config.smart_lane_exit_score : config.exit_score)) reason = `score fell to ${token.score}`;
-      else if (slot.lane === 'organic' && (rank.grade === 'C' || rank.grade === 'D')) reason = `degraded to ${rank.grade}`;
+      else if (token.score < exitFloor(slot.lane)) reason = `score fell to ${token.score}`;
+      else if ((slot.lane === 'organic' || slot.lane === 'aged') && (rank.grade === 'C' || rank.grade === 'D')) reason = `degraded to ${rank.grade}`;
       else if (rank.timing === 'LATE' || rank.timing === 'STALE') reason = 'entry window closed';
+      else if (slot.lane === 'aged' && token.source !== 'aged') reason = 'aged source changed';
+      else if (slot.lane === 'aged' && !agedMarketAgeEligible(token, now)) reason = 'outside aged market window';
+      else if (slot.lane === 'aged' && !agedPersistenceReady(token, now)) reason = 'revival confirmation failed';
       else if (slot.lane === 'smart' && smartCount(token, config) === 0) reason = 'smart wallets exited window';
       else if (slot.lane === 'pregrad' && token.dex !== 'pumpfun') reason = 'graduated before entry';
       else if (slot.lane === 'pregrad' && token.peakCurveSol > 34 && token.curveSol < token.peakCurveSol * 0.85) reason = 'curve reversed before graduation';
@@ -254,6 +281,7 @@ export function refreshConvictionQueue(now = Date.now()) {
 
   const organicSlots = () => slots.filter(slot => slot.lane === 'organic');
   const candidates = recommendationCandidates()
+    .filter(token => token.source !== 'aged')
     .filter(eligible)
     .filter(token => (now - token.firstSeen) / 60_000 >= config.min_age_minutes)
     .map(token => ({ token, rank: rankToken(token) }))
@@ -287,6 +315,30 @@ export function refreshConvictionQueue(now = Date.now()) {
         void admit(token, 'organic', now);
         inSlots.add(token.ca);
       }
+    }
+  }
+
+  // Established revivals share the public Convictions list, but have their own bounded
+  // capacity and cannot bypass the multi-minute persistence requirement through organic.
+  const agedSlots = () => slots.filter(slot => slot.lane === 'aged');
+  if (agedSlots().length < agedConfig.max_convictions) {
+    const aged = recommendationCandidates()
+      .filter(token => token.source === 'aged')
+      .filter(eligible)
+      .filter(token => !token.insiderKilled && !['DYING', 'DEAD', 'EXTENDED'].includes(token.state))
+      .filter(token => agedMarketAgeEligible(token, now) && agedPersistenceReady(token, now))
+      .filter(token => token.score >= agedConfig.min_score
+        && token.buys5m + token.sells5m >= config.min_trades
+        && token.devBuyPct <= config.max_dev_pct
+        && token.priceChange5m <= agedConfig.max_change5m_pct)
+      .filter(token => hasIndependentOpportunityConfirmation(token, config))
+      .filter(token => !token.bundle || token.bundle.fundedSnipers === 0)
+      .map(token => ({ token, rank: rankToken(token) }))
+      .filter(({ rank }) => ['A+', 'A', 'B'].includes(rank.grade) && ['EARLY', 'FAIR'].includes(rank.timing))
+      .sort((left, right) => decisionStrength(right.token) - decisionStrength(left.token));
+    for (const { token } of aged.slice(0, agedConfig.max_convictions - agedSlots().length)) {
+      void admit(token, 'aged', now);
+      inSlots.add(token.ca);
     }
   }
 
@@ -378,6 +430,7 @@ function serializeConvictions(now: number) {
       smart: smart.wallets,
       smartElite: smart.elite,
       pair: token.pairAddress,
+      marketAgeHours: token.marketCreatedAt ? Math.round((now - token.marketCreatedAt) / 3_600_000) : null,
       model: model ? {
         version: model.modelVersion,
         targetBeforeStop: model.targetBeforeStopProbability,
