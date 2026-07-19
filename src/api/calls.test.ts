@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeDashboardCall, PaperCallRow } from './calls';
+import { BUY_ALERT_SIGNAL, normalizeDashboardCall, PaperCallRow } from './calls';
 
 function row(overrides: Partial<PaperCallRow> = {}): PaperCallRow {
   return {
@@ -25,6 +25,11 @@ function row(overrides: Partial<PaperCallRow> = {}): PaperCallRow {
     ...overrides,
   };
 }
+
+test('only the actual buy-alert signal is eligible for Current Calls', () => {
+  assert.equal(BUY_ALERT_SIGNAL, 'trigger');
+  assert.notEqual(BUY_ALERT_SIGNAL, 'conviction');
+});
 
 test('open calls show live hypothetical PnL from the alert entry', () => {
   const call = normalizeDashboardCall(row({ last_price: 3 }));
