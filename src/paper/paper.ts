@@ -4,12 +4,21 @@ import { MODEL_VERSION } from '../model/version';
 import { ExecutionEvidence } from '../types';
 import { executionSettings, quoteExecutableEntry, quoteExecutableExit } from './execution';
 import { quoteCategory, quotePhase } from './quote-status';
+import {
+  finalizePaperTelemetry,
+  PaperTelemetryContext,
+  paperTelemetryDiag,
+  recordPaperEvent,
+  recordPaperOpened,
+  recordPaperSnapshot,
+} from './telemetry';
 
 export type PaperSignal = 'trigger' | 'conviction' | 'bb_smart' | 'bb_organic' | 'bb_pregrad' | 'bb_secondwave'
   | 'model' | 'model_raw' | 'model_executable';
 
 export interface OpenPaperOptions {
   skipExecutionQuote?: boolean;
+  telemetry?: PaperTelemetryContext;
 }
 
 export async function openPaper(
@@ -31,33 +40,45 @@ export async function openPaper(
     `INSERT INTO paper_trades
        (ca,symbol,signal,entry_price,mark_entry_price,entry_score,peak_price,peak_at,last_price,last_at,
         target_multiple,quote_status,model_version,quote_key_present,signal_decision_id,
-        transaction_built,simulation_ok,simulation_error,route_stability_bps,execution_score,execution_probe)
-     VALUES ($1,$2,$3,$4,$4,$5,$4,now(),$4,now(),$6,$16,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+        transaction_built,simulation_ok,simulation_error,route_stability_bps,execution_score,execution_probe,
+        trough_price,trough_at,max_runup_pct,max_drawdown_pct)
+     VALUES ($1,$2,$3,$4,$4,$5,$4,now(),$4,now(),$6,$16,$7,$8,$9,$10,$11,$12,$13,$14,$15,$4,now(),0,0)
      ON CONFLICT (ca,signal,model_version) DO NOTHING RETURNING id`,
     [ca, symbol, signal, markPrice, score, executionSettings.targetMultiple, MODEL_VERSION, keyPresent,
      decisionId, screenedExecution?.transactionBuilt || false, screenedExecution?.simulationOk || false,
      screenedExecution?.simulationError || null, screenedExecution?.routeStabilityBps || null,
      screenedExecution?.executionScore || null, screenedExecution ? JSON.stringify(screenedExecution) : null,
      initialQuoteStatus],
-  ).catch((e: Error) => { console.error('[paper] insert failed:', e.message); return null; });
+  ).catch((error: Error) => { console.error('[paper] insert failed:', error.message); return null; });
   if (!inserted?.rowCount) return;
+
+  const paperTradeId = Number(inserted.rows[0].id);
+  const token = getToken(ca);
+  if (token) {
+    await recordPaperOpened(paperTradeId, token, signal, markPrice, options.telemetry || {});
+  }
 
   if (options.skipExecutionQuote) {
     await pool.query(
       `UPDATE paper_trades SET quote_attempted_at=now(),quote_key_present=$4
         WHERE ca=$1 AND signal=$2 AND model_version=$3`, [ca, signal, MODEL_VERSION, keyPresent],
     ).catch(() => {});
+    await recordPaperEvent(paperTradeId, token || null, signal, MODEL_VERSION,
+      'entry_quote_skipped', 'entry_quote', markPrice, 'shadow observation does not request execution',
+      { status: 'shadow_raw_no_execution', keyPresent }, Date.now());
     return;
   }
 
-  const token = getToken(ca);
   if (!token) {
     await pool.query(
       `UPDATE paper_trades SET quote_status='token_not_in_memory',quote_attempted_at=now(),quote_key_present=$4
         WHERE ca=$1 AND signal=$2 AND model_version=$3`, [ca, signal, MODEL_VERSION, keyPresent],
     ).catch(() => {});
+    await recordPaperEvent(paperTradeId, null, signal, MODEL_VERSION,
+      'entry_quote_failed', 'entry_quote', markPrice, 'token_not_in_memory', { keyPresent }, Date.now());
     return;
   }
+
   const quote = await quoteExecutableEntry(token, markPrice);
   await pool.query(
     `UPDATE paper_trades SET
@@ -73,6 +94,9 @@ export async function openPaper(
      keyPresent, quote.transactionBuilt, quote.simulationOk, quote.simulationError, quote.unitsConsumed,
      quote.routeStabilityBps, quote.executionScore, JSON.stringify(quote.probeSizes)],
   ).catch(error => console.error('[paper] entry persist', error.message));
+  await recordPaperEvent(paperTradeId, token, signal, MODEL_VERSION,
+    quote.eligible ? 'entry_quote_eligible' : 'entry_quote_ineligible', 'entry_quote',
+    quote.effectiveEntryPrice || markPrice, quote.status, quote, Date.now());
 }
 
 export function startPaperTrader() {
@@ -84,32 +108,47 @@ export function startPaperTrader() {
 async function mark() {
   if (!pool) return;
   const open = await pool.query(
-    `SELECT ca,signal,model_version,entry_price,entry_at,peak_price,target_hit_at,observed_target_hit_at,
+    `SELECT id,ca,signal,model_version,entry_price,entry_at,peak_price,trough_price,target_hit_at,observed_target_hit_at,
             execution_eligible,position_usd,quoted_out_amount,exit_quote_status
        FROM paper_trades WHERE closed=false`,
   ).catch(() => ({ rows: [] as any[] }));
   for (const row of open.rows) {
     const token = getToken(row.ca);
     if (!token || !token.priceUsd || token.priceUsd <= 0) {
-      if (!token) await closeAt(row.ca, row.signal, row.model_version, null, 'tracking_lost');
+      if (!token) await closeAt(row, null, null, 'tracking_lost');
       continue;
     }
     const entry = Number(row.entry_price);
     if (!Number.isFinite(entry) || entry <= 0) continue;
     const price = token.priceUsd;
     const previousPeak = Number(row.peak_price) || entry;
+    const previousTrough = Number(row.trough_price) || entry;
     const peak = Math.max(previousPeak, price);
+    const trough = Math.min(previousTrough, price);
     const multiple = price / entry;
     const peakMultiple = peak / entry;
+    const troughMultiple = trough / entry;
     const ageHours = (Date.now() - new Date(row.entry_at).getTime()) / 3_600_000;
     const observedTarget = peakMultiple >= executionSettings.targetMultiple;
+
+    await recordPaperSnapshot(row, token);
     await pool.query(
-      `UPDATE paper_trades SET last_price=$4,last_at=now(),peak_price=$5,
-         peak_at=CASE WHEN $5>peak_price THEN now() ELSE peak_at END,
-         observed_target_hit_at=CASE WHEN observed_target_hit_at IS NULL AND $6 THEN now() ELSE observed_target_hit_at END
-       WHERE ca=$1 AND signal=$2 AND model_version=$3 AND closed=false`,
-      [row.ca, row.signal, row.model_version, price, peak, observedTarget],
+      `UPDATE paper_trades SET last_price=$2,last_at=now(),peak_price=$3,
+         peak_at=CASE WHEN $3>peak_price THEN now() ELSE peak_at END,
+         trough_price=CASE WHEN trough_price IS NULL OR $4<trough_price THEN $4 ELSE trough_price END,
+         trough_at=CASE WHEN trough_price IS NULL OR $4<trough_price THEN now() ELSE trough_at END,
+         max_runup_pct=GREATEST(COALESCE(max_runup_pct,0),$5),
+         max_drawdown_pct=LEAST(COALESCE(max_drawdown_pct,0),$6),
+         observed_target_hit_at=CASE WHEN observed_target_hit_at IS NULL AND $7 THEN now() ELSE observed_target_hit_at END
+       WHERE id=$1 AND closed=false`,
+      [row.id, price, peak, trough, (peakMultiple - 1) * 100, (troughMultiple - 1) * 100, observedTarget],
     ).catch(() => {});
+
+    if (observedTarget && !row.observed_target_hit_at) {
+      await recordPaperEvent(row.id, token, row.signal, row.model_version,
+        'observed_target_reached', 'observed_target', peak, null,
+        { targetMultiple: executionSettings.targetMultiple, peakMultiple }, Date.now());
+    }
 
     let verified = false;
     let verifiedExitPrice: number | null = null;
@@ -121,13 +160,16 @@ async function mark() {
         const exit = await quoteExecutableExit(row.ca, String(row.quoted_out_amount));
         const realized = exit.eligible && exit.proceedsUsd ? exit.proceedsUsd / Number(row.position_usd) : 0;
         await pool.query(
-          `UPDATE paper_trades SET exit_quote_status=$4,exit_quoted_usd=$5,exit_price_impact_pct=$6,
-             exit_fee_lamports=$7,exit_router=$8,exit_quote_time_ms=$9,exit_transaction_built=$10,
-             exit_simulation_ok=$11,exit_simulation_error=$12
-           WHERE ca=$1 AND signal=$2 AND model_version=$3`,
-          [row.ca, row.signal, row.model_version, exit.status, exit.proceedsUsd, exit.priceImpact,
+          `UPDATE paper_trades SET exit_quote_status=$2,exit_quoted_usd=$3,exit_price_impact_pct=$4,
+             exit_fee_lamports=$5,exit_router=$6,exit_quote_time_ms=$7,exit_transaction_built=$8,
+             exit_simulation_ok=$9,exit_simulation_error=$10
+           WHERE id=$1`,
+          [row.id, exit.status, exit.proceedsUsd, exit.priceImpact,
            exit.feeLamports, exit.router, exit.quoteTimeMs, exit.transactionBuilt, exit.simulationOk, exit.simulationError],
         ).catch(() => {});
+        await recordPaperEvent(row.id, token, row.signal, row.model_version,
+          exit.eligible ? 'exit_quote_eligible' : 'exit_quote_ineligible', 'target_exit_quote',
+          price, exit.status, { ...exit, realizedMultiple: realized }, Date.now());
         if (exit.eligible && realized >= executionSettings.targetMultiple) {
           verified = true;
           verifiedExitPrice = entry * realized;
@@ -138,33 +180,40 @@ async function mark() {
       await pool.query(
         `UPDATE paper_trades SET target_hit_at=COALESCE(target_hit_at,now()),
            seconds_to_target=COALESCE(seconds_to_target,EXTRACT(EPOCH FROM (now()-entry_at))::int)
-         WHERE ca=$1 AND signal=$2 AND model_version=$3`, [row.ca, row.signal, row.model_version],
+         WHERE id=$1`, [row.id],
       ).catch(() => {});
-      await closeAt(row.ca, row.signal, row.model_version, verifiedExitPrice,
+      await recordPaperEvent(row.id, token, row.signal, row.model_version,
+        'verified_target_reached', 'verified_target', verifiedExitPrice,
+        row.execution_eligible ? 'target exit simulated' : 'legacy observed target',
+        { targetMultiple: executionSettings.targetMultiple }, Date.now());
+      await closeAt(row, token, verifiedExitPrice,
         row.execution_eligible ? 'target_3x_exit_simulated' : 'target_3x_observed_legacy');
       continue;
     }
     if (observedTarget && row.signal === 'model_raw') {
-      await closeAt(row.ca, row.signal, row.model_version, price, 'target_3x_observed_shadow');
+      await closeAt(row, token, price, 'target_3x_observed_shadow');
       continue;
     }
     let reason: string | null = null;
     if (multiple <= executionSettings.stopMultiple) reason = `stop_${Math.round((1 - executionSettings.stopMultiple) * 100)}pct`;
     else if (token.state === 'DEAD') reason = 'coin_died';
     else if (ageHours >= executionSettings.maxHoldHours) reason = `time_${executionSettings.maxHoldHours}h`;
-    if (reason) await closeAt(row.ca, row.signal, row.model_version, price, reason);
+    if (reason) await closeAt(row, token, price, reason);
   }
 }
 
-async function closeAt(ca: string, signal: string, modelVersion: string, price: number | null, reason: string) {
+async function closeAt(row: any, token: ReturnType<typeof getToken> | null, price: number | null, reason: string) {
   if (!pool) return;
-  await pool.query(
-    `UPDATE paper_trades SET closed=true,exit_at=now(),exit_reason=$4,
-       exit_price=COALESCE($5,last_price,entry_price)
-     WHERE ca=$1 AND signal=$2 AND model_version=$3 AND closed=false`,
-    [ca, signal, modelVersion, reason, price],
-  ).catch(() => {});
+  const closed = await pool.query(
+    `UPDATE paper_trades SET closed=true,exit_at=now(),exit_reason=$2,
+       exit_price=COALESCE($3,last_price,entry_price)
+     WHERE id=$1 AND closed=false RETURNING id`,
+    [row.id, reason, price],
+  ).catch(() => null);
+  if (!closed?.rowCount) return;
+  await finalizePaperTelemetry(Number(row.id), token || null, price, reason);
 }
+
 const numberValue = (value: unknown) => Number.isFinite(Number(value)) ? Number(value) : 0;
 
 export async function paperScoreboard(days = 30): Promise<any[]> {
@@ -201,7 +250,12 @@ export async function paperScoreboard(days = 30): Promise<any[]> {
        ROUND(AVG(exit_price_impact_pct) FILTER (WHERE target_hit_at IS NOT NULL AND execution_eligible)::numeric,4) AS avg_exit_price_impact,
        ROUND(AVG(execution_score)::numeric,3) AS avg_execution_score,
        ROUND(AVG(route_stability_bps)::numeric,1) AS avg_route_stability_bps,
-       ROUND(AVG(quote_time_ms) FILTER (WHERE quote_time_ms IS NOT NULL)::numeric,0) AS avg_quote_ms
+       ROUND(AVG(quote_time_ms) FILTER (WHERE quote_time_ms IS NOT NULL)::numeric,0) AS avg_quote_ms,
+       ROUND(AVG(max_runup_pct)::numeric,2) AS avg_max_runup_pct,
+       ROUND(AVG(max_drawdown_pct)::numeric,2) AS avg_max_drawdown_pct,
+       ROUND(AVG(duration_seconds)::numeric,0) AS avg_duration_seconds,
+       COALESCE(SUM(snapshot_count),0)::bigint AS telemetry_snapshots,
+       COALESCE(SUM(event_count),0)::bigint AS telemetry_events
      FROM paper_trades WHERE entry_at>now()-($1||' days')::interval
      GROUP BY signal,model_version ORDER BY model_version DESC,pct_3x_executable DESC NULLS LAST`, [String(days)],
   ).catch(() => null);
@@ -232,7 +286,10 @@ export async function paperQuoteStatusBreakdown(days = 30): Promise<any[]> {
 }
 
 export async function paperDiag() {
-  if (!pool) return { open: 0, total: 0, executable: 0, hit3x: 0, quotePending: 0, quoteStatuses: [] };
+  if (!pool) return {
+    open: 0, total: 0, executable: 0, hit3x: 0, quotePending: 0, quoteStatuses: [],
+    telemetry: await paperTelemetryDiag(),
+  };
   const result = await pool.query(
     `SELECT COUNT(*) FILTER (WHERE NOT closed) AS open,COUNT(*) AS total,
        COUNT(*) FILTER (WHERE execution_eligible) AS executable,COUNT(*) FILTER (WHERE transaction_built) AS transaction_built,
@@ -252,5 +309,6 @@ export async function paperDiag() {
     exitUnverified: numberValue(row.exit_unverified), targetMultiple: executionSettings.targetMultiple,
     minForwardSamples: executionSettings.minForwardSamples, currentModel: MODEL_VERSION,
     quoteStatuses: await paperQuoteStatusBreakdown(30),
+    telemetry: await paperTelemetryDiag(),
   };
 }
