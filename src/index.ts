@@ -27,6 +27,7 @@ import { addToken } from './store';
 import { getToken, removeToken, allTokens, recordScan, onTokenRemove, hydrateToken, hydration } from './store';
 import { cfg } from './config';
 import { getStreamMode } from './ingest/pumpfun';
+import { refreshTradeWindow } from './market/trade-window';
 import { TokenRecord } from './types';
 
 const gateAttempts = new Map<string, number>();
@@ -191,12 +192,7 @@ async function main() {
     for (const token of allTokens()) {
       if (token.gated !== true || token.state === 'DEAD') continue;
       const now = Date.now();
-      const cutoff = now - 5 * 60_000;
-      while (token.recentTrades.length && token.recentTrades[0].at < cutoff) token.recentTrades.shift();
-      if (token.dex === 'pumpfun') {
-        token.buys5m = token.recentTrades.filter(trade => trade.buy).length;
-        token.sells5m = token.recentTrades.length - token.buys5m;
-      }
+      refreshTradeWindow(token, now, getStreamMode());
 
       const ageMin = (now - token.firstSeen) / 60_000;
       const rung = bundleAttempts.get(token.ca) || 0;
