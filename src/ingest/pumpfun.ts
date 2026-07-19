@@ -11,6 +11,56 @@ let SOL_USD = 150;
 export function setSolPrice(price: number) { if (price > 0) SOL_USD = price; }
 export const getSolPrice = () => SOL_USD;
 
+const TRADE_STREAM_STALE_MS = 4 * 60_000;
+const tradeStreamConfigured = !!env.PUMPPORTAL_API_KEY;
+let ws: WebSocket | null = null;
+let backoff = 1000;
+let lastSocketOpenAt: number | null = null;
+let lastTradeAt: number | null = null;
+let tradeMessages = 0;
+let walletTaggedTrades = 0;
+
+export function tradeStreamModeFromHealth(
+  configured: boolean,
+  lastTradeEventAt: number | null,
+  now = Date.now(),
+  staleMs = TRADE_STREAM_STALE_MS,
+): 'full' | 'lite' {
+  if (!configured || lastTradeEventAt === null) return 'lite';
+  return now - lastTradeEventAt <= staleMs ? 'full' : 'lite';
+}
+
+// A configured key is not proof that token-trade events are actually arriving. The
+// scoring pipeline must use strict wallet-level evidence only while that feed is live.
+// When the paid feed is silent or stale, aggregate Dexscreener evidence is used instead
+// of permanently deadlocking every conviction at the final entry gate.
+export const getStreamMode = () => tradeStreamModeFromHealth(tradeStreamConfigured, lastTradeAt);
+
+export const pumpfunStreamDiag = () => {
+  const now = Date.now();
+  const effectiveMode = getStreamMode();
+  const staleForSeconds = lastTradeAt === null ? null : Math.max(0, Math.round((now - lastTradeAt) / 1000));
+  return {
+    configured: tradeStreamConfigured,
+    connected: ws?.readyState === WebSocket.OPEN,
+    effectiveMode,
+    tradeMessages,
+    walletTaggedTrades,
+    walletCoverage: tradeMessages ? +(walletTaggedTrades / tradeMessages).toFixed(3) : 0,
+    lastSocketOpenAt: lastSocketOpenAt ? new Date(lastSocketOpenAt).toISOString() : null,
+    lastTradeAt: lastTradeAt ? new Date(lastTradeAt).toISOString() : null,
+    staleForSeconds,
+    staleAfterSeconds: Math.round(TRADE_STREAM_STALE_MS / 1000),
+    reason: !tradeStreamConfigured
+      ? 'api_key_missing'
+      : lastTradeAt === null
+        ? 'no_token_trade_events_received'
+        : effectiveMode === 'lite'
+          ? 'token_trade_stream_stale'
+          : 'healthy',
+  };
+};
+
 function normalizeSol(value: unknown): number | null {
   const amount = Number(value);
   if (!Number.isFinite(amount) || amount <= 0) return null;
@@ -42,6 +92,11 @@ function applyCurveTrade(msg: any) {
   const t = getToken(msg.mint);
   if (!t) return;
   const now = Date.now();
+  const previousMode = getStreamMode();
+  lastTradeAt = now;
+  tradeMessages++;
+  if (previousMode === 'lite') console.log('[pumpfun] token-trade stream active — strict wallet evidence restored');
+
   if (msg.vSolInBondingCurve) {
     t.curveSol = Number(msg.vSolInBondingCurve);
     t.peakCurveSol = Math.max(t.peakCurveSol, t.curveSol);
@@ -54,6 +109,7 @@ function applyCurveTrade(msg: any) {
   }
 
   const wallet = String(msg.traderPublicKey || msg.user || msg.trader || '') || null;
+  if (wallet) walletTaggedTrades++;
   const buy = msg.txType === 'buy';
   const event: TradeEvent = {
     at: now,
@@ -93,10 +149,6 @@ function applyCurveTrade(msg: any) {
 }
 
 const WS_URL = () => 'wss://pumpportal.fun/api/data' + (env.PUMPPORTAL_API_KEY ? `?api-key=${env.PUMPPORTAL_API_KEY}` : '');
-let streamMode: 'full' | 'lite' = env.PUMPPORTAL_API_KEY ? 'full' : 'lite';
-export const getStreamMode = () => streamMode;
-let ws: WebSocket | null = null;
-let backoff = 1000;
 
 export function startPumpfunMonitor(onNew: (ca: string) => void) { connect(onNew); }
 
@@ -104,13 +156,14 @@ function connect(onNew: (ca: string) => void) {
   ws = new WebSocket(WS_URL());
   ws.on('open', () => {
     backoff = 1000;
+    lastSocketOpenAt = Date.now();
     ws!.send(JSON.stringify({ method: 'subscribeNewToken' }));
     ws!.send(JSON.stringify({ method: 'subscribeMigration' }));
-    if (streamMode === 'full') {
+    if (tradeStreamConfigured) {
       const live = allTokens().filter(t => t.gated !== false && t.dex === 'pumpfun' && t.state !== 'DEAD').map(t => t.ca);
       for (let index = 0; index < live.length; index += 50)
         ws!.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: live.slice(index, index + 50) }));
-      console.log(`[pumpfun] connected — resubscribed ${live.length} live token streams`);
+      console.log(`[pumpfun] connected — trade feed configured, resubscribed ${live.length} live token streams`);
     } else console.log('[pumpfun] connected, subscribed to new tokens + migrations');
   });
 
@@ -131,7 +184,7 @@ function connect(onNew: (ca: string) => void) {
           seedCurve(t, msg);
           fetchSocials(t, msg.uri);
           if (t.creator) bumpDeployer(t.creator);
-          if (streamMode === 'full') ws!.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: [msg.mint] }));
+          if (tradeStreamConfigured) ws!.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: [msg.mint] }));
           onNew(t.ca);
         }
       } else if (msg.mint && (msg.txType === 'buy' || msg.txType === 'sell')) {
@@ -153,7 +206,7 @@ function connect(onNew: (ca: string) => void) {
 
 export function unsubscribeToken(ca: string) { try { ws?.send(JSON.stringify({ method: 'unsubscribeTokenTrade', keys: [ca] })); } catch {} }
 export function resubscribeAll() {
-  if (streamMode !== 'full' || !ws || ws.readyState !== ws.OPEN) return 0;
+  if (!tradeStreamConfigured || !ws || ws.readyState !== WebSocket.OPEN) return 0;
   const live = allTokens().filter(t => t.gated !== false && t.dex === 'pumpfun' && t.state !== 'DEAD').map(t => t.ca);
   for (let index = 0; index < live.length; index += 50)
     try { ws.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: live.slice(index, index + 50) })); } catch {}
@@ -161,7 +214,7 @@ export function resubscribeAll() {
 }
 export function startSubscriptionReconciler() {
   setInterval(() => {
-    if (streamMode !== 'full' || !ws || ws.readyState !== ws.OPEN) return;
+    if (!tradeStreamConfigured || !ws || ws.readyState !== WebSocket.OPEN) return;
     const now = Date.now();
     const stale = allTokens().filter(t => t.gated !== false && t.dex === 'pumpfun' && t.state !== 'DEAD'
       && (!t.recentTrades.length || now - t.recentTrades[t.recentTrades.length - 1].at > 4 * 60_000)).map(t => t.ca);
@@ -171,7 +224,7 @@ export function startSubscriptionReconciler() {
     console.log(`[pumpfun] reconciler re-subscribed ${stale.length} stale-trade tokens`);
   }, 2 * 60_000);
 }
-export function subscribeToken(ca: string) { if (streamMode === 'full') try { ws?.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: [ca] })); } catch {} }
+export function subscribeToken(ca: string) { if (tradeStreamConfigured) try { ws?.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: [ca] })); } catch {} }
 function reconnect(onNew: (ca: string) => void) {
   console.log(`[pumpfun] reconnecting in ${backoff}ms`);
   setTimeout(() => connect(onNew), backoff);

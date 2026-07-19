@@ -83,6 +83,22 @@ test('a conviction alerts only after entry timing clears', () => {
   assert.equal(updateState(token(), now, conviction()), 'TRIGGER');
 });
 
+test('aggregate-mode pumpfun evidence can alert when wallet-level events are unavailable', () => {
+  const candidate = token({
+    dex: 'pumpfun',
+    totalBuys: 0,
+    totalSells: 0,
+    uniqueBuyers: [],
+    buys5m: 12,
+    sells5m: 3,
+    curveSol: 35,
+    peakCurveSol: 35,
+  });
+  const assessment = assessTrigger(candidate, now, conviction());
+  assert.equal(assessment.evidenceReady, true);
+  assert.equal(updateState(candidate, now, conviction()), 'TRIGGER');
+});
+
 test('shadow mode still allows the incumbent lifecycle without a v3 decision', () => {
   assert.equal(updateState(token({ modelDecision: null, modelDecisionAt: null }), now, conviction()), 'TRIGGER');
 });
