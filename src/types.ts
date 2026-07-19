@@ -19,6 +19,15 @@ export interface TradeEvent {
   curveSol?: number | null;
 }
 
+export interface MarketSample {
+  at: number;
+  priceUsd: number;
+  liquidityUsd: number;
+  vol5m: number;
+  buys5m: number;
+  sells5m: number;
+}
+
 export interface BurstFeatures {
   tradeCount: number;
   buyShare: number;
@@ -158,8 +167,10 @@ export interface TokenRecord {
   symbol: string;
   name: string;
   creator: string | null;
-  source: 'pumpfun' | 'dexscreener' | 'wallet' | 'momentum';
+  source: 'pumpfun' | 'dexscreener' | 'wallet' | 'momentum' | 'aged';
   firstSeen: number;
+  marketCreatedAt: number | null;
+  marketSamples: MarketSample[];
   deployerRep: { cls: string; launches: number; winners: number; delta: number } | null;
   gradAt: number | null;
   gradPeak: number;
@@ -191,7 +202,7 @@ export interface TokenRecord {
   tgSamples: { n: number; at: number }[];
   tgGrowthPerMin: number;
   aiConviction: { verdict: string; delta: number; reason: string; at: number } | null;
-  playType: 'MOMENTUM' | 'GRADUATION' | 'DIP' | 'RUNNER' | null;
+  playType: 'MOMENTUM' | 'GRADUATION' | 'DIP' | 'RUNNER' | 'REVIVAL' | null;
   laddersFired: number[];
   triggeredAt: number | null;
   triggerPrice: number | null;
@@ -276,6 +287,16 @@ export interface AppConfig {
   alerts: { telegram_on_trigger: boolean; realert_score_jump: number };
   launch_signals: { graduation_curve_sol: number; graduation_bonus_max: number; dead_hours_utc: number[]; dead_hours_penalty: number; tg_shell_max_members: number; tg_real_min_members: number };
   momentum: { enabled: boolean; poll_seconds: number; min_liquidity_usd: number; min_vol24h_usd: number; max_age_hours: number; min_change24h_pct: number; max_change5m_pct: number };
+  aged: {
+    enabled: boolean; poll_seconds: number; pages_per_duration: number; max_surfaced_per_run: number;
+    min_age_hours: number; max_age_hours: number; min_liquidity_usd: number; min_liquidity_mcap_ratio: number;
+    min_mcap_usd: number; max_mcap_usd: number; min_vol24h_usd: number; min_vol1h_usd: number;
+    min_volume_liquidity_24h: number; min_txns_1h: number; min_buy_ratio_1h: number;
+    min_change1h_pct: number; max_change1h_pct: number; min_change24h_pct: number; max_change24h_pct: number;
+    max_change5m_pct: number; confirmation_minutes: number; confirmation_samples: number;
+    max_price_pullback_pct: number; max_liquidity_drop_pct: number; min_score: number;
+    max_convictions: number; conviction_hold_seconds: number;
+  };
   learning: { enabled: boolean; window_days: number; min_samples: number; loosen_false_kill_rate: number; min_hours_between_changes: number };
   social: { enabled: boolean; boost_poll_seconds: number; boost_surface_min: number };
   calibration: { enabled: boolean; freeze_age_min: number; window_days: number; min_samples: number; min_winners: number; win_multiple: number; learning_rate: number; min_weight: number; max_weight: number };
