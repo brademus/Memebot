@@ -7,7 +7,8 @@ import { checkDeployer } from './deployer';
 // Ordered hard gates. First failure kills the token — cheap checks first.
 // Returns null on pass, or the fail reason string.
 export async function runGates(t: TokenRecord): Promise<string | null> {
-  const g = cfg().gates;
+  const config = cfg();
+  const g = config.gates;
 
   // A pump.fun mint keeps its "pump" suffix after graduation. The suffix is only a
   // fallback before enrichment; once a DEX is known, that explicit market state wins.
@@ -15,12 +16,15 @@ export async function runGates(t: TokenRecord): Promise<string | null> {
   const onCurve = t.dex === 'pumpfun' || (t.dex == null && t.ca.endsWith('pump'));
 
   // Liquidity floor. On-curve: compare native SOL. Post-grad: compare executable USD
-  // liquidity and pool depth relative to market cap.
+  // liquidity and pool depth relative to market cap. Established coins use a lower
+  // ratio floor only after passing a much higher absolute-liquidity and age screen.
   if (onCurve) {
     if (t.curveSol < g.min_liquidity_sol_curve) return `curve_sol_${t.curveSol.toFixed(1)}`;
   } else {
-    if (t.liquidityUsd < g.min_liquidity_usd) return `liq_below_min_${Math.round(t.liquidityUsd)}`;
-    if (t.mcapUsd > 0 && t.liquidityUsd / t.mcapUsd < g.liq_to_mcap_ratio_min)
+    const minimumLiquidity = t.source === 'aged' ? Math.max(g.min_liquidity_usd, config.aged.min_liquidity_usd) : g.min_liquidity_usd;
+    const minimumRatio = t.source === 'aged' ? config.aged.min_liquidity_mcap_ratio : g.liq_to_mcap_ratio_min;
+    if (t.liquidityUsd < minimumLiquidity) return `liq_below_min_${Math.round(t.liquidityUsd)}`;
+    if (t.mcapUsd > 0 && t.liquidityUsd / t.mcapUsd < minimumRatio)
       return `liq_mcap_ratio_${(t.liquidityUsd / t.mcapUsd).toFixed(3)}`;
   }
 

@@ -21,7 +21,7 @@ const REQUIRED_BOOLEANS = [
   'wallets.cobuyer_expansion', 'wallets.winner_mining_enabled',
   'states.early_runner_enabled', 'bestbuys.require_social', 'bestbuys.smart_lane',
   'bestbuys.pregrad_lane', 'bestbuys.secondwave_lane', 'alerts.telegram_on_trigger',
-  'learning.enabled', 'momentum.enabled', 'calibration.enabled', 'social.enabled',
+  'learning.enabled', 'momentum.enabled', 'aged.enabled', 'calibration.enabled', 'social.enabled',
   'conviction.enabled', 'conviction.require_clean_bundle', 'conviction.require_social',
 ] as const;
 
@@ -71,6 +71,15 @@ const REQUIRED_NUMBERS = [
   'learning.min_hours_between_changes', 'learning.loosen_false_kill_rate',
   'momentum.poll_seconds', 'momentum.min_liquidity_usd', 'momentum.min_vol24h_usd',
   'momentum.max_age_hours', 'momentum.min_change24h_pct', 'momentum.max_change5m_pct',
+  'aged.poll_seconds', 'aged.pages_per_duration', 'aged.max_surfaced_per_run',
+  'aged.min_age_hours', 'aged.max_age_hours', 'aged.min_liquidity_usd',
+  'aged.min_liquidity_mcap_ratio', 'aged.min_mcap_usd', 'aged.max_mcap_usd',
+  'aged.min_vol24h_usd', 'aged.min_vol1h_usd', 'aged.min_volume_liquidity_24h',
+  'aged.min_txns_1h', 'aged.min_buy_ratio_1h', 'aged.min_change1h_pct',
+  'aged.max_change1h_pct', 'aged.min_change24h_pct', 'aged.max_change24h_pct',
+  'aged.max_change5m_pct', 'aged.confirmation_minutes', 'aged.confirmation_samples',
+  'aged.max_price_pullback_pct', 'aged.max_liquidity_drop_pct', 'aged.min_score',
+  'aged.max_convictions', 'aged.conviction_hold_seconds',
   'launch_signals.graduation_curve_sol', 'launch_signals.graduation_bonus_max',
   'launch_signals.dead_hours_penalty', 'launch_signals.tg_shell_max_members',
   'launch_signals.tg_real_min_members', 'calibration.freeze_age_min',
@@ -135,6 +144,27 @@ function validateConfig(raw: unknown): AppConfig {
   if (Number.isFinite(floor) && (floor <= 0 || floor >= 1)) errors.push('bestbuys.secondwave_max_retrace must be between 0 and 1');
   if (Number.isFinite(minRetrace) && Number.isFinite(floor) && floor > 1 - minRetrace) {
     errors.push('bestbuys second-wave retrace range is impossible');
+  }
+
+  const agedMinAge = Number(valueAt(raw, 'aged.min_age_hours'));
+  const agedMaxAge = Number(valueAt(raw, 'aged.max_age_hours'));
+  const agedMinMcap = Number(valueAt(raw, 'aged.min_mcap_usd'));
+  const agedMaxMcap = Number(valueAt(raw, 'aged.max_mcap_usd'));
+  const agedMin1h = Number(valueAt(raw, 'aged.min_change1h_pct'));
+  const agedMax1h = Number(valueAt(raw, 'aged.max_change1h_pct'));
+  const agedMin24h = Number(valueAt(raw, 'aged.min_change24h_pct'));
+  const agedMax24h = Number(valueAt(raw, 'aged.max_change24h_pct'));
+  if (!(agedMinAge > 0 && agedMaxAge > agedMinAge)) errors.push('aged age range must be positive and increasing');
+  if (!(agedMinMcap > 0 && agedMaxMcap > agedMinMcap)) errors.push('aged market-cap range must be positive and increasing');
+  if (!(agedMax1h > agedMin1h)) errors.push('aged one-hour change range must be increasing');
+  if (!(agedMax24h > agedMin24h)) errors.push('aged 24-hour change range must be increasing');
+  for (const path of ['aged.pages_per_duration', 'aged.max_surfaced_per_run', 'aged.confirmation_samples', 'aged.max_convictions']) {
+    const value = Number(valueAt(raw, path));
+    if (!Number.isInteger(value) || value <= 0) errors.push(`${path} must be a positive integer`);
+  }
+  for (const path of ['aged.min_liquidity_mcap_ratio', 'aged.min_buy_ratio_1h', 'aged.min_volume_liquidity_24h']) {
+    const value = Number(valueAt(raw, path));
+    if (!(value > 0)) errors.push(`${path} must be greater than zero`);
   }
 
   if (errors.length) throw new Error(`invalid config:\n- ${errors.join('\n- ')}`);

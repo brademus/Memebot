@@ -151,6 +151,7 @@ function toRuntime(t: TokenRecord): any {
     vol5m: t.vol5m, buys5m: t.buys5m, sells5m: t.sells5m, priceChange5m: t.priceChange5m,
     pairAddress: t.pairAddress, curveSol: t.curveSol, peakCurveSol: t.peakCurveSol,
     curveSamples: t.curveSamples.slice(-60), devBuyPct: t.devBuyPct,
+    marketCreatedAt: t.marketCreatedAt, marketSamples: t.marketSamples.slice(-180),
     totalBuys: t.totalBuys, totalSells: t.totalSells,
     uniqueBuyers: t.uniqueBuyers.slice(-800), uniqueBuyerSamples: t.uniqueBuyerSamples.slice(-30),
     recentTrades: t.recentTrades.slice(-500), earlyExited: t.earlyExited.slice(-300),
