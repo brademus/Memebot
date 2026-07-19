@@ -3,6 +3,7 @@ import { openPaper, startPaperTrader } from './paper/paper';
 import { startPumpfunMonitor, setSolPrice, unsubscribeToken, subscribeToken, resubscribeAll, startSubscriptionReconciler } from './ingest/pumpfun';
 import { startDexscreenerPoller } from './ingest/dexscreener';
 import { startMomentumScanner } from './ingest/momentum';
+import { startAgedScanner } from './ingest/aged';
 import { startSocialScanner } from './ingest/social';
 import { runGates } from './gates';
 import { deployerRep } from './gates/deployer';
@@ -136,6 +137,12 @@ async function main() {
       await tryGate(token);
     }
   });
+  startAgedScanner(async (ca) => {
+    const token = getToken(ca);
+    // Aged AMM coins are followed through Dexscreener; do not spend PumpPortal
+    // subscriptions on pools that no longer trade on the launch curve.
+    if (token) await tryGate(token);
+  });
   startSocialScanner(async (ca) => {
     const token = getToken(ca);
     if (token) {
@@ -254,9 +261,12 @@ async function main() {
                 stateBefore,
                 stateAfter: token.state,
                 firstSeenAt: token.firstSeen,
+                marketCreatedAt: token.marketCreatedAt,
                 convictionAt: token.convictionAt,
                 alertAt: now,
                 secondsFromFirstSeen: Math.max(0, Math.round((now - token.firstSeen) / 1000)),
+                marketAgeHours: token.marketCreatedAt
+                  ? Math.max(0, Math.round((now - token.marketCreatedAt) / 3_600_000)) : null,
                 secondsFromConviction: token.convictionAt
                   ? Math.max(0, Math.round((now - token.convictionAt) / 1000)) : null,
               },
