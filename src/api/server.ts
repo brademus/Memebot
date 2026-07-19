@@ -2,7 +2,6 @@ import express from 'express';
 import path from 'path';
 import { env, cfg } from '../config';
 import { activeTokens, allTokens, recentScans, hydration } from '../store';
-import { checkConviction, convictionFiredToday } from '../scoring/conviction';
 import { pool } from '../db';
 import { buildReport } from './report';
 import { runAiReview } from '../ai/reviewer';
@@ -11,7 +10,7 @@ import { runSystemMonitor } from '../ai/monitor';
 import { buildAnalytics } from './analytics';
 import { buildCallsDashboard } from './calls';
 import { rankToken } from '../scoring/rank';
-import { currentBestBuys } from './bestbuys';
+import { assessEntryTiming, convictionQueueStatus, currentBestBuys } from './bestbuys';
 import { getStreamMode } from '../ingest/pumpfun';
 import { earlyBuyers } from '../helius';
 import { discoveryDiag, runDiscovery } from '../wallets/discovery';
@@ -163,6 +162,7 @@ export function startServer() {
           seenInMemory: all.length,
           gatedOutInMemory: all.filter(token => token.gated === false).length,
           watching: all.filter(token => token.gated === true && token.state !== 'DEAD').length,
+          liveConvictions: currentBestBuys().length,
           liveTriggers: all.filter(token => token.state === 'TRIGGER').length,
           uptimeMin: Math.round(process.uptime() / 60),
           hydrated: hydration.restored,
@@ -220,7 +220,8 @@ export function startServer() {
                  AND exit_reason IS DISTINCT FROM 'tracking_lost') AS resolved_calls,
                COUNT(*) FILTER (WHERE execution_eligible AND target_hit_at IS NOT NULL) AS won_3x,
                COUNT(*) FILTER (WHERE signal='trigger') AS trigger_observations,
-               COUNT(*) FILTER (WHERE signal='conviction') AS conviction_observations
+               COUNT(*) FILTER (WHERE signal LIKE 'bb_%') AS conviction_observations,
+               COUNT(*) FILTER (WHERE signal='conviction') AS legacy_post_alert_conviction_observations
           FROM paper_trades`)).rows[0];
       res.json({ wins: rows.rows, summary });
     } catch (error) {
@@ -335,8 +336,13 @@ export function startServer() {
   app.get('/api/stats', async (_req, res) => {
     const all = allTokens();
     let lifetime = {
-      seen: 0, killed: 0, passed: 0, triggered: 0, convictions: 0,
-      triggered24h: 0, convictions24h: 0,
+      seen: 0,
+      killed: 0,
+      passed: 0,
+      triggered: 0,
+      convictionSelections: 0,
+      triggered24h: 0,
+      convictionSelections24h: 0,
     };
     if (pool) {
       try {
@@ -345,33 +351,34 @@ export function startServer() {
                  COUNT(*) FILTER (WHERE gate_result='failed')::int AS killed,
                  COUNT(*) FILTER (WHERE gate_result='passed')::int AS passed,
                  COUNT(*) FILTER (WHERE triggered_at IS NOT NULL)::int AS triggered,
-                 COUNT(*) FILTER (WHERE conviction_at IS NOT NULL)::int AS convictions,
-                 COUNT(*) FILTER (WHERE triggered_at>now()-interval '24 hours')::int AS triggered24h,
-                 COUNT(*) FILTER (WHERE conviction_at>now()-interval '24 hours')::int AS convictions24h
+                 COUNT(*) FILTER (WHERE conviction_at IS NOT NULL)::int AS "convictionSelections",
+                 COUNT(*) FILTER (WHERE triggered_at>now()-interval '24 hours')::int AS "triggered24h",
+                 COUNT(*) FILTER (WHERE conviction_at>now()-interval '24 hours')::int AS "convictionSelections24h"
             FROM tokens`)).rows[0];
       } catch {}
     }
 
-    const opportunities = currentBestBuys();
-    const liveConfirmed = all.filter(token => token.convictionAt !== null && !['DYING', 'DEAD', 'EXTENDED'].includes(token.state));
+    const convictions = currentBestBuys();
     res.json({
       seen: lifetime.seen || all.length,
       killed: lifetime.killed,
       passedTotal: lifetime.passed,
       triggeredTotal: lifetime.triggered,
-      confirmedConvictionsTotal: lifetime.convictions,
+      convictionSelectionsTotal: lifetime.convictionSelections,
       triggers24h: lifetime.triggered24h,
-      confirmedConvictions24h: lifetime.convictions24h,
+      convictionSelections24h: lifetime.convictionSelections24h,
       liveTriggers: all.filter(token => token.state === 'TRIGGER').length,
-      liveConfirmedConvictions: liveConfirmed.length,
-      liveOpportunitySlots: opportunities.length,
+      liveConvictions: convictions.length,
       liveWatchlist: all.filter(token => token.gated === true && token.state !== 'DEAD').length,
       liveInMemory: all.length,
       gatedOut: lifetime.killed || all.filter(token => token.gated === false).length,
       watching: all.filter(token => token.gated === true && token.state !== 'DEAD').length,
       triggers: all.filter(token => token.state === 'TRIGGER').length,
-      convictionsToday: convictionFiredToday(),
-      convictionBudget: cfg().conviction?.max_alerts_per_day ?? 5,
+      lifecycle: {
+        watchlist: all.filter(token => token.gated === true && token.state !== 'DEAD').length,
+        convictions: convictions.length,
+        currentCalls: all.filter(token => token.state === 'TRIGGER').length,
+      },
       funnel: funnelSnapshot(all),
     });
   });
@@ -382,11 +389,12 @@ export function startServer() {
 function funnelSnapshot(all: TokenRecord[]) {
   const settings = cfg().states;
   const gated = all.filter(token => token.gated === true && !['DEAD', 'DYING', 'EXTENDED'].includes(token.state));
-  const blocked = { lowScore: 0, lowRatio: 0, fewTrades: 0, tooYoung: 0, triggering: 0 };
+  const blocked = { lowScore: 0, lowRatio: 0, fewTrades: 0, tooYoung: 0, triggering: 0, convictions: 0 };
   for (const token of gated) {
     const ageMin = (Date.now() - token.firstSeen) / 60_000;
     const ratio = token.sells5m > 0 ? token.buys5m / token.sells5m : (token.buys5m > 0 ? 3 : 1);
     if (token.state === 'TRIGGER') { blocked.triggering++; continue; }
+    if (convictionQueueStatus(token.ca).queued) blocked.convictions++;
     if (token.score < settings.trigger_score_min) blocked.lowScore++;
     else if (ratio < settings.trigger_buy_ratio_min) blocked.lowRatio++;
     else if ((token.buys5m + token.sells5m) < settings.trigger_min_trades) blocked.fewTrades++;
@@ -428,6 +436,8 @@ function serialize() {
 }
 
 function pick(token: TokenRecord) {
+  const conviction = convictionQueueStatus(token.ca);
+  const entry = conviction.queued ? assessEntryTiming(token, Date.now(), conviction) : null;
   return {
     ca: token.ca,
     symbol: token.symbol,
@@ -456,7 +466,13 @@ function pick(token: TokenRecord) {
     retention: token.earlyBuyers.length >= 5 ? +((1 - token.earlyExited.length / token.earlyBuyers.length)).toFixed(2) : null,
     socials: token.socials,
     devPct: +token.devBuyPct.toFixed(1),
-    conviction: token.convictionAt !== null,
+    conviction: conviction.queued,
+    convictionLane: conviction.lane,
+    convictionHeldSeconds: Math.round(conviction.heldSeconds),
+    convictionMinimumHoldSeconds: conviction.minimumHoldSeconds,
+    convictionHoldReady: conviction.holdReady,
+    entryReady: entry?.ready ?? false,
+    entryBlockers: entry?.blockers ?? [],
     aiRead: token.aiConviction ? {
       verdict: token.aiConviction.verdict,
       delta: token.aiConviction.delta,
@@ -464,7 +480,5 @@ function pick(token: TokenRecord) {
     } : null,
     boost: token.boostAmount || 0,
     tgGrowth: token.tgGrowthPerMin || 0,
-    convictionMissing: token.state === 'TRIGGER' && token.convictionAt === null
-      ? checkConviction(token).missing : null,
   };
 }
