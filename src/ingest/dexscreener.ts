@@ -1,6 +1,6 @@
 import { cfg } from '../config';
 import { allTokens } from '../store';
-import { TokenRecord } from '../types';
+import { MarketSample, TokenRecord } from '../types';
 import { backfillWalletEntryPrice } from '../wallets/ledger';
 import { getStreamMode } from './pumpfun';
 
@@ -13,7 +13,7 @@ export function startDexscreenerPoller(onUpdated: (t: TokenRecord) => void) {
     const floor = cfg().states.trigger_score_min;
     const hot = (t: TokenRecord) =>
       t.score >= floor - 10 || ['HEATING', 'TRIGGER', 'EXTENDED'].includes(t.state)
-      || t.playType === 'GRADUATION' || !!t.secondWaveAt;
+      || t.playType === 'GRADUATION' || t.playType === 'REVIVAL' || !!t.secondWaveAt;
     const tracked = allTokens().filter(t =>
       t.state !== 'DEAD' && (hot(t) || t.dex !== 'pumpfun' || tickN % 3 === 0));
     const batchSize = cfg().limits.dexscreener_batch_size;
@@ -40,6 +40,7 @@ async function enrich(batch: TokenRecord[], onUpdated: (t: TokenRecord) => void)
       if (!pair) continue;
       if ((t.symbol === '?' || !t.symbol || t.symbol.endsWith('…')) && pair.baseToken?.symbol) t.symbol = pair.baseToken.symbol;
       if ((!t.name || t.name.startsWith('(')) && pair.baseToken?.name) t.name = pair.baseToken.name;
+      if (!t.marketCreatedAt && Number(pair.pairCreatedAt) > 0) t.marketCreatedAt = Number(pair.pairCreatedAt);
       const dexLiquidity = pair.liquidity?.usd || 0;
       if (dexLiquidity > 0) t.liquidityUsd = dexLiquidity;
       const dexPrice = parseFloat(pair.priceUsd || '0');
@@ -65,11 +66,46 @@ async function enrich(batch: TokenRecord[], onUpdated: (t: TokenRecord) => void)
         t.buys5m = pair.txns?.m5?.buys || 0;
         t.sells5m = pair.txns?.m5?.sells || 0;
         t.uniqueBuyerSamples.push(t.buys5m);
-        if (t.uniqueBuyerSamples.length > 6) t.uniqueBuyerSamples.shift();
+        if (t.uniqueBuyerSamples.length > 30) t.uniqueBuyerSamples.shift();
       }
+      capturePairSocials(t, pair);
+      appendMarketSample(t, Date.now());
       onUpdated(t);
     }
   } catch (error) { console.error('[dexscreener]', (error as Error).message); }
+}
+
+function capturePairSocials(token: TokenRecord, pair: any) {
+  const info = pair?.info;
+  if (!info) return;
+  const socialRows = Array.isArray(info.socials) ? info.socials : [];
+  const websiteRows = Array.isArray(info.websites) ? info.websites : [];
+  const has = (needle: string) => socialRows.some((row: any) =>
+    String(row?.type || '').toLowerCase().includes(needle)
+    || String(row?.url || '').toLowerCase().includes(needle));
+  token.socials = {
+    x: token.socials.x || has('twitter') || has('x.com'),
+    tg: token.socials.tg || has('telegram') || has('t.me'),
+    web: token.socials.web || websiteRows.some((row: any) => String(row?.url || '').startsWith('http')),
+    fetched: true,
+    tgMembers: token.socials.tgMembers,
+  };
+}
+
+export function appendMarketSample(token: TokenRecord, at = Date.now()) {
+  if (!(token.priceUsd > 0) || !(token.liquidityUsd > 0)) return;
+  const previous = token.marketSamples[token.marketSamples.length - 1];
+  if (previous && at - previous.at < 5_000) return;
+  const sample: MarketSample = {
+    at,
+    priceUsd: token.priceUsd,
+    liquidityUsd: token.liquidityUsd,
+    vol5m: token.vol5m,
+    buys5m: token.buys5m,
+    sells5m: token.sells5m,
+  };
+  token.marketSamples.push(sample);
+  if (token.marketSamples.length > 180) token.marketSamples.splice(0, token.marketSamples.length - 180);
 }
 
 export async function fetchTokenSnapshot(ca: string): Promise<{ price: number; liq: number; mcap: number } | null> {
