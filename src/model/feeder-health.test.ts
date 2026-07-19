@@ -52,7 +52,8 @@ test('aggregate market flow is usable while wallet-level graph evidence remains 
   const now = Date.now();
   const token = {
     ca: 'aggregate', symbol: 'AGG', name: 'Aggregate', creator: null, source: 'pumpfun',
-    firstSeen: now - 3 * 60_000, deployerRep: null, gradAt: null, gradPeak: 0, gradTrough: 0,
+    firstSeen: now - 3 * 60_000, marketCreatedAt: now - 4 * 60_000, marketSamples: [],
+    deployerRep: null, gradAt: null, gradPeak: 0, gradTrough: 0,
     fillMinutes: null, secondWaveAt: null, priceUsd: 0.0001, liquidityUsd: 15_000, mcapUsd: 60_000,
     vol5m: 20_000, buys5m: 18, sells5m: 4, priceChange5m: 8, pairAddress: null,
     dex: 'pumpfun', dexId: 'pumpfun', curveSol: 42,
