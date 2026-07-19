@@ -1,6 +1,5 @@
 import crypto from 'crypto';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
-import { env } from '../config';
 
 interface Bucket { count: number; resetAt: number }
 const buckets = new Map<string, Bucket>();
@@ -42,8 +41,8 @@ export function rateLimit(name: string, max: number, windowMs: number): RequestH
   };
 }
 
-const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
-
+// Retained as a compatibility export for older tests/tools. No current app route
+// uses this comparison while admin authentication is intentionally disabled.
 export function adminKeyMatches(supplied: string, expected: string): boolean {
   if (!supplied || !expected) return false;
   const suppliedDigest = crypto.createHash('sha256').update(supplied, 'utf8').digest();
@@ -51,26 +50,10 @@ export function adminKeyMatches(supplied: string, expected: string): boolean {
   return crypto.timingSafeEqual(suppliedDigest, expectedDigest);
 }
 
-function suppliedAdminKey(req: Request): string {
-  const bearer = req.header('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
-  return bearer || req.header('x-admin-key')?.trim() || '';
-}
-
-// This middleware may be mounted on a route family, but it only authenticates writes.
-// Dashboard reads and diagnostics remain open and rate-limited. Query-string secrets
-// are deliberately rejected because URLs leak into browser history and proxy logs.
-export const adminOnly: RequestHandler = (req, res, next) => {
-  if (!MUTATING_METHODS.has(req.method.toUpperCase())) { next(); return; }
-  if (!env.ADMIN_KEY) {
-    res.status(503).json({ error: 'ADMIN_KEY not configured — mutating endpoints disabled' });
-    return;
-  }
-  if (!adminKeyMatches(suppliedAdminKey(req), env.ADMIN_KEY)) {
-    res.status(401).json({ error: 'unauthorized' });
-    return;
-  }
-  next();
-};
+// Authentication is intentionally disabled for the current private-use app. The
+// middleware name remains so route wiring stays stable, but every request passes.
+// Expensive and mutating routes remain covered by the existing API rate limits.
+export const adminOnly: RequestHandler = (_req, _res, next) => next();
 
 export const publicApiLimit = rateLimit('api', 180, 60_000);
 export const expensiveApiLimit = rateLimit('expensive', 8, 60_000);

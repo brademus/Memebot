@@ -74,12 +74,15 @@ Once `outcomes` has data:
 
 **Smart-money wallet tracker** (`src/ingest/wallets.ts`): add wallets via the API, tracker polls their swaps via Helius. A tracked wallet buying a token adds a `smart_money` signal (weight 20). Only `type:SWAP` counts — dust transfers are ignored (anti-poisoning). Wallets a tracked wallet buys that we haven't seen become discovery sources.
 
-Manage wallets (needs `ADMIN_KEY` env var set):
+Admin-key authentication is intentionally disabled during the current private-use phase. Dashboard operations and wallet-admin API requests do not require an authorization header:
+
 ```
 curl -X POST https://YOUR-APP.up.railway.app/api/wallets \
-  -H "x-admin-key: YOUR_ADMIN_KEY" -H "content-type: application/json" \
+  -H "content-type: application/json" \
   -d '{"wallet":"WALLET_ADDRESS","type":"sniper"}'
 ```
+
+The routes are still rate-limited. Re-enable authentication before making the deployment available to untrusted users.
 
 **AI analyst** (`src/ai/analyst.ts`): on TRIGGER, Claude Haiku writes a 2-3 sentence thesis — strongest reason it passed, biggest risk, entry-quality GOOD/MIXED/LATE. Shows on the dashboard under the token row and in the Telegram alert. Needs `ANTHROPIC_API_KEY`. Costs ~$0.001 per note.
 
@@ -89,4 +92,3 @@ curl -X POST https://YOUR-APP.up.railway.app/api/wallets \
 
 ## New env vars
 - `ANTHROPIC_API_KEY` — AI analyst notes (optional)
-- `ADMIN_KEY` — protects wallet-admin endpoints (set to any long random string)
