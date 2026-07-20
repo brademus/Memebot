@@ -1,14 +1,16 @@
+import { buildMasterReview } from './master-review';
 import { buildReport as buildForwardReport } from './report-v2';
 import { buildSignalReport } from './signal-report';
 
-export async function buildReport(days = 7) {
-  // Isolate the two halves: a failure in the signal-stack report must degrade to
-  // an error FIELD, not destroy the entire weekly report. (A single malformed SQL
-  // query in signal-report took down /api/report completely — Promise.all rejects
-  // on the first error, so the healthy base report died with it.)
-  const [base, signalStack] = await Promise.all([
-    buildForwardReport(days),
-    buildSignalReport(days).catch((e: Error) => ({ error: `signal report failed: ${e.message}` })),
+export async function buildReport(days = 1) {
+  // One copyable review contains the daily aggregate/calibration report, Signal Stack
+  // evidence, cumulative profitability evidence, runtime health, and every relevant
+  // paper trade with its complete recorded entry/exit context and market path.
+  // Each component degrades to an error field instead of taking down the entire report.
+  const [base, signalStack, master] = await Promise.all([
+    buildForwardReport(days).catch((error: Error) => ({ error: `base report failed: ${error.message}` })),
+    buildSignalReport(days).catch((error: Error) => ({ error: `signal report failed: ${error.message}` })),
+    buildMasterReview(days).catch((error: Error) => ({ error: `master review failed: ${error.message}` })),
   ]);
-  return { ...base, signalStack };
+  return { ...base, signalStack, ...master };
 }
