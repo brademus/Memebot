@@ -5,7 +5,7 @@
   "main": "dist/boot.js",
   "scripts": {
     "build": "tsc",
-    "test": "node --test dist/helius-rate.test.js dist/paper/execution.test.js dist/paper/quote-status.test.js dist/paper/persistence-health.test.js dist/paper/telemetry.test.js dist/market/helius-trade-backfill.test.js dist/market/trade-window.test.js dist/model/feeder-health.test.js dist/ingest/pumpfun.test.js dist/ingest/aged.test.js dist/api/security.test.js dist/api/bestbuys.test.js dist/api/calls.test.js dist/api/master-review.test.js dist/api/report-jobs.test.js dist/scoring/score.test.js dist/scoring/rank.test.js dist/scoring/states.test.js dist/scoring/conviction.test.js dist/wallets/winnerminer.test.js dist/tuning/snapshots.test.js dist/model/model.test.js",
+    "test": "node --test dist/helius-rate.test.js dist/alerts/telegram.test.js dist/paper/tracking-recovery.test.js dist/paper/execution.test.js dist/paper/quote-status.test.js dist/paper/persistence-health.test.js dist/paper/telemetry.test.js dist/market/helius-trade-backfill.test.js dist/market/trade-window.test.js dist/model/feeder-health.test.js dist/ingest/pumpfun.test.js dist/ingest/aged.test.js dist/api/security.test.js dist/api/bestbuys.test.js dist/api/calls.test.js dist/api/master-review.test.js dist/api/report-jobs.test.js dist/scoring/score.test.js dist/scoring/rank.test.js dist/scoring/states.test.js dist/scoring/conviction.test.js dist/wallets/winnerminer.test.js dist/tuning/snapshots.test.js dist/model/model.test.js",
     "check": "npm run build && npm test",
     "start": "node dist/boot.js",
     "dev": "tsx src/boot.ts"
@@ -19,7 +19,7 @@
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
-    "@types/js-yaml": "^4.0.9",
+    "@types/js-yaml": "^4.1.0",
     "@types/node": "^22.0.0",
     "@types/pg": "^8.11.6",
     "@types/ws": "^8.5.10",
