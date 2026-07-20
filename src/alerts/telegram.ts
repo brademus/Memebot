@@ -3,6 +3,7 @@ import { MODEL_VERSION } from '../model/version';
 import { recordLatestPaperEvent } from '../paper/call-events';
 import { convictionQueueStatus } from '../scoring/conviction-queue';
 import { TokenRecord } from '../types';
+import { telegramRetryDelayMs } from './telegram-retry';
 
 export interface AlertDeliveryResult {
   attempted: boolean;
@@ -51,13 +52,6 @@ const skipped = (reason: string): AlertDeliveryResult => ({
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-export function telegramRetryDelayMs(attemptIndex: number, retryAfter: string | null, random = Math.random()): number {
-  const seconds = Number(retryAfter);
-  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(60_000, Math.max(500, Math.round(seconds * 1000)));
-  const base = Math.min(15_000, 1_000 * 2 ** Math.max(0, attemptIndex));
-  return Math.max(500, Math.round(base * (0.8 + Math.max(0, Math.min(1, random)) * 0.4)));
-}
-
 function finish(result: AlertDeliveryResult, kind: string): AlertDeliveryResult {
   health.deliveries++;
   health.lastKind = kind;
@@ -91,8 +85,10 @@ async function sendTelegramText(text: string, kind: 'buy_alert' | 'canary'): Pro
   const startedAt = Date.now();
   let lastStatus: number | null = null;
   let lastError: string | null = null;
+  let attemptsMade = 0;
 
   for (let attempt = 0; attempt < 3; attempt++) {
+    attemptsMade = attempt + 1;
     health.networkAttempts++;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8_000);
@@ -112,7 +108,7 @@ async function sendTelegramText(text: string, kind: 'buy_alert' | 'canary'): Pro
           skippedReason: null,
           error: null,
           completedAt: Date.now(),
-          attemptCount: attempt + 1,
+          attemptCount: attemptsMade,
           latencyMs: Date.now() - startedAt,
         }, kind);
       }
@@ -139,7 +135,7 @@ async function sendTelegramText(text: string, kind: 'buy_alert' | 'canary'): Pro
     skippedReason: null,
     error: lastError || 'telegram_delivery_failed',
     completedAt: Date.now(),
-    attemptCount: 3,
+    attemptCount: attemptsMade,
     latencyMs: Date.now() - startedAt,
   }, kind);
 }
