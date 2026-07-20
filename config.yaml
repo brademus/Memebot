@@ -210,15 +210,15 @@ momentum:
   min_change24h_pct: 50
   max_change5m_pct: 100
 
-# Established coins are scanned independently from new launches. They remain in the
-# same Convictions -> BUY ALERT lifecycle, but must prove a revival across repeated
-# observations rather than passing from a single trending-pool snapshot.
+# Post-graduation continuations and established revivals are scanned independently
+# from new launches. They remain in the same Convictions -> BUY ALERT lifecycle and
+# must prove sustained price, liquidity, and buy-flow persistence before admission.
 aged:
   enabled: true
   poll_seconds: 300
-  pages_per_duration: 2
-  max_surfaced_per_run: 12
-  min_age_hours: 72
+  pages_per_duration: 3
+  max_surfaced_per_run: 18
+  min_age_hours: 3
   max_age_hours: 4320
   min_liquidity_usd: 50000
   min_liquidity_mcap_ratio: 0.03
@@ -239,7 +239,7 @@ aged:
   max_price_pullback_pct: 10
   max_liquidity_drop_pct: 10
   min_score: 55
-  max_convictions: 5
+  max_convictions: 7
   conviction_hold_seconds: 180
 
 launch_signals:
