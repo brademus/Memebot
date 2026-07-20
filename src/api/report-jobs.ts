@@ -16,6 +16,7 @@ interface InternalReportJob {
   resultBytes: number;
   archive: Buffer | null;
   archiveBytes: number;
+  totalChunks: number;
   downloadFilename: string | null;
   error: string | null;
 }
@@ -32,23 +33,29 @@ export interface ReportJobSummary {
   elapsedSeconds: number;
   resultBytes: number;
   archiveBytes: number;
+  totalChunks: number;
   downloadFilename: string | null;
-  downloadPath: string | null;
   error: string | null;
   reused?: boolean;
 }
 
-export interface ReportJobArchive {
+export interface ReportJobChunk {
+  id: string;
+  index: number;
+  totalChunks: number;
+  encoding: 'base64';
   filename: string;
-  buffer: Buffer;
+  chunk: string;
 }
 
 interface ReportJobManagerOptions {
+  archiveChunkBytes?: number;
   readyTtlMs?: number;
   runningTtlMs?: number;
   maxRetainedJobs?: number;
 }
 
+const DEFAULT_ARCHIVE_CHUNK_BYTES = 192 * 1024;
 const DEFAULT_READY_TTL_MS = 30 * 60_000;
 const DEFAULT_RUNNING_TTL_MS = 10 * 60_000;
 const DEFAULT_MAX_RETAINED_JOBS = 2;
@@ -56,6 +63,7 @@ const DEFAULT_MAX_RETAINED_JOBS = 2;
 export class ReportJobManager {
   private readonly jobs = new Map<string, InternalReportJob>();
   private activeJobId: string | null = null;
+  private readonly archiveChunkBytes: number;
   private readonly readyTtlMs: number;
   private readonly runningTtlMs: number;
   private readonly maxRetainedJobs: number;
@@ -64,6 +72,7 @@ export class ReportJobManager {
     private readonly builder: (days: number) => Promise<unknown> = buildReport,
     options: ReportJobManagerOptions = {},
   ) {
+    this.archiveChunkBytes = Math.max(32 * 1024, options.archiveChunkBytes || DEFAULT_ARCHIVE_CHUNK_BYTES);
     this.readyTtlMs = Math.max(60_000, options.readyTtlMs || DEFAULT_READY_TTL_MS);
     this.runningTtlMs = Math.max(60_000, options.runningTtlMs || DEFAULT_RUNNING_TTL_MS);
     this.maxRetainedJobs = Math.max(1, options.maxRetainedJobs || DEFAULT_MAX_RETAINED_JOBS);
@@ -90,6 +99,7 @@ export class ReportJobManager {
       resultBytes: 0,
       archive: null,
       archiveBytes: 0,
+      totalChunks: 0,
       downloadFilename: null,
       error: null,
     };
@@ -108,11 +118,21 @@ export class ReportJobManager {
     return job ? this.summary(job) : null;
   }
 
-  getArchive(id: string): ReportJobArchive | null {
+  getChunk(id: string, index: number): ReportJobChunk | null {
     this.cleanup();
     const job = this.jobs.get(id);
     if (!job || job.status !== 'ready' || !job.archive || !job.downloadFilename) return null;
-    return { filename: job.downloadFilename, buffer: job.archive };
+    if (!Number.isInteger(index) || index < 0 || index >= job.totalChunks) return null;
+    const start = index * this.archiveChunkBytes;
+    const end = Math.min(job.archive.length, start + this.archiveChunkBytes);
+    return {
+      id: job.id,
+      index,
+      totalChunks: job.totalChunks,
+      encoding: 'base64',
+      filename: job.downloadFilename,
+      chunk: job.archive.subarray(start, end).toString('base64'),
+    };
   }
 
   private async generate(job: InternalReportJob): Promise<void> {
@@ -131,6 +151,7 @@ export class ReportJobManager {
       const finished = new Date();
       job.archive = createSingleFileZip('daily-master-review.json', raw, finished);
       job.archiveBytes = job.archive.length;
+      job.totalChunks = Math.max(1, Math.ceil(job.archive.length / this.archiveChunkBytes));
       job.downloadFilename = `memebot-daily-master-review-${finished.toISOString().slice(0, 10)}.zip`;
       job.status = 'ready';
       job.message = 'ZIP file ready to download and upload into ChatGPT.';
@@ -163,8 +184,8 @@ export class ReportJobManager {
       elapsedSeconds: Math.max(0, Math.round(((job.finishedAt || Date.now()) - job.createdAt) / 1000)),
       resultBytes: job.resultBytes,
       archiveBytes: job.archiveBytes,
+      totalChunks: job.totalChunks,
       downloadFilename: job.downloadFilename,
-      downloadPath: job.status === 'ready' ? `/api/daily-review-jobs/${job.id}/download` : null,
       error: job.error,
     };
   }
