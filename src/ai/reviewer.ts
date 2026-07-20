@@ -6,38 +6,35 @@ import { buildReport } from '../api/report';
 import { latestSuggestion } from '../tuning/autotune';
 import { pool } from '../db';
 
-// AI REVIEWER — the "analyze everything and make it better" loop, done honestly.
-// Pro-tier Gemini reads: (1) full performance report (trigger outcomes, score
-// calibration, false kills, insider correlation), (2) the live config, (3) the
-// autotune statistical suggestion — and writes a tuning review with specific
-// config.yaml changes and its reasoning.
-//
-// SUGGEST-ONLY BY DESIGN: it never edits config itself. The human reads the
-// review and applies changes. An AI silently rewriting the scoring of a money
-// bot is how systems quietly break — the review is the product, not the edit.
+// AI REVIEWER — suggest-only, evidence-first tuning support.
+// The daily master review includes aggregate calibration, cumulative profitability,
+// runtime/data health, missed opportunities, and the complete recorded ledger for every
+// paper call opened/closed during the daily window or still open.
 export async function runAiReview(): Promise<{ review: string | null; basis: any }> {
   const basis = {
-    report: await buildReport(),
+    report: await buildReport(1),
     autotuneSuggestion: latestSuggestion(),
     currentConfig: fs.readFileSync(path.join(process.cwd(), 'config.yaml'), 'utf8'),
   };
   if (!env.GEMINI_API_KEY) return { review: null, basis };
 
   const prompt = `You are the performance reviewer for a Solana memecoin scanner bot.
-Below is (A) its outcome report, (B) its current config.yaml, (C) a statistical weight suggestion from its autotuner.
+Below is (A) one complete daily master review containing the last 24 hours, cumulative results, runtime/data health, missed opportunities, and every relevant trade with its recorded entry rationale, execution, market path, exit timing, and exit reason; (B) the current config.yaml; and (C) the autotuner suggestion.
 
 Write a tuning review with exactly these sections:
-1. WORKING: what the data shows is working (cite the numbers).
-2. NOT WORKING: where the algorithm is losing (false kills, miscalibrated score bands, bad thresholds — cite numbers).
-3. CHANGES: specific config.yaml edits, as "key: current -> proposed", each with one line of reasoning grounded in the data. If autotune's weights disagree with your read, say which to trust and why.
-4. NOT ENOUGH DATA: which conclusions can't be drawn yet and what sample size is needed.
-Be blunt and numeric. SYNTHESIZE — do not recite every tercile/row from the report back to me; cite only the specific numbers that justify a conclusion. If the dataset is too small for any confident change, say so plainly and recommend waiting — do not invent changes to seem useful. Keep the whole review under ~500 words.
+1. WORKING: what the evidence shows is working, citing numbers and specific trades when useful.
+2. NOT WORKING: where calls, exits, data capture, lanes, gates, or execution are losing or failing.
+3. CHANGES: specific config/code/research changes. Config edits must use "key: current -> proposed" and every change must cite evidence.
+4. TRADE AUTOPSIES: the most instructive winning and losing calls, including why they entered, what happened after entry, when/why they closed, and what should be learned.
+5. NOT ENOUGH DATA: conclusions that cannot yet be drawn and the exact sample/coverage needed.
 
-(A) REPORT: ${JSON.stringify(basis.report)}
+Be blunt and numeric. Distinguish recorded facts from inference. Do not count tracking_lost rows as wins or losses. Do not claim live profitability from paper results. If evidence is insufficient, recommend gathering data rather than inventing a change. Keep the review under ~900 words.
+
+(A) DAILY MASTER REVIEW: ${JSON.stringify(basis.report)}
 (B) CONFIG: ${basis.currentConfig}
 (C) AUTOTUNE: ${JSON.stringify(basis.autotuneSuggestion)}`;
 
-  const review = await gemini(prompt, cfg().ai.review_model, 4000);
+  const review = await gemini(prompt, cfg().ai.review_model, 7000);
   if (review && pool) {
     await pool.query(
       `CREATE TABLE IF NOT EXISTS ai_reviews (at TIMESTAMPTZ DEFAULT now(), review TEXT)`).catch(() => {});
