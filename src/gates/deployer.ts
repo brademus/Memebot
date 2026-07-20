@@ -1,5 +1,6 @@
 import { cfg, env } from '../config';
 import { isBlacklistedDeployer, pool } from '../db';
+import { heliusRpc } from '../helius';
 
 export interface DeployerCheck { pass: boolean; reason: string | null }
 
@@ -23,23 +24,19 @@ export async function checkDeployer(creator: string | null): Promise<DeployerChe
 
   if (!env.HELIUS_API_KEY) return { pass: true, reason: null };
   try {
-    const res = await fetch(`https://mainnet.helius-rpc.com/?api-key=${env.HELIUS_API_KEY}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0', id: 1, method: 'getSignaturesForAddress',
-        params: [creator, { limit: 100 }],
-      }),
-    });
-    if (!res.ok) return { pass: true, reason: null };
-    const data: any = await res.json();
-    const sigs: any[] = data.result || [];
+    const sigs = await heliusRpc<any[]>(
+      'getSignaturesForAddress',
+      [creator, { limit: 100 }],
+      'fg',
+    ) || [];
     if (!sigs.length) return { pass: true, reason: null };
-    const oldest = sigs[sigs.length - 1].blockTime * 1000;
+    const oldestBlockTime = Number(sigs[sigs.length - 1]?.blockTime || 0);
+    if (!oldestBlockTime) return { pass: true, reason: null };
+    const oldest = oldestBlockTime * 1000;
     const ageHours = (Date.now() - oldest) / 3.6e6;
     const walletAged = sigs.length === 100 || ageHours >= c.min_wallet_age_hours;
     if (!walletAged) return { pass: false, reason: `deployer_fresh_wallet_${ageHours.toFixed(1)}h` };
-    const last24h = sigs.filter(s => s.blockTime * 1000 > Date.now() - 864e5).length;
+    const last24h = sigs.filter(signature => Number(signature.blockTime || 0) * 1000 > Date.now() - 864e5).length;
     if (sigs.length === 100 && last24h === 100)
       return { pass: false, reason: 'deployer_hyperactive_24h' };
     return { pass: true, reason: null };
