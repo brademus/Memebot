@@ -4,6 +4,7 @@ import { env, cfg } from '../config';
 import { activeTokens, allTokens, recentScans, hydration } from '../store';
 import { pool } from '../db';
 import { buildReport } from './report';
+import { reportJobs } from './report-jobs';
 import { runAiReview } from '../ai/reviewer';
 import { geminiLastError, geminiConfigured } from '../ai/gemini';
 import { runSystemMonitor } from '../ai/monitor';
@@ -134,6 +135,32 @@ export function startServer() {
     } catch (error) {
       res.status(500).json({ error: (error as Error).message });
     }
+  });
+
+  app.post('/api/daily-review-jobs', expensiveApiLimit, adminOnly, (req, res) => {
+    const days = Math.min(7, Math.max(1, parseInt(String(req.query.days || '1'), 10) || 1));
+    res.status(202).json(reportJobs.start(days));
+  });
+
+  app.get('/api/daily-review-jobs/:id/chunks/:index', adminOnly, (req, res) => {
+    const index = parseInt(req.params.index, 10);
+    const chunk = reportJobs.getChunk(req.params.id, index);
+    if (!chunk) {
+      res.status(404).json({ error: 'report chunk is unavailable or the report job expired' });
+      return;
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(chunk);
+  });
+
+  app.get('/api/daily-review-jobs/:id', adminOnly, (req, res) => {
+    const job = reportJobs.get(req.params.id);
+    if (!job) {
+      res.status(404).json({ error: 'report job was not found or expired' });
+      return;
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(job);
   });
 
   app.get('/api/wallet-rankings', async (_req, res) => {
