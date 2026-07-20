@@ -41,8 +41,6 @@ export function rateLimit(name: string, max: number, windowMs: number): RequestH
   };
 }
 
-// Retained as a compatibility export for older tests/tools. No current app route
-// uses this comparison while admin authentication is intentionally disabled.
 export function adminKeyMatches(supplied: string, expected: string): boolean {
   if (!supplied || !expected) return false;
   const suppliedDigest = crypto.createHash('sha256').update(supplied, 'utf8').digest();
@@ -50,10 +48,31 @@ export function adminKeyMatches(supplied: string, expected: string): boolean {
   return crypto.timingSafeEqual(suppliedDigest, expectedDigest);
 }
 
-// Authentication is intentionally disabled for the current private-use app. The
-// middleware name remains so route wiring stays stable, but every request passes.
-// Expensive and mutating routes remain covered by the existing API rate limits.
-export const adminOnly: RequestHandler = (_req, _res, next) => next();
+function suppliedAdminKey(req: Request): string {
+  const header = String(req.header?.('x-admin-key') || '').trim();
+  if (header) return header;
+  const authorization = String(req.header?.('authorization') || '').trim();
+  const bearer = authorization.match(/^Bearer\s+(.+)$/i);
+  return bearer ? bearer[1].trim() : '';
+}
+
+// The dashboard already stores the key only in sessionStorage and sends it through
+// x-admin-key for expensive or mutating tools. Public live-watch endpoints remain
+// read-only, while reports, diagnostics and wallet mutations require the private key.
+export const adminOnly: RequestHandler = (req, res, next) => {
+  const expected = String(process.env.ADMIN_KEY || '').trim();
+  if (!expected) {
+    res.status(503).json({ error: 'ADMIN_KEY is not configured on the server' });
+    return;
+  }
+  const supplied = suppliedAdminKey(req);
+  if (!adminKeyMatches(supplied, expected)) {
+    res.setHeader('WWW-Authenticate', 'Bearer realm="memebot-admin"');
+    res.status(401).json({ error: 'invalid admin key' });
+    return;
+  }
+  next();
+};
 
 export const publicApiLimit = rateLimit('api', 180, 60_000);
 export const expensiveApiLimit = rateLimit('expensive', 8, 60_000);
