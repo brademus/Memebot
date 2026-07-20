@@ -3,23 +3,72 @@ import { buildMasterReview } from './master-review';
 import { buildReport as buildForwardReport } from './report-v2';
 import { buildSignalReport } from './signal-report';
 
+interface SectionResult {
+  value: Record<string, any>;
+  durationMs: number;
+  timedOut: boolean;
+}
+
+async function runSection(
+  name: string,
+  work: () => Promise<any>,
+  timeoutMs = 18_000,
+): Promise<SectionResult> {
+  const started = Date.now();
+  let timer: NodeJS.Timeout | null = null;
+  try {
+    const value = await Promise.race([
+      work(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${name} exceeded ${timeoutMs}ms`)), timeoutMs);
+        timer.unref();
+      }),
+    ]);
+    return { value: value as Record<string, any>, durationMs: Date.now() - started, timedOut: false };
+  } catch (error) {
+    const message = (error as Error).message;
+    return {
+      value: { error: `${name} failed: ${message}` },
+      durationMs: Date.now() - started,
+      timedOut: message.includes('exceeded'),
+    };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function buildReport(days = 1) {
-  // One copyable review contains the daily aggregate/calibration report, Signal Stack
-  // evidence, cumulative profitability evidence, every historical trade, runtime health,
-  // and full snapshot-by-snapshot detail for calls relevant to the daily window.
-  // Each component degrades to an error field instead of taking down the entire report.
+  // The complete review remains one copyable object, but no optional section may hold
+  // the HTTP request open indefinitely. Each section degrades to an explicit error field.
   const [base, signalStack, master, historical] = await Promise.all([
-    buildForwardReport(days).catch((error: Error) => ({ error: `base report failed: ${error.message}` })),
-    buildSignalReport(days).catch((error: Error) => ({ error: `signal report failed: ${error.message}` })),
-    buildMasterReview(days).catch((error: Error) => ({ error: `master review failed: ${error.message}` })),
-    buildHistoricalReview().catch((error: Error) => ({ error: `historical review failed: ${error.message}` })),
+    runSection('base calibration report', () => buildForwardReport(days)),
+    runSection('Signal Stack report', () => buildSignalReport(days)),
+    runSection('daily trade review', () => buildMasterReview(days)),
+    runSection('historical trade review', () => buildHistoricalReview()),
   ]);
-  const masterRecord = master as Record<string, any>;
-  const historicalRecord = historical as Record<string, any>;
+
+  const masterRecord = master.value;
+  const historicalRecord = historical.value;
   const overall = masterRecord.overall ? {
     ...masterRecord.overall,
     profitabilityReadiness: historicalRecord.profitabilityReadinessBySetup
       || masterRecord.overall.profitabilityReadiness,
   } : undefined;
-  return { ...base, signalStack, ...masterRecord, ...historicalRecord, ...(overall ? { overall } : {}) };
+
+  return {
+    ...base.value,
+    signalStack: signalStack.value,
+    ...masterRecord,
+    ...historicalRecord,
+    ...(overall ? { overall } : {}),
+    reportBuild: {
+      timeoutMsPerSection: 18_000,
+      sections: {
+        base: { durationMs: base.durationMs, timedOut: base.timedOut },
+        signalStack: { durationMs: signalStack.durationMs, timedOut: signalStack.timedOut },
+        daily: { durationMs: master.durationMs, timedOut: master.timedOut },
+        historical: { durationMs: historical.durationMs, timedOut: historical.timedOut },
+      },
+    },
+  };
 }
