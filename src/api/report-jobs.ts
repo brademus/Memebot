@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { buildReport } from './report';
+import { createSingleFileZip } from './single-file-zip';
 
 export type ReportJobStatus = 'queued' | 'building' | 'ready' | 'error';
 
@@ -12,9 +13,10 @@ interface InternalReportJob {
   updatedAt: number;
   finishedAt: number | null;
   expiresAt: number;
-  resultText: string | null;
   resultBytes: number;
-  totalChunks: number;
+  archive: Buffer | null;
+  archiveBytes: number;
+  downloadFilename: string | null;
   error: string | null;
 }
 
@@ -29,34 +31,31 @@ export interface ReportJobSummary {
   expiresAt: string;
   elapsedSeconds: number;
   resultBytes: number;
-  totalChunks: number;
+  archiveBytes: number;
+  downloadFilename: string | null;
+  downloadPath: string | null;
   error: string | null;
   reused?: boolean;
 }
 
-export interface ReportJobChunk {
-  id: string;
-  index: number;
-  totalChunks: number;
-  chunk: string;
+export interface ReportJobArchive {
+  filename: string;
+  buffer: Buffer;
 }
 
 interface ReportJobManagerOptions {
-  chunkCharacters?: number;
   readyTtlMs?: number;
   runningTtlMs?: number;
   maxRetainedJobs?: number;
 }
 
-const DEFAULT_CHUNK_CHARACTERS = 180_000;
 const DEFAULT_READY_TTL_MS = 30 * 60_000;
 const DEFAULT_RUNNING_TTL_MS = 10 * 60_000;
-const DEFAULT_MAX_RETAINED_JOBS = 4;
+const DEFAULT_MAX_RETAINED_JOBS = 2;
 
 export class ReportJobManager {
   private readonly jobs = new Map<string, InternalReportJob>();
   private activeJobId: string | null = null;
-  private readonly chunkCharacters: number;
   private readonly readyTtlMs: number;
   private readonly runningTtlMs: number;
   private readonly maxRetainedJobs: number;
@@ -65,7 +64,6 @@ export class ReportJobManager {
     private readonly builder: (days: number) => Promise<unknown> = buildReport,
     options: ReportJobManagerOptions = {},
   ) {
-    this.chunkCharacters = Math.max(10_000, options.chunkCharacters || DEFAULT_CHUNK_CHARACTERS);
     this.readyTtlMs = Math.max(60_000, options.readyTtlMs || DEFAULT_READY_TTL_MS);
     this.runningTtlMs = Math.max(60_000, options.runningTtlMs || DEFAULT_RUNNING_TTL_MS);
     this.maxRetainedJobs = Math.max(1, options.maxRetainedJobs || DEFAULT_MAX_RETAINED_JOBS);
@@ -89,9 +87,10 @@ export class ReportJobManager {
       updatedAt: now,
       finishedAt: null,
       expiresAt: now + this.runningTtlMs,
-      resultText: null,
       resultBytes: 0,
-      totalChunks: 0,
+      archive: null,
+      archiveBytes: 0,
+      downloadFilename: null,
       error: null,
     };
     this.jobs.set(job.id, job);
@@ -109,19 +108,11 @@ export class ReportJobManager {
     return job ? this.summary(job) : null;
   }
 
-  getChunk(id: string, index: number): ReportJobChunk | null {
+  getArchive(id: string): ReportJobArchive | null {
     this.cleanup();
     const job = this.jobs.get(id);
-    if (!job || job.status !== 'ready' || job.resultText === null) return null;
-    if (!Number.isInteger(index) || index < 0 || index >= job.totalChunks) return null;
-    const start = index * this.chunkCharacters;
-    const end = Math.min(job.resultText.length, start + this.chunkCharacters);
-    return {
-      id: job.id,
-      index,
-      totalChunks: job.totalChunks,
-      chunk: job.resultText.slice(start, end),
-    };
+    if (!job || job.status !== 'ready' || !job.archive || !job.downloadFilename) return null;
+    return { filename: job.downloadFilename, buffer: job.archive };
   }
 
   private async generate(job: InternalReportJob): Promise<void> {
@@ -130,14 +121,19 @@ export class ReportJobManager {
     job.updatedAt = Date.now();
     try {
       const report = await this.builder(job.days);
-      job.message = 'Serializing the complete review for chunked delivery.';
+      job.message = 'Serializing the complete review.';
       job.updatedAt = Date.now();
-      const resultText = JSON.stringify(report, null, 2);
-      job.resultText = resultText;
-      job.resultBytes = Buffer.byteLength(resultText, 'utf8');
-      job.totalChunks = Math.max(1, Math.ceil(resultText.length / this.chunkCharacters));
+      const raw = Buffer.from(JSON.stringify(report, null, 2), 'utf8');
+      job.resultBytes = raw.length;
+
+      job.message = 'Compressing the review into a ZIP file.';
+      job.updatedAt = Date.now();
+      const finished = new Date();
+      job.archive = createSingleFileZip('daily-master-review.json', raw, finished);
+      job.archiveBytes = job.archive.length;
+      job.downloadFilename = `memebot-daily-master-review-${finished.toISOString().slice(0, 10)}.zip`;
       job.status = 'ready';
-      job.message = 'Review ready for download and copy.';
+      job.message = 'ZIP file ready to download and upload into ChatGPT.';
       job.finishedAt = Date.now();
       job.updatedAt = job.finishedAt;
       job.expiresAt = job.finishedAt + this.readyTtlMs;
@@ -166,7 +162,9 @@ export class ReportJobManager {
       expiresAt: new Date(job.expiresAt).toISOString(),
       elapsedSeconds: Math.max(0, Math.round(((job.finishedAt || Date.now()) - job.createdAt) / 1000)),
       resultBytes: job.resultBytes,
-      totalChunks: job.totalChunks,
+      archiveBytes: job.archiveBytes,
+      downloadFilename: job.downloadFilename,
+      downloadPath: job.status === 'ready' ? `/api/daily-review-jobs/${job.id}/download` : null,
       error: job.error,
     };
   }
