@@ -22,7 +22,6 @@ export interface HeliusRequestOptions {
 
 interface Waiter {
   resolve: (granted: boolean) => void;
-  enqueuedAt: number;
 }
 
 interface RateBucket {
@@ -45,9 +44,8 @@ const safeRate = (value: string | undefined, fallback: number, maximum: number) 
   return Math.max(1, Math.min(maximum, Math.floor(parsed)));
 };
 
-// Safe defaults match the lowest standard Helius limits: Enhanced APIs at 2 RPS,
-// RPC at 10 RPS, and Admin calls below their 5 RPS ceiling. Higher-plan projects
-// can raise these explicitly in Railway without changing code.
+// Conservative defaults match the lowest standard Helius limits. A higher-tier
+// project can raise these explicitly in Railway without changing the application.
 const ENHANCED_RPS = safeRate(process.env.HELIUS_ENHANCED_RPS, 2, 100);
 const RPC_RPS = safeRate(process.env.HELIUS_RPC_RPS, 10, 500);
 const ADMIN_RPS = safeRate(process.env.HELIUS_ADMIN_RPS, 2, 5);
@@ -84,6 +82,7 @@ const counters = {
   retries: 0,
   networkErrors: 0,
   timeouts: 0,
+  deferredCalls: 0,
   droppedBackground: 0,
   dedupedCalls: 0,
   cacheHits: 0,
@@ -95,7 +94,6 @@ const counters = {
 
 const requestCache = new Map<string, { expiresAt: number; result: HeliusResult<unknown> }>();
 const inFlightRequests = new Map<string, Promise<HeliusResult<unknown>>>();
-
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 function refill(bucket: RateBucket, now = Date.now()) {
@@ -127,17 +125,21 @@ async function acquire(group: HeliusRateGroup, priority: HeliusPriority): Promis
   const now = Date.now();
   refill(bucket, now);
 
-  if (now < bucket.blockedUntil && priority === 'bg') {
-    counters.droppedBackground++;
+  // Fail fast while the circuit is open. Queuing foreground calls for up to five
+  // minutes would stall API requests and would not help Helius recover.
+  if (now < bucket.blockedUntil) {
+    counters.deferredCalls++;
+    if (priority === 'bg') counters.droppedBackground++;
     return false;
   }
 
-  if (now >= bucket.blockedUntil && bucket.tokens >= 1 && (priority === 'fg' || bucket.fg.length === 0)) {
+  if (bucket.tokens >= 1 && (priority === 'fg' || bucket.fg.length === 0)) {
     bucket.tokens -= 1;
     return true;
   }
 
   if (priority === 'bg' && bucket.bg.length >= MAX_BG_QUEUE) {
+    counters.deferredCalls++;
     counters.droppedBackground++;
     return false;
   }
@@ -145,12 +147,13 @@ async function acquire(group: HeliusRateGroup, priority: HeliusPriority): Promis
   counters.throttledCalls++;
   return new Promise(resolve => {
     const queue = priority === 'fg' ? bucket.fg : bucket.bg;
-    queue.push({ resolve, enqueuedAt: now });
+    queue.push({ resolve });
   });
 }
 
 function dropQueuedBackground(bucket: RateBucket) {
   const dropped = bucket.bg.splice(0);
+  counters.deferredCalls += dropped.length;
   counters.droppedBackground += dropped.length;
   for (const waiter of dropped) waiter.resolve(false);
 }
@@ -228,8 +231,14 @@ function requestKey(url: string, init: RequestInit, group: HeliusRateGroup): str
   return `${group}:${method}:${safeUrl}:${body}`;
 }
 
-function skippedResult<T>(reason: string): HeliusResult<T> {
-  return { ok: false, status: 0, data: null, error: reason, skipped: true };
+function skippedResult<T>(priority: HeliusPriority): HeliusResult<T> {
+  return {
+    ok: false,
+    status: 0,
+    data: null,
+    error: priority === 'bg' ? 'helius_background_request_deferred' : 'helius_circuit_open',
+    skipped: true,
+  };
 }
 
 async function performRequest<T>(
@@ -241,7 +250,7 @@ async function performRequest<T>(
 
   for (let attempt = 0; attempt < options.maxAttempts; attempt++) {
     const granted = await acquire(options.group, options.priority);
-    if (!granted) return skippedResult<T>('helius_background_request_deferred');
+    if (!granted) return skippedResult<T>(options.priority);
 
     counters.totalCalls++;
     const controller = new AbortController();
@@ -267,6 +276,12 @@ async function performRequest<T>(
         const retryAfter = parseRetryAfterMs(response.headers.get('retry-after'));
         const delay = heliusBackoffMs(attempt, retryAfter, text);
         openCircuit(options.group, delay, text || 'HTTP 429');
+        // Background collectors run repeatedly. Returning now is safer and cheaper
+        // than holding one open for a long retry sleep.
+        if (options.priority === 'bg') {
+          noteFailure(last.error || 'HTTP 429');
+          return last;
+        }
       } else if (response.status >= 500) {
         counters.got5xx++;
       }
@@ -315,6 +330,7 @@ export async function heliusRequest<T>(
   const timeoutMs = Math.max(1000, options.timeoutMs || 8000);
   const maxAttempts = Math.max(1, Math.min(5, options.maxAttempts || (priority === 'bg' ? 2 : 5)));
   const key = options.dedupeKey || requestKey(url, init, group);
+
   const cached = requestCache.get(key);
   if (cached && cached.expiresAt > Date.now()) {
     counters.cacheHits++;
@@ -333,7 +349,10 @@ export async function heliusRequest<T>(
   try {
     const result = await promise;
     if (result.ok && (options.cacheTtlMs || 0) > 0) {
-      requestCache.set(key, { expiresAt: Date.now() + Number(options.cacheTtlMs), result: result as HeliusResult<unknown> });
+      requestCache.set(key, {
+        expiresAt: Date.now() + Number(options.cacheTtlMs),
+        result: result as HeliusResult<unknown>,
+      });
     }
     return result;
   } finally {
@@ -343,7 +362,7 @@ export async function heliusRequest<T>(
 
 export const heliusHealth = () => {
   const now = Date.now();
-  const groupHealth = Object.fromEntries(Object.entries(buckets).map(([name, bucket]) => [name, {
+  const groups = Object.fromEntries(Object.entries(buckets).map(([name, bucket]) => [name, {
     rps: bucket.rps,
     burst: bucket.burst,
     queuedFg: bucket.fg.length,
@@ -357,21 +376,19 @@ export const heliusHealth = () => {
   }]));
   const queuedFg = Object.values(buckets).reduce((sum, bucket) => sum + bucket.fg.length, 0);
   const queuedBg = Object.values(buckets).reduce((sum, bucket) => sum + bucket.bg.length, 0);
+
   return {
     configured: !!env.HELIUS_API_KEY,
+    ...counters,
     // Compatibility fields retained for existing dashboards and reports.
     rps: ENHANCED_RPS,
     queuedFg,
     queuedBg,
     queued: queuedFg + queuedBg,
-    totalCalls: counters.totalCalls,
-    throttledCalls: counters.throttledCalls,
-    got429: counters.got429,
     throttlePct: counters.logicalCalls ? Math.round(counters.throttledCalls / counters.logicalCalls * 100) : 0,
     http429Pct: counters.totalCalls ? Math.round(counters.got429 / counters.totalCalls * 100) : 0,
     successPct: counters.totalCalls ? Math.round(counters.successes / counters.totalCalls * 100) : 0,
-    ...counters,
-    groups: groupHealth,
+    groups,
     inFlightRequests: inFlightRequests.size,
     cacheEntries: requestCache.size,
   };
@@ -458,10 +475,24 @@ export async function earlyBuyers(mint: string, slotWindow = 3): Promise<string[
 // Test-only reset used by the isolated limiter regression suite.
 export function __resetHeliusForTest() {
   Object.assign(counters, {
-    logicalCalls: 0, totalCalls: 0, successes: 0, failures: 0, throttledCalls: 0,
-    got429: 0, got5xx: 0, retries: 0, networkErrors: 0, timeouts: 0,
-    droppedBackground: 0, dedupedCalls: 0, cacheHits: 0, applicationErrors: 0,
-    lastSuccessAt: null, lastFailureAt: null, lastError: null,
+    logicalCalls: 0,
+    totalCalls: 0,
+    successes: 0,
+    failures: 0,
+    throttledCalls: 0,
+    got429: 0,
+    got5xx: 0,
+    retries: 0,
+    networkErrors: 0,
+    timeouts: 0,
+    deferredCalls: 0,
+    droppedBackground: 0,
+    dedupedCalls: 0,
+    cacheHits: 0,
+    applicationErrors: 0,
+    lastSuccessAt: null,
+    lastFailureAt: null,
+    lastError: null,
   });
   for (const bucket of Object.values(buckets)) {
     for (const waiter of [...bucket.fg, ...bucket.bg]) waiter.resolve(false);
