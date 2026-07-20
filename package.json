@@ -5,7 +5,7 @@
   "main": "dist/boot.js",
   "scripts": {
     "build": "tsc",
-    "test": "node --test dist/paper/execution.test.js dist/paper/quote-status.test.js dist/paper/persistence-health.test.js dist/paper/telemetry.test.js dist/market/helius-trade-backfill.test.js dist/market/trade-window.test.js dist/model/feeder-health.test.js dist/ingest/pumpfun.test.js dist/ingest/aged.test.js dist/api/security.test.js dist/api/bestbuys.test.js dist/api/calls.test.js dist/api/master-review.test.js dist/api/report-jobs.test.js dist/scoring/score.test.js dist/scoring/rank.test.js dist/scoring/states.test.js dist/scoring/conviction.test.js dist/wallets/winnerminer.test.js dist/tuning/snapshots.test.js dist/model/model.test.js",
+    "test": "node --test dist/helius-rate.test.js dist/paper/execution.test.js dist/paper/quote-status.test.js dist/paper/persistence-health.test.js dist/paper/telemetry.test.js dist/market/helius-trade-backfill.test.js dist/market/trade-window.test.js dist/model/feeder-health.test.js dist/ingest/pumpfun.test.js dist/ingest/aged.test.js dist/api/security.test.js dist/api/bestbuys.test.js dist/api/calls.test.js dist/api/master-review.test.js dist/api/report-jobs.test.js dist/scoring/score.test.js dist/scoring/rank.test.js dist/scoring/states.test.js dist/scoring/conviction.test.js dist/wallets/winnerminer.test.js dist/tuning/snapshots.test.js dist/model/model.test.js",
     "check": "npm run build && npm test",
     "start": "node dist/boot.js",
     "dev": "tsx src/boot.ts"
