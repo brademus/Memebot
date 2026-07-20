@@ -149,7 +149,7 @@ export class ReportJobManager {
       job.message = 'Compressing the review into a ZIP file.';
       job.updatedAt = Date.now();
       const finished = new Date();
-      job.archive = createSingleFileZip('daily-master-review.json', raw, finished);
+      job.archive = await createSingleFileZip('daily-master-review.json', raw, finished);
       job.archiveBytes = job.archive.length;
       job.totalChunks = Math.max(1, Math.ceil(job.archive.length / this.archiveChunkBytes));
       job.downloadFilename = `memebot-daily-master-review-${finished.toISOString().slice(0, 10)}.zip`;
