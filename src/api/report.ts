@@ -14,5 +14,12 @@ export async function buildReport(days = 1) {
     buildMasterReview(days).catch((error: Error) => ({ error: `master review failed: ${error.message}` })),
     buildHistoricalReview().catch((error: Error) => ({ error: `historical review failed: ${error.message}` })),
   ]);
-  return { ...base, signalStack, ...master, ...historical };
+  const masterRecord = master as Record<string, any>;
+  const historicalRecord = historical as Record<string, any>;
+  const overall = masterRecord.overall ? {
+    ...masterRecord.overall,
+    profitabilityReadiness: historicalRecord.profitabilityReadinessBySetup
+      || masterRecord.overall.profitabilityReadiness,
+  } : undefined;
+  return { ...base, signalStack, ...masterRecord, ...historicalRecord, ...(overall ? { overall } : {}) };
 }
