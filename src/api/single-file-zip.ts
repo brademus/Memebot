@@ -1,4 +1,7 @@
-import { deflateRawSync } from 'node:zlib';
+import { promisify } from 'node:util';
+import { deflateRaw } from 'node:zlib';
+
+const deflateRawAsync = promisify(deflateRaw);
 
 const CRC_TABLE = (() => {
   const table = new Uint32Array(256);
@@ -24,12 +27,12 @@ function dosDateTime(date: Date): { date: number; time: number } {
   };
 }
 
-export function createSingleFileZip(filename: string, content: Buffer, modifiedAt = new Date()): Buffer {
+export async function createSingleFileZip(filename: string, content: Buffer, modifiedAt = new Date()): Promise<Buffer> {
   const name = Buffer.from(filename, 'utf8');
   if (!name.length || name.length > 0xffff) throw new Error('ZIP filename must be between 1 and 65535 UTF-8 bytes');
   if (content.length > 0xffffffff) throw new Error('ZIP64 is not supported for files larger than 4 GiB');
 
-  const compressed = deflateRawSync(content, { level: 9 });
+  const compressed = await deflateRawAsync(content, { level: 9 }) as Buffer;
   if (compressed.length > 0xffffffff) throw new Error('ZIP64 is not supported for compressed files larger than 4 GiB');
   const checksum = crc32(content);
   const stamp = dosDateTime(modifiedAt);
