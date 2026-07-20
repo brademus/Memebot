@@ -3,7 +3,7 @@ import test from 'node:test';
 import { cfg } from '../config';
 import { addToken, removeToken } from '../store';
 import { agedPersistenceReady } from '../scoring/persistence';
-import { assessAgedPool } from './aged';
+import { agedSetupForAge, assessAgedPool } from './aged';
 
 function healthyAttributes(now: number) {
   return {
@@ -26,14 +26,25 @@ test('aged scanner admits an established liquid revival with sustained activity'
   const result = assessAgedPool(healthyAttributes(now), now);
   assert.equal(result.eligible, true);
   assert.equal(result.reason, null);
-  assert.ok(result.metrics.ageHours > cfg().aged.min_age_hours);
+  assert.ok(result.metrics.ageHours > 72);
+  assert.equal(agedSetupForAge(result.metrics.ageHours), 'established_revival');
   assert.ok(result.metrics.buyRatio1h >= cfg().aged.min_buy_ratio_1h);
 });
 
-test('aged scanner rejects young pools and vertical five-minute chases', () => {
+test('aged scanner admits the 3-72 hour post-graduation continuation window', () => {
+  const now = Date.now();
+  const continuation = healthyAttributes(now);
+  continuation.pool_created_at = new Date(now - 12 * 3_600_000).toISOString();
+  const result = assessAgedPool(continuation, now);
+  assert.equal(result.eligible, true);
+  assert.equal(result.reason, null);
+  assert.equal(agedSetupForAge(result.metrics.ageHours), 'post_grad_continuation');
+});
+
+test('aged scanner rejects pre-window pools and vertical five-minute chases', () => {
   const now = Date.now();
   const young = healthyAttributes(now);
-  young.pool_created_at = new Date(now - 12 * 3_600_000).toISOString();
+  young.pool_created_at = new Date(now - 2 * 3_600_000).toISOString();
   assert.equal(assessAgedPool(young, now).reason, 'too_young');
 
   const vertical = healthyAttributes(now);
