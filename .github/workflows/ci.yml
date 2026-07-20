@@ -59,6 +59,15 @@ jobs:
       - name: Paper persistence health tests
         run: node --test dist/paper/persistence-health.test.js
 
+      - name: Paper tracking recovery tests
+        run: node --test dist/paper/tracking-recovery.test.js
+
+      - name: Telegram delivery retry tests
+        run: node --test dist/alerts/telegram.test.js
+
+      - name: Private admin authentication tests
+        run: node --test dist/api/security.test.js
+
       - name: Best Buy lane tests
         run: node --test dist/api/bestbuys.test.js
 
@@ -87,7 +96,18 @@ jobs:
         run: node --test --test-name-pattern="observations include" dist/model/model.test.js
 
       - name: Full test manifest
-        run: npm test
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee full-test.log
+
+      - name: Retain full test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-test-${{ github.run_id }}
+          path: full-test.log
+          retention-days: 7
 
       - name: Dashboard JavaScript syntax
         run: node --check public/app.js && node --check public/no-admin.js && node --check public/daily-review.js && node --check public/observed-wins.js

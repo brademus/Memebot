@@ -1,9 +1,17 @@
 import { pool } from '../db';
+import { buildPrivateReadiness } from '../ops/private-readiness';
 import { getToken } from '../store';
 import { MODEL_VERSION } from '../model/version';
 import { ExecutionEvidence } from '../types';
 import { executionSettings, quoteExecutableEntry, quoteExecutableExit } from './execution';
 import { quoteCategory, quotePhase } from './quote-status';
+import {
+  noteTrackingGraceDeferral,
+  noteTrackingLostAfterGrace,
+  recoverPaperMark,
+  shouldDeclareTrackingLost,
+  trackingRecoveryDiag,
+} from './tracking-recovery';
 import {
   finalizePaperTelemetry,
   PaperTelemetryContext,
@@ -105,22 +113,44 @@ export function startPaperTrader() {
   timer.unref();
 }
 
+const trackingRecoveryNoted = new Set<number>();
+
 async function mark() {
   if (!pool) return;
   const open = await pool.query(
-    `SELECT id,ca,signal,model_version,entry_price,entry_at,peak_price,trough_price,target_hit_at,observed_target_hit_at,
+    `SELECT id,ca,signal,model_version,entry_price,entry_at,last_at,peak_price,trough_price,target_hit_at,observed_target_hit_at,
             execution_eligible,position_usd,quoted_out_amount,exit_quote_status
        FROM paper_trades WHERE closed=false`,
   ).catch(() => ({ rows: [] as any[] }));
   for (const row of open.rows) {
     const token = getToken(row.ca);
-    if (!token || !token.priceUsd || token.priceUsd <= 0) {
-      if (!token) await closeAt(row, null, null, 'tracking_lost');
-      continue;
+    let price = token && token.priceUsd > 0 ? token.priceUsd : 0;
+    let recovered = false;
+
+    if (!(price > 0)) {
+      const fallback = await recoverPaperMark(row.ca);
+      if (!fallback) {
+        if (shouldDeclareTrackingLost(row.last_at || row.entry_at)) {
+          noteTrackingLostAfterGrace();
+          await closeAt(row, token || null, null, 'tracking_lost');
+        } else {
+          noteTrackingGraceDeferral();
+        }
+        continue;
+      }
+      price = fallback.price;
+      recovered = true;
+      const paperId = Number(row.id);
+      if (!trackingRecoveryNoted.has(paperId)) {
+        trackingRecoveryNoted.add(paperId);
+        await recordPaperEvent(paperId, token || null, row.signal, row.model_version,
+          'tracking_recovered', 'tracking_recovered_dexscreener', price,
+          'in-memory token mark unavailable; Dexscreener fallback restored outcome tracking', fallback, Date.now());
+      }
     }
+
     const entry = Number(row.entry_price);
     if (!Number.isFinite(entry) || entry <= 0) continue;
-    const price = token.priceUsd;
     const previousPeak = Number(row.peak_price) || entry;
     const previousTrough = Number(row.trough_price) || entry;
     const peak = Math.max(previousPeak, price);
@@ -131,7 +161,7 @@ async function mark() {
     const ageHours = (Date.now() - new Date(row.entry_at).getTime()) / 3_600_000;
     const observedTarget = peakMultiple >= executionSettings.targetMultiple;
 
-    await recordPaperSnapshot(row, token);
+    if (token) await recordPaperSnapshot(row, token);
     await pool.query(
       `UPDATE paper_trades SET last_price=$2,last_at=now(),peak_price=$3,
          peak_at=CASE WHEN $3>peak_price THEN now() ELSE peak_at END,
@@ -145,9 +175,9 @@ async function mark() {
     ).catch(() => {});
 
     if (observedTarget && !row.observed_target_hit_at) {
-      await recordPaperEvent(row.id, token, row.signal, row.model_version,
+      await recordPaperEvent(row.id, token || null, row.signal, row.model_version,
         'observed_target_reached', 'observed_target', peak, null,
-        { targetMultiple: executionSettings.targetMultiple, peakMultiple }, Date.now());
+        { targetMultiple: executionSettings.targetMultiple, peakMultiple, markSource: recovered ? 'dexscreener_recovery' : 'memory' }, Date.now());
     }
 
     let verified = false;
@@ -167,7 +197,7 @@ async function mark() {
           [row.id, exit.status, exit.proceedsUsd, exit.priceImpact,
            exit.feeLamports, exit.router, exit.quoteTimeMs, exit.transactionBuilt, exit.simulationOk, exit.simulationError],
         ).catch(() => {});
-        await recordPaperEvent(row.id, token, row.signal, row.model_version,
+        await recordPaperEvent(row.id, token || null, row.signal, row.model_version,
           exit.eligible ? 'exit_quote_eligible' : 'exit_quote_ineligible', 'target_exit_quote',
           price, exit.status, { ...exit, realizedMultiple: realized }, Date.now());
         if (exit.eligible && realized >= executionSettings.targetMultiple) {
@@ -182,23 +212,23 @@ async function mark() {
            seconds_to_target=COALESCE(seconds_to_target,EXTRACT(EPOCH FROM (now()-entry_at))::int)
          WHERE id=$1`, [row.id],
       ).catch(() => {});
-      await recordPaperEvent(row.id, token, row.signal, row.model_version,
+      await recordPaperEvent(row.id, token || null, row.signal, row.model_version,
         'verified_target_reached', 'verified_target', verifiedExitPrice,
         row.execution_eligible ? 'target exit simulated' : 'legacy observed target',
         { targetMultiple: executionSettings.targetMultiple }, Date.now());
-      await closeAt(row, token, verifiedExitPrice,
+      await closeAt(row, token || null, verifiedExitPrice,
         row.execution_eligible ? 'target_3x_exit_simulated' : 'target_3x_observed_legacy');
       continue;
     }
     if (observedTarget && row.signal === 'model_raw') {
-      await closeAt(row, token, price, 'target_3x_observed_shadow');
+      await closeAt(row, token || null, price, 'target_3x_observed_shadow');
       continue;
     }
     let reason: string | null = null;
     if (multiple <= executionSettings.stopMultiple) reason = `stop_${Math.round((1 - executionSettings.stopMultiple) * 100)}pct`;
-    else if (token.state === 'DEAD') reason = 'coin_died';
+    else if (token?.state === 'DEAD') reason = 'coin_died';
     else if (ageHours >= executionSettings.maxHoldHours) reason = `time_${executionSettings.maxHoldHours}h`;
-    if (reason) await closeAt(row, token, price, reason);
+    if (reason) await closeAt(row, token || null, price, reason);
   }
 }
 
@@ -211,6 +241,7 @@ async function closeAt(row: any, token: ReturnType<typeof getToken> | null, pric
     [row.id, reason, price],
   ).catch(() => null);
   if (!closed?.rowCount) return;
+  trackingRecoveryNoted.delete(Number(row.id));
   await finalizePaperTelemetry(Number(row.id), token || null, price, reason);
 }
 
@@ -286,10 +317,26 @@ export async function paperQuoteStatusBreakdown(days = 30): Promise<any[]> {
 }
 
 export async function paperDiag() {
-  if (!pool) return {
-    open: 0, total: 0, executable: 0, hit3x: 0, quotePending: 0, quoteStatuses: [],
-    telemetry: await paperTelemetryDiag(),
-  };
+  if (!pool) {
+    const base = {
+      db: false,
+      open: 0,
+      total: 0,
+      executable: 0,
+      transactionBuilt: 0,
+      simulationOk: 0,
+      hit3x: 0,
+      quotePending: 0,
+      quoteStatuses: [] as any[],
+      recentClosed: 0,
+      recentTrackingLost: 0,
+      recentTrackingLostPct: null as number | null,
+      executionEpochAt: null as string | null,
+      trackingRecovery: trackingRecoveryDiag(),
+      telemetry: await paperTelemetryDiag(),
+    };
+    return { ...base, privateReadiness: buildPrivateReadiness(base) };
+  }
   const result = await pool.query(
     `SELECT COUNT(*) FILTER (WHERE NOT closed) AS open,COUNT(*) AS total,
        COUNT(*) FILTER (WHERE execution_eligible) AS executable,COUNT(*) FILTER (WHERE transaction_built) AS transaction_built,
@@ -297,18 +344,31 @@ export async function paperDiag() {
        COUNT(*) FILTER (WHERE execution_eligible AND target_hit_at IS NOT NULL) AS hit3x,
        COUNT(*) FILTER (WHERE quote_status='quote_pending') AS quote_pending,
        COUNT(*) FILTER (WHERE quote_status='jupiter_api_key_missing') AS missing_api_key,
-       COUNT(*) FILTER (WHERE execution_eligible AND observed_target_hit_at IS NOT NULL AND target_hit_at IS NULL) AS exit_unverified
-     FROM paper_trades`,
+       COUNT(*) FILTER (WHERE execution_eligible AND observed_target_hit_at IS NOT NULL AND target_hit_at IS NULL) AS exit_unverified,
+       COUNT(*) FILTER (WHERE exit_at>now()-interval '24 hours') AS recent_closed,
+       COUNT(*) FILTER (WHERE exit_at>now()-interval '24 hours' AND exit_reason='tracking_lost') AS recent_tracking_lost,
+       MIN(entry_at) FILTER (WHERE model_version=$1 AND simulation_ok) AS execution_epoch_at
+     FROM paper_trades`, [MODEL_VERSION],
   ).catch(() => ({ rows: [{}] }));
   const row = result.rows[0] || {};
-  return {
+  const recentClosed = numberValue(row.recent_closed);
+  const recentTrackingLost = numberValue(row.recent_tracking_lost);
+  const recentTrackingLostPct = recentClosed ? Math.round(recentTrackingLost / recentClosed * 1000) / 10 : null;
+  const base = {
+    db: true,
     open: numberValue(row.open), total: numberValue(row.total), executable: numberValue(row.executable),
     transactionBuilt: numberValue(row.transaction_built), simulationOk: numberValue(row.simulation_ok),
     observedHit3x: numberValue(row.observed_hit3x), hit3x: numberValue(row.hit3x),
     quotePending: numberValue(row.quote_pending), missingApiKey: numberValue(row.missing_api_key),
     exitUnverified: numberValue(row.exit_unverified), targetMultiple: executionSettings.targetMultiple,
     minForwardSamples: executionSettings.minForwardSamples, currentModel: MODEL_VERSION,
+    recentClosed,
+    recentTrackingLost,
+    recentTrackingLostPct,
+    executionEpochAt: row.execution_epoch_at ? new Date(row.execution_epoch_at).toISOString() : null,
     quoteStatuses: await paperQuoteStatusBreakdown(30),
+    trackingRecovery: trackingRecoveryDiag(),
     telemetry: await paperTelemetryDiag(),
   };
+  return { ...base, privateReadiness: buildPrivateReadiness(base) };
 }
