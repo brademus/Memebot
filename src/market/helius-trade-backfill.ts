@@ -7,7 +7,10 @@ import { recordTradeEvent } from './trade-events';
 
 const WINDOW_MS = 5 * 60_000;
 const POLL_INTERVAL_MS = 30_000;
-const MAX_TOKENS_PER_SWEEP = 80;
+// The fallback consumes the Enhanced API budget. At the safe 2 RPS default,
+// 24 tokens per 30-second sweep uses at most 0.8 RPS and leaves capacity for
+// bundle, entity-graph, wallet-quality, and foreground requests.
+const MAX_TOKENS_PER_SWEEP = 24;
 const lastPoll = new Map<string, number>();
 let running = false;
 let started = false;
@@ -21,6 +24,7 @@ const diag = {
   lastSweep: null as string | null,
   lastError: null as string | null,
   enabled: false,
+  maxTokensPerSweep: MAX_TOKENS_PER_SWEEP,
 };
 
 export const heliusTradeBackfillDiag = () => ({
@@ -43,7 +47,8 @@ export function startHeliusTradeBackfill() {
     diag.lastError = (error as Error).message;
     console.error('[helius-trades]', diag.lastError);
   });
-  setTimeout(run, 18_000);
+  const initial = setTimeout(run, 18_000);
+  initial.unref();
   const timer = setInterval(run, POLL_INTERVAL_MS);
   timer.unref();
 }
@@ -69,8 +74,10 @@ async function sweep() {
       .sort((left, right) => (right.score + Math.log1p(right.vol5m)) - (left.score + Math.log1p(left.vol5m)))
       .slice(0, MAX_TOKENS_PER_SWEEP);
 
-    for (let index = 0; index < candidates.length; index += 5) {
-      await Promise.all(candidates.slice(index, index + 5).map(token => backfillToken(token, now)));
+    // Small batches avoid constructing a large promise burst before the shared
+    // limiter can shed or defer background work.
+    for (let index = 0; index < candidates.length; index += 3) {
+      await Promise.all(candidates.slice(index, index + 3).map(token => backfillToken(token, now)));
     }
     diag.lastSweep = new Date().toISOString();
   } finally {

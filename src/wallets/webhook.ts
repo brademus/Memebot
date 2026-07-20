@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { cfg, env } from '../config';
 import { pool } from '../db';
+import { heliusRequest } from '../helius';
 import { recordSmartBuy, setWalletWeights } from './tracker';
 
 let registered = false;
@@ -26,7 +27,8 @@ export function startWalletWebhook(onDiscovery: (ca: string) => void) {
   if (!publicUrl()) { lastError = 'no public URL (set PUBLIC_URL or run on Railway)'; return; }
   discoveryHook = onDiscovery;
   setTimeout(syncWebhook, 20_000);
-  setInterval(syncWebhook, 30 * 60_000);
+  const timer = setInterval(syncWebhook, 30 * 60_000);
+  timer.unref();
 }
 
 let discoveryHook: ((ca: string) => void) | null = null;
@@ -62,9 +64,17 @@ export async function syncWebhook() {
     }
     setWalletWeights(active.rows);
 
-    const base = `https://api.helius.xyz/v0/webhooks?api-key=${env.HELIUS_API_KEY}`;
-    const existing: any[] = await (await fetch(base)).json().catch(() => []);
-    const mine = Array.isArray(existing) ? existing.find(webhook => webhook.webhookURL === hookUrl) : null;
+    const base = `https://api.helius.xyz/v0/webhooks?api-key=${encodeURIComponent(env.HELIUS_API_KEY)}`;
+    const existingResult = await heliusRequest<any[]>(base, {}, {
+      group: 'admin',
+      priority: 'bg',
+      maxAttempts: 3,
+      dedupeKey: `helius-webhooks:list:${hookUrl}`,
+      cacheTtlMs: 5_000,
+    });
+    if (!existingResult.ok) throw new Error(`helius webhook list: ${existingResult.status || 0} ${existingResult.error || 'request deferred'}`);
+    const existing = Array.isArray(existingResult.data) ? existingResult.data : [];
+    const mine = existing.find(webhook => webhook.webhookURL === hookUrl) || null;
     const body = JSON.stringify({
       webhookURL: hookUrl,
       transactionTypes: ['SWAP'],
@@ -72,18 +82,27 @@ export async function syncWebhook() {
       webhookType: 'enhanced',
       authHeader: secret,
     });
-    const response = mine
-      ? await fetch(`https://api.helius.xyz/v0/webhooks/${mine.webhookID}?api-key=${env.HELIUS_API_KEY}`, {
-          method: 'PUT', headers: { 'content-type': 'application/json' }, body,
-        })
-      : await fetch(base, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
-    if (!response.ok) throw new Error(`helius webhook ${mine ? 'update' : 'create'}: ${response.status} ${(await response.text()).slice(0, 200)}`);
+    const target = mine
+      ? `https://api.helius.xyz/v0/webhooks/${encodeURIComponent(mine.webhookID)}?api-key=${encodeURIComponent(env.HELIUS_API_KEY)}`
+      : base;
+    const response = await heliusRequest<unknown>(target, {
+      method: mine ? 'PUT' : 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+    }, {
+      group: 'admin',
+      priority: 'bg',
+      maxAttempts: 3,
+      dedupeKey: `helius-webhooks:${mine ? 'update' : 'create'}:${hookUrl}:${addresses.join(',')}`,
+    });
+    if (!response.ok) throw new Error(`helius webhook ${mine ? 'update' : 'create'}: ${response.status || 0} ${response.error || 'request deferred'}`);
     registered = true;
     lastSync = Date.now();
     lastError = null;
     addressCount = addresses.length;
     console.log(`[wallets] webhook live — ${addresses.length} active/candidate wallets streaming to ${hookUrl}`);
   } catch (error) {
+    registered = false;
     lastError = (error as Error).message;
     console.error('[wallets] webhook', lastError);
   }
