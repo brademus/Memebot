@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import WebSocket from 'ws';
 import { addToken, getToken, allTokens, recordScan } from '../store';
 import { bumpDeployer, upsertToken } from '../db';
@@ -12,13 +13,93 @@ export function setSolPrice(price: number) { if (price > 0) SOL_USD = price; }
 export const getSolPrice = () => SOL_USD;
 
 const TRADE_STREAM_STALE_MS = 4 * 60_000;
-const tradeStreamConfigured = !!env.PUMPPORTAL_API_KEY;
+const rawPumpPortalApiKey = env.PUMPPORTAL_API_KEY || '';
+const pumpPortalApiKey = rawPumpPortalApiKey.trim();
+const tradeStreamConfigured = !!pumpPortalApiKey;
+const keyFingerprint = tradeStreamConfigured
+  ? createHash('sha256').update(pumpPortalApiKey).digest('hex').slice(0, 10)
+  : null;
+const keyHasOuterQuotes = pumpPortalApiKey.length >= 2
+  && ((pumpPortalApiKey.startsWith('"') && pumpPortalApiKey.endsWith('"'))
+    || (pumpPortalApiKey.startsWith("'") && pumpPortalApiKey.endsWith("'")));
+
 let ws: WebSocket | null = null;
 let backoff = 1000;
+let connectionAttempts = 0;
+let successfulConnections = 0;
+let reconnects = 0;
 let lastSocketOpenAt: number | null = null;
+let lastMessageAt: number | null = null;
 let lastTradeAt: number | null = null;
+let lastControlAt: number | null = null;
+let lastControlMessage: string | null = null;
+let lastProtocolErrorAt: number | null = null;
+let lastProtocolError: string | null = null;
+let lastParseErrorAt: number | null = null;
+let lastParseError: string | null = null;
+let lastSocketErrorAt: number | null = null;
+let lastSocketError: string | null = null;
+let lastCloseAt: number | null = null;
+let lastCloseCode: number | null = null;
+let lastCloseReason: string | null = null;
+let totalMessages = 0;
+let createMessages = 0;
+let migrationMessages = 0;
 let tradeMessages = 0;
+let appliedTradeMessages = 0;
+let unknownTradeTokenMessages = 0;
 let walletTaggedTrades = 0;
+let controlMessages = 0;
+let unknownMessages = 0;
+let parseErrors = 0;
+let subscriptionSendErrors = 0;
+let newTokenSubscriptions = 0;
+let migrationSubscriptions = 0;
+let tokenTradeSubscriptionCommands = 0;
+let tokenTradeKeysRequested = 0;
+let unsubscribeCommands = 0;
+let lastSubscriptionAt: number | null = null;
+let lastSubscriptionError: string | null = null;
+
+export type PumpPortalMessageKind = 'create' | 'trade' | 'migration' | 'control' | 'unknown';
+
+export function classifyPumpPortalMessage(msg: unknown): PumpPortalMessageKind {
+  if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return 'unknown';
+  const value = msg as Record<string, unknown>;
+  const txType = String(value.txType || '').toLowerCase();
+  if (value.mint && txType === 'create') return 'create';
+  if (value.mint && (txType === 'buy' || txType === 'sell')) return 'trade';
+  if (value.mint && (txType === 'migrate' || txType === 'migration')) return 'migration';
+  if ('message' in value || 'error' in value || 'errors' in value || 'status' in value
+    || 'success' in value || 'result' in value) return 'control';
+  return 'unknown';
+}
+
+function stringifySafe(value: unknown): string {
+  try {
+    return typeof value === 'string' ? value : JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+export function redactPumpPortalText(value: unknown, apiKey = pumpPortalApiKey): string {
+  let text = stringifySafe(value);
+  if (apiKey) text = text.split(apiKey).join('[REDACTED_API_KEY]');
+  text = text.replace(/([?&]api-key=)[^&\s"']+/gi, '$1[REDACTED_API_KEY]');
+  return text.slice(0, 800);
+}
+
+export function pumpPortalRejection(value: unknown): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const msg = value as Record<string, unknown>;
+  const status = String(msg.status || '').toLowerCase();
+  const structuredFailure = Boolean(msg.error || msg.errors || msg.success === false
+    || ['error', 'failed', 'failure', 'rejected', 'unauthorized', 'forbidden'].includes(status));
+  const text = redactPumpPortalText(msg);
+  const failureLanguage = /\b(invalid|insufficient|unauthori[sz]ed|forbidden|banned|blocked|rejected|failed|failure|error|rate[ -]?limit(?:ed)?|too many|payment required|funds? required|balance too low|not enough)\b/i.test(text);
+  return structuredFailure || failureLanguage ? text : null;
+}
 
 export function tradeStreamModeFromHealth(
   configured: boolean,
@@ -36,28 +117,94 @@ export function tradeStreamModeFromHealth(
 // of permanently deadlocking every conviction at the final entry gate.
 export const getStreamMode = () => tradeStreamModeFromHealth(tradeStreamConfigured, lastTradeAt);
 
+const iso = (value: number | null) => value ? new Date(value).toISOString() : null;
+
 export const pumpfunStreamDiag = () => {
   const now = Date.now();
   const effectiveMode = getStreamMode();
   const staleForSeconds = lastTradeAt === null ? null : Math.max(0, Math.round((now - lastTradeAt) / 1000));
+  const connected = ws?.readyState === WebSocket.OPEN;
   return {
     configured: tradeStreamConfigured,
-    connected: ws?.readyState === WebSocket.OPEN,
+    connected,
     effectiveMode,
+    key: {
+      fingerprint: keyFingerprint,
+      normalizedLength: pumpPortalApiKey.length,
+      hadSurroundingWhitespace: rawPumpPortalApiKey !== pumpPortalApiKey,
+      hasOuterQuotes: keyHasOuterQuotes,
+      formatWarning: keyHasOuterQuotes
+        ? 'Remove quote characters from PUMPPORTAL_API_KEY in Railway.'
+        : rawPumpPortalApiKey !== pumpPortalApiKey
+          ? 'Leading or trailing whitespace was removed at runtime; clean the Railway variable.'
+          : null,
+    },
+    connection: {
+      readyState: ws?.readyState ?? null,
+      attempts: connectionAttempts,
+      successfulConnections,
+      reconnects,
+      lastSocketOpenAt: iso(lastSocketOpenAt),
+      lastMessageAt: iso(lastMessageAt),
+      lastSocketErrorAt: iso(lastSocketErrorAt),
+      lastSocketError,
+      lastCloseAt: iso(lastCloseAt),
+      lastCloseCode,
+      lastCloseReason,
+      reconnectBackoffMs: backoff,
+    },
+    messages: {
+      total: totalMessages,
+      creates: createMessages,
+      tradesReceived: tradeMessages,
+      tradesApplied: appliedTradeMessages,
+      tradesForUnknownTokens: unknownTradeTokenMessages,
+      migrations: migrationMessages,
+      controls: controlMessages,
+      unknown: unknownMessages,
+      parseErrors,
+      walletTaggedTrades,
+      walletCoverage: tradeMessages ? +(walletTaggedTrades / tradeMessages).toFixed(3) : 0,
+      lastTradeAt: iso(lastTradeAt),
+      lastControlAt: iso(lastControlAt),
+      lastControlMessage,
+      lastProtocolErrorAt: iso(lastProtocolErrorAt),
+      lastProtocolError,
+      lastParseErrorAt: iso(lastParseErrorAt),
+      lastParseError,
+    },
+    subscriptions: {
+      newTokenCommands: newTokenSubscriptions,
+      migrationCommands: migrationSubscriptions,
+      tokenTradeCommands: tokenTradeSubscriptionCommands,
+      tokenTradeKeysRequested,
+      unsubscribeCommands,
+      sendErrors: subscriptionSendErrors,
+      lastSubscriptionAt: iso(lastSubscriptionAt),
+      lastSubscriptionError,
+    },
+    // Retain the original top-level fields so existing reports and dashboards remain compatible.
     tradeMessages,
+    appliedTradeMessages,
     walletTaggedTrades,
     walletCoverage: tradeMessages ? +(walletTaggedTrades / tradeMessages).toFixed(3) : 0,
-    lastSocketOpenAt: lastSocketOpenAt ? new Date(lastSocketOpenAt).toISOString() : null,
-    lastTradeAt: lastTradeAt ? new Date(lastTradeAt).toISOString() : null,
+    lastSocketOpenAt: iso(lastSocketOpenAt),
+    lastTradeAt: iso(lastTradeAt),
     staleForSeconds,
     staleAfterSeconds: Math.round(TRADE_STREAM_STALE_MS / 1000),
     reason: !tradeStreamConfigured
       ? 'api_key_missing'
-      : lastTradeAt === null
-        ? 'no_token_trade_events_received'
-        : effectiveMode === 'lite'
-          ? 'token_trade_stream_stale'
-          : 'healthy',
+      : keyHasOuterQuotes
+        ? 'api_key_has_outer_quotes'
+        : lastProtocolError && lastProtocolErrorAt && (!lastTradeAt || lastProtocolErrorAt >= lastTradeAt)
+          ? 'pumpportal_rejected_or_errored'
+          : !connected
+            ? 'socket_not_open'
+            : lastTradeAt === null
+              ? 'no_token_trade_events_received'
+              : effectiveMode === 'lite'
+                ? 'token_trade_stream_stale'
+                : 'healthy',
   };
 };
 
@@ -88,14 +235,10 @@ function seedCurve(t: any, msg: any) {
   t.curveSamples = [{ sol: solInCurve, at: now }];
 }
 
-function applyCurveTrade(msg: any) {
+function applyCurveTrade(msg: any): boolean {
   const t = getToken(msg.mint);
-  if (!t) return;
+  if (!t) return false;
   const now = Date.now();
-  const previousMode = getStreamMode();
-  lastTradeAt = now;
-  tradeMessages++;
-  if (previousMode === 'lite') console.log('[pumpfun] token-trade stream active — strict wallet evidence restored');
 
   if (msg.vSolInBondingCurve) {
     t.curveSol = Number(msg.vSolInBondingCurve);
@@ -109,7 +252,6 @@ function applyCurveTrade(msg: any) {
   }
 
   const wallet = String(msg.traderPublicKey || msg.user || msg.trader || '') || null;
-  if (wallet) walletTaggedTrades++;
   const buy = msg.txType === 'buy';
   const event: TradeEvent = {
     at: now,
@@ -146,87 +288,176 @@ function applyCurveTrade(msg: any) {
   }
   t.curveSamples.push({ sol: t.curveSol, at: now });
   if (t.curveSamples.length > 120) t.curveSamples.shift();
+  return true;
 }
 
-const WS_URL = () => 'wss://pumpportal.fun/api/data' + (env.PUMPPORTAL_API_KEY ? `?api-key=${env.PUMPPORTAL_API_KEY}` : '');
+const WS_URL = () => 'wss://pumpportal.fun/api/data' + (tradeStreamConfigured ? `?api-key=${encodeURIComponent(pumpPortalApiKey)}` : '');
+
+function sendSubscription(method: string, keys?: string[]): boolean {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  try {
+    ws.send(JSON.stringify(keys ? { method, keys } : { method }));
+    lastSubscriptionAt = Date.now();
+    lastSubscriptionError = null;
+    if (method === 'subscribeNewToken') newTokenSubscriptions++;
+    else if (method === 'subscribeMigration') migrationSubscriptions++;
+    else if (method === 'subscribeTokenTrade') {
+      tokenTradeSubscriptionCommands++;
+      tokenTradeKeysRequested += keys?.length || 0;
+    } else if (method === 'unsubscribeTokenTrade') unsubscribeCommands++;
+    return true;
+  } catch (error) {
+    subscriptionSendErrors++;
+    lastSubscriptionError = redactPumpPortalText((error as Error).message);
+    console.error(`[pumpfun] subscription send failed method=${method}:`, lastSubscriptionError);
+    return false;
+  }
+}
 
 export function startPumpfunMonitor(onNew: (ca: string) => void) { connect(onNew); }
 
 function connect(onNew: (ca: string) => void) {
+  connectionAttempts++;
   ws = new WebSocket(WS_URL());
   ws.on('open', () => {
     backoff = 1000;
+    successfulConnections++;
     lastSocketOpenAt = Date.now();
-    ws!.send(JSON.stringify({ method: 'subscribeNewToken' }));
-    ws!.send(JSON.stringify({ method: 'subscribeMigration' }));
+    lastSocketError = null;
+    sendSubscription('subscribeNewToken');
+    sendSubscription('subscribeMigration');
     if (tradeStreamConfigured) {
       const live = allTokens().filter(t => t.gated !== false && t.dex === 'pumpfun' && t.state !== 'DEAD').map(t => t.ca);
       for (let index = 0; index < live.length; index += 50)
-        ws!.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: live.slice(index, index + 50) }));
-      console.log(`[pumpfun] connected — trade feed configured, resubscribed ${live.length} live token streams`);
+        sendSubscription('subscribeTokenTrade', live.slice(index, index + 50));
+      console.log(`[pumpfun] connected — paid trade feed configured (key ${keyFingerprint}), resubscribed ${live.length} live token streams`);
     } else console.log('[pumpfun] connected, subscribed to new tokens + migrations');
   });
 
   ws.on('message', (raw: WebSocket.RawData) => {
+    const receivedAt = Date.now();
+    lastMessageAt = receivedAt;
+    totalMessages++;
+    let msg: any;
     try {
-      const msg = JSON.parse(raw.toString());
-      if (msg.mint && msg.txType === 'create') {
-        const fail = prefilter(msg);
-        const t = addToken({ ca: msg.mint, symbol: msg.symbol || '?', name: msg.name || '?', creator: msg.traderPublicKey || null, source: 'pumpfun' });
-        if (t && fail) {
-          t.gated = false;
-          t.gateFailReason = fail;
-          seedCurve(t, msg);
-          if (t.firstScorePrice === null && t.priceUsd > 0) t.firstScorePrice = t.priceUsd;
-          recordScan({ ca: t.ca, symbol: t.symbol, verdict: 'KILL', reason: fail, at: Date.now() });
-          upsertToken(t).catch(() => {});
-        } else if (t) {
-          seedCurve(t, msg);
-          fetchSocials(t, msg.uri);
-          if (t.creator) bumpDeployer(t.creator);
-          if (tradeStreamConfigured) ws!.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: [msg.mint] }));
-          onNew(t.ca);
-        }
-      } else if (msg.mint && (msg.txType === 'buy' || msg.txType === 'sell')) {
-        applyCurveTrade(msg);
-      } else if (msg.mint && (msg.txType === 'migrate' || msg.txType === 'migration')) {
-        const t = getToken(msg.mint);
-        if (t) {
-          t.dex = 'pumpswap'; t.dexId = 'pumpswap'; t.playType = 'GRADUATION';
-          t.gradAt = Date.now(); t.gradPeak = t.priceUsd || 0; t.gradTrough = t.priceUsd || 0;
-          if (t.firstSeen) t.fillMinutes = Math.round((Date.now() - t.firstSeen) / 60_000);
-          console.log(`[pumpfun] 🎓 GRADUATED $${t.symbol} -> PumpSwap (fill ${t.fillMinutes}m)`);
-        }
+      msg = JSON.parse(raw.toString());
+    } catch (error) {
+      parseErrors++;
+      lastParseErrorAt = receivedAt;
+      lastParseError = `${(error as Error).message}; payload=${redactPumpPortalText(raw.toString())}`;
+      console.error('[pumpfun] unparseable websocket message:', lastParseError);
+      return;
+    }
+
+    const kind = classifyPumpPortalMessage(msg);
+    if (kind === 'create') {
+      createMessages++;
+      const fail = prefilter(msg);
+      const t = addToken({ ca: msg.mint, symbol: msg.symbol || '?', name: msg.name || '?', creator: msg.traderPublicKey || null, source: 'pumpfun' });
+      if (t && fail) {
+        t.gated = false;
+        t.gateFailReason = fail;
+        seedCurve(t, msg);
+        if (t.firstScorePrice === null && t.priceUsd > 0) t.firstScorePrice = t.priceUsd;
+        recordScan({ ca: t.ca, symbol: t.symbol, verdict: 'KILL', reason: fail, at: Date.now() });
+        upsertToken(t).catch(() => {});
+      } else if (t) {
+        seedCurve(t, msg);
+        fetchSocials(t, msg.uri);
+        if (t.creator) bumpDeployer(t.creator);
+        if (tradeStreamConfigured) sendSubscription('subscribeTokenTrade', [msg.mint]);
+        onNew(t.ca);
       }
-    } catch {}
+      return;
+    }
+
+    if (kind === 'trade') {
+      const previousMode = getStreamMode();
+      tradeMessages++;
+      lastTradeAt = receivedAt;
+      const wallet = String(msg.traderPublicKey || msg.user || msg.trader || '') || null;
+      if (wallet) walletTaggedTrades++;
+      if (applyCurveTrade(msg)) appliedTradeMessages++;
+      else unknownTradeTokenMessages++;
+      if (previousMode === 'lite') console.log('[pumpfun] token-trade stream active — strict wallet evidence restored');
+      return;
+    }
+
+    if (kind === 'migration') {
+      migrationMessages++;
+      const t = getToken(msg.mint);
+      if (t) {
+        t.dex = 'pumpswap'; t.dexId = 'pumpswap'; t.playType = 'GRADUATION';
+        t.gradAt = Date.now(); t.gradPeak = t.priceUsd || 0; t.gradTrough = t.priceUsd || 0;
+        if (t.firstSeen) t.fillMinutes = Math.round((Date.now() - t.firstSeen) / 60_000);
+        console.log(`[pumpfun] 🎓 GRADUATED $${t.symbol} -> PumpSwap (fill ${t.fillMinutes}m)`);
+      }
+      return;
+    }
+
+    if (kind === 'control') {
+      controlMessages++;
+      lastControlAt = receivedAt;
+      lastControlMessage = redactPumpPortalText(msg);
+      const rejection = pumpPortalRejection(msg);
+      if (rejection) {
+        lastProtocolErrorAt = receivedAt;
+        lastProtocolError = rejection;
+        console.error('[pumpfun] PumpPortal rejected or errored:', rejection);
+      } else {
+        console.log('[pumpfun] PumpPortal control:', lastControlMessage);
+      }
+      return;
+    }
+
+    unknownMessages++;
+    lastControlAt = receivedAt;
+    lastControlMessage = redactPumpPortalText(msg);
+    console.log('[pumpfun] unrecognized PumpPortal message:', lastControlMessage);
   });
-  ws.on('close', () => reconnect(onNew));
-  ws.on('error', error => { console.error('[pumpfun] ws error:', error.message); ws?.close(); });
+  ws.on('close', (code: number, reason: Buffer) => {
+    lastCloseAt = Date.now();
+    lastCloseCode = code;
+    lastCloseReason = redactPumpPortalText(reason.toString() || '(no reason)');
+    console.error(`[pumpfun] websocket closed code=${code} reason=${lastCloseReason}`);
+    reconnect(onNew);
+  });
+  ws.on('error', error => {
+    lastSocketErrorAt = Date.now();
+    lastSocketError = redactPumpPortalText(error.message);
+    console.error('[pumpfun] ws error:', lastSocketError);
+    ws?.close();
+  });
 }
 
-export function unsubscribeToken(ca: string) { try { ws?.send(JSON.stringify({ method: 'unsubscribeTokenTrade', keys: [ca] })); } catch {} }
+export function unsubscribeToken(ca: string) { sendSubscription('unsubscribeTokenTrade', [ca]); }
 export function resubscribeAll() {
   if (!tradeStreamConfigured || !ws || ws.readyState !== WebSocket.OPEN) return 0;
   const live = allTokens().filter(t => t.gated !== false && t.dex === 'pumpfun' && t.state !== 'DEAD').map(t => t.ca);
   for (let index = 0; index < live.length; index += 50)
-    try { ws.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: live.slice(index, index + 50) })); } catch {}
+    sendSubscription('subscribeTokenTrade', live.slice(index, index + 50));
   return live.length;
 }
 export function startSubscriptionReconciler() {
-  setInterval(() => {
+  const timer = setInterval(() => {
     if (!tradeStreamConfigured || !ws || ws.readyState !== WebSocket.OPEN) return;
     const now = Date.now();
     const stale = allTokens().filter(t => t.gated !== false && t.dex === 'pumpfun' && t.state !== 'DEAD'
       && (!t.recentTrades.length || now - t.recentTrades[t.recentTrades.length - 1].at > 4 * 60_000)).map(t => t.ca);
     if (!stale.length) return;
     for (let index = 0; index < stale.length; index += 50)
-      try { ws!.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: stale.slice(index, index + 50) })); } catch {}
+      sendSubscription('subscribeTokenTrade', stale.slice(index, index + 50));
     console.log(`[pumpfun] reconciler re-subscribed ${stale.length} stale-trade tokens`);
   }, 2 * 60_000);
+  timer.unref();
 }
-export function subscribeToken(ca: string) { if (tradeStreamConfigured) try { ws?.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: [ca] })); } catch {} }
+export function subscribeToken(ca: string) {
+  if (tradeStreamConfigured) sendSubscription('subscribeTokenTrade', [ca]);
+}
 function reconnect(onNew: (ca: string) => void) {
+  reconnects++;
   console.log(`[pumpfun] reconnecting in ${backoff}ms`);
-  setTimeout(() => connect(onNew), backoff);
+  const timer = setTimeout(() => connect(onNew), backoff);
+  timer.unref();
   backoff = Math.min(backoff * 2, 60_000);
 }
