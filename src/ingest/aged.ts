@@ -5,8 +5,9 @@ import { appendMarketSample } from './dexscreener';
 
 const GT = 'https://api.geckoterminal.com/api/v2/networks/solana';
 const DURATIONS = ['1h', '6h', '24h'] as const;
+const POST_GRAD_MAX_AGE_HOURS = 72;
 
-// Major assets, stables and liquid-staking tokens are not meme revival calls.
+// Major assets, stables and liquid-staking tokens are not meme continuation/revival calls.
 const EXCLUDE = new Set([
   'So11111111111111111111111111111111111111112',
   'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
@@ -27,9 +28,15 @@ const diag = {
   uniqueTokens: 0,
   eligible: 0,
   surfaced: 0,
+  postGradSurfaced: 0,
+  revivalSurfaced: 0,
   rejected: {} as Record<string, number>,
 };
 export const agedDiag = () => ({ ...diag, rejected: { ...diag.rejected } });
+
+export type AgedSetup = 'post_grad_continuation' | 'established_revival';
+export const agedSetupForAge = (ageHours: number): AgedSetup =>
+  ageHours < POST_GRAD_MAX_AGE_HOURS ? 'post_grad_continuation' : 'established_revival';
 
 export interface AgedPoolMetrics {
   ageHours: number;
@@ -133,6 +140,8 @@ async function scan(onFound: (ca: string) => void | Promise<void>) {
   diag.uniqueTokens = 0;
   diag.eligible = 0;
   diag.surfaced = 0;
+  diag.postGradSurfaced = 0;
+  diag.revivalSurfaced = 0;
   diag.rejected = {};
 
   for (const [ca, until] of retryAfter) if (until <= now) retryAfter.delete(ca);
@@ -176,10 +185,12 @@ async function scan(onFound: (ca: string) => void | Promise<void>) {
 
   candidates.sort((left, right) => right.assessment.metrics.quality - left.assessment.metrics.quality);
   for (const candidate of candidates.slice(0, settings.max_surfaced_per_run)) {
+    const setup = agedSetupForAge(candidate.assessment.metrics.ageHours);
+    const label = setup === 'post_grad_continuation' ? 'post-grad continuation' : 'aged revival';
     const token = addToken({
       ca: candidate.ca,
       symbol: String(candidate.pool.attributes?.name || '').split(' / ')[0]?.trim() || '?',
-      name: `(aged revival: ${candidate.pool.attributes?.name || candidate.ca.slice(0, 8)})`,
+      name: `(${label}: ${candidate.pool.attributes?.name || candidate.ca.slice(0, 8)})`,
       creator: null,
       source: 'aged',
     });
@@ -187,7 +198,9 @@ async function scan(onFound: (ca: string) => void | Promise<void>) {
     seedAgedToken(token, candidate.pool, candidate.assessment, now);
     surfacedAt.set(candidate.ca, now);
     diag.surfaced++;
-    console.log(`[aged] surfaced $${token.symbol} age=${candidate.assessment.metrics.ageHours.toFixed(0)}h `
+    if (setup === 'post_grad_continuation') diag.postGradSurfaced++;
+    else diag.revivalSurfaced++;
+    console.log(`[aged] surfaced ${setup} $${token.symbol} age=${candidate.assessment.metrics.ageHours.toFixed(1)}h `
       + `liq=$${Math.round(token.liquidityUsd / 1000)}K h1=${candidate.assessment.metrics.change1hPct.toFixed(1)}% `
       + `flow=${candidate.assessment.metrics.buys1h}:${candidate.assessment.metrics.sells1h}`);
     await onFound(candidate.ca);
@@ -196,7 +209,9 @@ async function scan(onFound: (ca: string) => void | Promise<void>) {
 
 function seedAgedToken(token: TokenRecord, pool: any, assessment: AgedAssessment, now: number) {
   const attributes = pool.attributes || {};
-  token.playType = 'REVIVAL';
+  // Both setups use the same backend-owned aged conviction lane and therefore the same
+  // public Convictions -> BUY ALERT -> Current Calls -> Wins & Losses lifecycle.
+  token.playType = agedSetupForAge(assessment.metrics.ageHours) === 'post_grad_continuation' ? 'RUNNER' : 'REVIVAL';
   token.marketCreatedAt = Date.parse(String(attributes.pool_created_at || '')) || null;
   token.dexId = pool.relationships?.dex?.data?.id || 'raydium';
   token.dex = token.dexId;
