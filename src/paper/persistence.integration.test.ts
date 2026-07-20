@@ -135,20 +135,22 @@ test('fresh database leadership, paper, report and forward evidence SQL contract
     assert.equal(Number(scoreOutcome.rows[0].forward_multiple), 2);
 
     const dailyReview = await buildMasterReview(1);
+    const dailyErrors = dailyReview.queryErrors || [];
     assert.ok(Array.isArray(dailyReview.tradeLedger));
     assert.ok(dailyReview.tradeLedger.some((trade: any) => trade.contractAddress === ca));
     assert.equal(
-      dailyReview.queryErrors.some((error: string) => error.startsWith('daily trade ledger:')),
+      dailyErrors.some((error: string) => error.startsWith('daily trade ledger:')),
       false,
-      `daily ledger SQL failed: ${dailyReview.queryErrors.join(' | ')}`,
+      `daily ledger SQL failed: ${dailyErrors.join(' | ')}`,
     );
 
     const historicalReview = await buildHistoricalReview();
+    const historicalErrors = historicalReview.historicalReviewErrors || [];
     assert.ok(historicalReview.allTimeTradeLedger.some((trade: any) => trade.contractAddress === ca));
     assert.equal(
-      historicalReview.historicalReviewErrors.length,
+      historicalErrors.length,
       0,
-      `historical ledger SQL failed: ${historicalReview.historicalReviewErrors.join(' | ')}`,
+      `historical ledger SQL failed: ${historicalErrors.join(' | ')}`,
     );
   } finally {
     if (observationId) await pool.query(`DELETE FROM signal_observations WHERE id=$1`, [observationId]);
