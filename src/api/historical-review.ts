@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { cfg } from '../config';
 import { pool } from '../db';
 
@@ -9,35 +10,34 @@ const numberOrNull = (value: unknown): number | null => {
 const objectOrEmpty = (value: unknown): Record<string, any> =>
   value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
 
+export function configSnapshotId(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null;
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 12);
+}
+
 function setupFor(row: any): string {
-  const entry = objectOrEmpty(row.entry_context);
-  const token = objectOrEmpty(row.token_snapshot || entry.token);
-  const identity = objectOrEmpty(token.identity);
-  const source = String(row.token_source || identity.source || 'unknown');
-  const playType = String(identity.playType || 'unknown');
+  const source = String(row.token_source || 'unknown');
+  const playType = String(row.play_type || 'unknown');
   if (source === 'aged' && playType === 'RUNNER') return 'post_grad_continuation';
   if (source === 'aged' && playType === 'REVIVAL') return 'established_revival';
   return playType !== 'unknown' ? playType.toLowerCase() : source;
 }
 
 function reasonsFor(row: any): string[] {
-  const entry = objectOrEmpty(row.entry_context);
-  const token = objectOrEmpty(row.token_snapshot || entry.token);
-  const identity = objectOrEmpty(token.identity);
-  const conviction = objectOrEmpty(row.conviction_snapshot || entry.conviction);
-  const trigger = objectOrEmpty(row.trigger_snapshot || entry.triggerAssessment);
+  const conviction = objectOrEmpty(row.conviction_snapshot);
+  const trigger = objectOrEmpty(row.trigger_snapshot);
   const rank = objectOrEmpty(row.rank_snapshot);
-  const decision = objectOrEmpty(row.signal_decision || token.modelDecision);
+  const decision = objectOrEmpty(row.signal_decision);
   const reasons: string[] = [];
   if (row.signal) reasons.push(`Recorded signal: ${row.signal}`);
-  if (identity.source) reasons.push(`Discovery source: ${identity.source}`);
-  if (identity.playType) reasons.push(`Setup/play type: ${identity.playType}`);
+  if (row.token_source) reasons.push(`Discovery source: ${row.token_source}`);
+  if (row.play_type && row.play_type !== 'unknown') reasons.push(`Setup/play type: ${row.play_type}`);
   if (conviction.lane) reasons.push(`Conviction lane: ${conviction.lane}`);
   if (conviction.label) reasons.push(`Conviction evidence: ${conviction.label}`);
   if (trigger.reason) reasons.push(`Trigger reason: ${trigger.reason}`);
   if (Array.isArray(trigger.reasons)) reasons.push(...trigger.reasons.map((reason: unknown) => `Trigger evidence: ${String(reason)}`));
   if (decision.allow === true) reasons.push('Signal Stack decision: allowed');
-  if (decision.preliminary_pass === true || decision.preliminaryPass === true) reasons.push('Signal Stack preliminary pass: yes');
+  if (decision.preliminaryPass === true) reasons.push('Signal Stack preliminary pass: yes');
   if (Array.isArray(decision.reasons)) reasons.push(...decision.reasons.map((reason: unknown) => `Model evidence: ${String(reason)}`));
   if (rank.grade) reasons.push(`Recorded rank grade: ${rank.grade}`);
   if (rank.timing) reasons.push(`Recorded entry timing: ${rank.timing}`);
@@ -46,11 +46,8 @@ function reasonsFor(row: any): string[] {
   return [...new Set(reasons)];
 }
 
-function compactTrade(row: any) {
-  const entry = objectOrEmpty(row.entry_context);
-  const exit = objectOrEmpty(row.exit_context);
-  const token = objectOrEmpty(row.token_snapshot || entry.token);
-  const decision = objectOrEmpty(row.signal_decision || token.modelDecision);
+export function compactHistoricalTrade(row: any, snapshotId = configSnapshotId(row.config_snapshot)) {
+  const decision = objectOrEmpty(row.signal_decision);
   const pnlPct = numberOrNull(row.pnl_pct);
   return {
     tradeId: Number(row.id),
@@ -65,21 +62,31 @@ function compactTrade(row: any) {
       price: numberOrNull(row.entry_price),
       markPrice: numberOrNull(row.mark_entry_price),
       score: numberOrNull(row.entry_score),
+      marketAgeHours: numberOrNull(objectOrEmpty(row.entry_lifecycle).marketAgeHours),
       recordedReasons: reasonsFor(row),
-      completeContext: row.entry_context,
-      conviction: row.conviction_snapshot || entry.conviction || null,
-      triggerAssessment: row.trigger_snapshot || entry.triggerAssessment || null,
-      rank: row.rank_snapshot,
-      features: row.feature_snapshot,
-      burst: row.burst_snapshot,
-      tokenSnapshot: token,
-      coverage: row.coverage_snapshot,
-      stream: row.stream_snapshot,
-      configAtEntry: row.config_snapshot,
+      lifecycle: row.entry_lifecycle || null,
+      conviction: row.conviction_snapshot || null,
+      triggerAssessment: row.trigger_snapshot || null,
+      rank: row.rank_snapshot || null,
+      coverage: row.coverage_snapshot || null,
+      stream: row.stream_snapshot || null,
+      configSnapshotId: snapshotId,
     },
     decision: {
       linkedDecisionId: row.signal_decision_id ? Number(row.signal_decision_id) : null,
-      fullRecord: Object.keys(decision).length ? decision : null,
+      allow: decision.allow ?? null,
+      preliminaryPass: decision.preliminaryPass ?? null,
+      reasons: decision.reasons ?? null,
+      regimeId: decision.regimeId ?? null,
+      baseScore: numberOrNull(decision.baseScore),
+      alphaScore: numberOrNull(decision.alphaScore),
+      cohortPercentile: numberOrNull(decision.cohortPercentile),
+      cohortSize: numberOrNull(decision.cohortSize),
+      targetBeforeStopProbability: numberOrNull(decision.targetBeforeStopProbability),
+      downsideProbability: numberOrNull(decision.downsideProbability),
+      expectedValue: numberOrNull(decision.expectedValue),
+      uncertainty: numberOrNull(decision.uncertainty),
+      hazards: decision.hazards ?? null,
     },
     execution: {
       eligible: !!row.execution_eligible,
@@ -89,6 +96,7 @@ function compactTrade(row: any) {
       transactionBuilt: !!row.transaction_built,
       simulationOk: !!row.simulation_ok,
       simulationError: row.simulation_error,
+      simulationUnits: numberOrNull(row.simulation_units),
       executionScore: numberOrNull(row.execution_score),
       routeStabilityBps: numberOrNull(row.route_stability_bps),
       router: row.router,
@@ -99,19 +107,17 @@ function compactTrade(row: any) {
       slippageBps: numberOrNull(row.slippage_bps),
       feeLamports: numberOrNull(row.fee_lamports),
       quoteTimeMs: numberOrNull(row.quote_time_ms),
-      completeProbe: row.execution_probe,
     },
     exit: {
       sold: !!row.closed,
       at: row.exit_at,
       price: numberOrNull(row.exit_price),
       reason: row.exit_reason,
-      completeContext: row.exit_context,
       quoteStatus: row.exit_quote_status,
+      quotedUsd: numberOrNull(row.exit_quoted_usd),
       transactionBuilt: !!row.exit_transaction_built,
       simulationOk: !!row.exit_simulation_ok,
       simulationError: row.exit_simulation_error,
-      quotedUsd: numberOrNull(row.exit_quoted_usd),
       priceImpactPct: numberOrNull(row.exit_price_impact_pct),
       feeLamports: numberOrNull(row.exit_fee_lamports),
       router: row.exit_router,
@@ -138,13 +144,12 @@ function compactTrade(row: any) {
       lifecycleEventCount: Number(row.event_count) || 0,
       exactTradeEventsAtEntry: Number(row.exact_trade_events_at_entry) || 0,
       exactTradeEventsDuringCall: Number(row.exact_trade_events_during_call) || 0,
-      hasEntryContext: !!row.entry_context,
-      hasRequiredExitContext: !row.closed || !!row.exit_context,
+      hasEntryContext: !!row.has_entry_context,
+      hasRequiredExitContext: !row.closed || !!row.has_exit_context,
       hasLinkedSignalDecision: !!row.signal_decision_id,
     },
-    rawDatabaseRecord: row,
     exitSummary: row.closed
-      ? `Closed at ${row.exit_at || 'unknown time'} because ${row.exit_reason || exit.reason || 'no reason was recorded'}.`
+      ? `Closed at ${row.exit_at || 'unknown time'} because ${row.exit_reason || 'no reason was recorded'}.`
       : 'Still open; no sale/close has been recorded.',
   };
 }
@@ -153,18 +158,44 @@ export async function buildHistoricalReview() {
   if (!pool) return { allTimeTradeLedger: [], historicalReviewNote: 'No database attached.' };
   const errors: string[] = [];
   const query = async (name: string, sql: string, parameters: unknown[] = []): Promise<any[]> => {
-    try { return (await pool!.query(sql, parameters)).rows; }
+    try { return (await pool!.query({ text: sql, values: parameters, query_timeout: 8000 } as any)).rows; }
     catch (error) {
       errors.push(`${name}: ${(error as Error).message}`);
       return [];
     }
   };
 
-  const rows = await query('all-time trade ledger', `SELECT p.*,t.source AS token_source,t.name AS token_name,
-      t.creator,t.first_seen AS token_first_seen,t.gate_result,t.gate_fail_reason,t.deployer_rep,t.insider_pct,
-      t.insider_cluster_pct,t.regime_id,CASE WHEN d.id IS NULL THEN NULL ELSE to_jsonb(d) END AS signal_decision
+  const rows = await query('all-time trade ledger', `SELECT
+      p.id,p.ca,p.symbol,p.signal,p.model_version,p.entry_at,p.entry_price,p.mark_entry_price,p.entry_score,
+      p.execution_eligible,p.quote_status,p.quote_attempted_at,p.quote_key_present,p.transaction_built,
+      p.simulation_ok,p.simulation_error,p.simulation_units,p.route_stability_bps,p.execution_score,
+      p.position_sol,p.position_usd,p.quoted_out_usd,p.price_impact_pct,p.slippage_bps,p.fee_lamports,
+      p.router,p.quote_time_ms,p.closed,p.exit_at,p.exit_price,p.exit_reason,p.exit_quote_status,
+      p.exit_quoted_usd,p.exit_transaction_built,p.exit_simulation_ok,p.exit_simulation_error,
+      p.exit_price_impact_pct,p.exit_fee_lamports,p.exit_router,p.exit_quote_time_ms,p.final_multiple,
+      p.pnl_pct,p.peak_price,p.peak_at,p.trough_price,p.trough_at,p.max_runup_pct,p.max_drawdown_pct,
+      p.duration_seconds,p.target_multiple,p.observed_target_hit_at,p.target_hit_at,p.seconds_to_target,
+      p.snapshot_count,p.event_count,p.exact_trade_events_at_entry,p.exact_trade_events_during_call,
+      p.signal_decision_id,p.config_snapshot,p.conviction_snapshot,p.trigger_snapshot,p.rank_snapshot,
+      p.coverage_snapshot,p.stream_snapshot,(p.entry_context IS NOT NULL) AS has_entry_context,
+      (p.exit_context IS NOT NULL) AS has_exit_context,p.entry_context#>'{lifecycle}' AS entry_lifecycle,
+      COALESCE(t.source,'unknown') AS token_source,
+      COALESCE(p.token_snapshot#>>'{identity,playType}',p.entry_context#>>'{token,identity,playType}','unknown') AS play_type,
+      CASE WHEN d.id IS NULL THEN NULL ELSE jsonb_build_object(
+        'allow',d.allow,'preliminaryPass',d.preliminary_pass,'reasons',d.reasons,'regimeId',d.regime_id,
+        'baseScore',d.base_score,'alphaScore',d.alpha_score,'cohortPercentile',d.cohort_percentile,
+        'cohortSize',d.cohort_size,'targetBeforeStopProbability',d.target_before_stop_probability,
+        'downsideProbability',d.downside_probability,'expectedValue',d.expected_value,
+        'uncertainty',d.uncertainty,'hazards',d.hazards) END AS signal_decision
     FROM paper_trades p LEFT JOIN tokens t ON t.ca=p.ca
     LEFT JOIN signal_decisions d ON d.id=p.signal_decision_id ORDER BY p.entry_at`);
+
+  const configSnapshotsById: Record<string, unknown> = {};
+  const allTimeTradeLedger = rows.map(row => {
+    const id = configSnapshotId(row.config_snapshot);
+    if (id && !configSnapshotsById[id]) configSnapshotsById[id] = row.config_snapshot;
+    return compactHistoricalTrade(row, id);
+  });
 
   const setupSamples = await query('executable samples by setup', `WITH calls AS (
       SELECT p.*,COALESCE(t.source,'unknown') AS source,
@@ -188,8 +219,9 @@ export async function buildHistoricalReview() {
       && Number(row.normalized_pnl_usd_on_100_each) > 0);
 
   return {
-    allTimeTradeLedger: rows.map(compactTrade),
+    allTimeTradeLedger,
     historicalTradeCount: rows.length,
+    historicalConfigSnapshotsById: configSnapshotsById,
     profitabilityReadinessBySetup: {
       minimumResolvedExecutableCallsPerSetup: minimum,
       setupSamples,
@@ -201,5 +233,6 @@ export async function buildHistoricalReview() {
       warning: 'Only resolved, execution-eligible paper calls count toward promotion readiness. Paper evidence does not establish live profitability.',
     },
     historicalReviewErrors: errors,
+    payloadPolicy: 'All historical calls are included once. Large raw token, config, execution-probe, and exit-context blobs are not duplicated per trade; config snapshots are deduplicated by ID.',
   };
 }

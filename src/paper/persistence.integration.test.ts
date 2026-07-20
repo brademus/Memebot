@@ -1,11 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { buildHistoricalReview } from '../api/historical-review';
+import { buildMasterReview } from '../api/master-review';
 import { initDb, pool } from '../db';
 import { ensureLeadershipSchema } from '../leadership';
 import { MODEL_VERSION } from '../model/version';
 import { openPaper } from './paper';
 
-test('fresh database leadership, paper and forward evidence SQL contracts execute in real Postgres', async () => {
+test('fresh database leadership, paper, report and forward evidence SQL contracts execute in real Postgres', async () => {
   assert.ok(pool, 'DATABASE_URL must be configured for the persistence integration test');
 
   // Worker election happens before initDb() during production boot. Prove an empty or
@@ -131,6 +133,25 @@ test('fresh database leadership, paper and forward evidence SQL contracts execut
     );
     assert.equal(scoreOutcome.rows[0].resolve_status, 'resolved');
     assert.equal(Number(scoreOutcome.rows[0].forward_multiple), 2);
+
+    const dailyReview = await buildMasterReview(1);
+    const dailyErrors = dailyReview.queryErrors || [];
+    assert.ok(Array.isArray(dailyReview.tradeLedger));
+    assert.ok(dailyReview.tradeLedger.some((trade: any) => trade.contractAddress === ca));
+    assert.equal(
+      dailyErrors.some((error: string) => error.startsWith('daily trade ledger:')),
+      false,
+      `daily ledger SQL failed: ${dailyErrors.join(' | ')}`,
+    );
+
+    const historicalReview = await buildHistoricalReview();
+    const historicalErrors = historicalReview.historicalReviewErrors || [];
+    assert.ok(historicalReview.allTimeTradeLedger.some((trade: any) => trade.contractAddress === ca));
+    assert.equal(
+      historicalErrors.length,
+      0,
+      `historical ledger SQL failed: ${historicalErrors.join(' | ')}`,
+    );
   } finally {
     if (observationId) await pool.query(`DELETE FROM signal_observations WHERE id=$1`, [observationId]);
     if (snapshotId) await pool.query(`DELETE FROM score_snapshots WHERE id=$1`, [snapshotId]);
