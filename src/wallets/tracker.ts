@@ -59,12 +59,25 @@ export function recordSmartBuy(
   }
 }
 
+const safeInteger = (value: string | undefined, fallback: number, minimum: number, maximum: number) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(minimum, Math.min(maximum, Math.floor(parsed)));
+};
+
+// Enhanced transaction history costs 100 Helius credits per call. The previous
+// fallback polled up to 40 wallets every 30 seconds, which could consume roughly
+// 480,000 credits per hour. Webhooks remain the preferred path; this poller is now
+// a deliberately slow emergency fallback only.
+const POLL_INTERVAL_MS = safeInteger(process.env.HELIUS_WALLET_POLL_MS, 10 * 60_000, 2 * 60_000, 60 * 60_000);
+const MAX_POLLED_WALLETS = safeInteger(process.env.HELIUS_WALLET_POLL_MAX, 15, 1, 40);
+
 export function startWalletTracker(onDiscovery: (ca: string) => void) {
   startWalletOutcomeLedger();
   if (!cfg().wallets.enabled || !env.HELIUS_API_KEY || !pool) return;
   const tick = async () => {
     await pollOnce(onDiscovery);
-    setTimeout(tick, 30_000);
+    setTimeout(tick, POLL_INTERVAL_MS);
   };
   setTimeout(tick, 120_000);
 }
@@ -77,7 +90,7 @@ async function pollOnce(onDiscovery: (ca: string) => void) {
   try {
     const active = await pool.query(
       `SELECT wallet,winners_hit FROM smart_wallets WHERE active
-       ORDER BY winners_hit DESC,last_validated DESC LIMIT 40`);
+       ORDER BY winners_hit DESC,last_validated DESC LIMIT $1`, [MAX_POLLED_WALLETS]);
     activeCount = active.rows.length;
     setWalletWeights(active.rows);
     const quotes = new Set([
@@ -86,10 +99,12 @@ async function pollOnce(onDiscovery: (ca: string) => void) {
       'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
     ]);
     for (const { wallet } of active.rows) {
-      const txs = await heliusTxs(wallet, 10);
+      // Background priority means this observation work is dropped first whenever
+      // foreground safety checks or a provider circuit need the limited budget.
+      const txs = await heliusTxs(wallet, 10, undefined, 'bg');
       for (const tx of txs) {
         const atMs = tx.timestamp ? tx.timestamp * 1000 : Date.now();
-        if (Date.now() - atMs > 10 * 60_000) continue;
+        if (Date.now() - atMs > 15 * 60_000) continue;
         if (tx.type && tx.type !== 'SWAP') continue;
         for (const transfer of tx.tokenTransfers || []) {
           if (transfer.toUserAccount !== wallet || !transfer.mint || quotes.has(transfer.mint)) continue;

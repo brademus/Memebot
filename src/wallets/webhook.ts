@@ -8,18 +8,38 @@ let registered = false;
 let lastSync = 0;
 let lastError: string | null = null;
 let addressCount = 0;
+let lastAddressFingerprint: string | null = null;
 // The Helius webhook keeps its own per-boot secret. Dashboard access does not need
 // or share a credential with webhook delivery authentication.
 const secret = crypto.randomBytes(24).toString('hex');
 
 export const webhookLive = () => registered;
-export const webhookDiag = () => ({ registered, lastSync: lastSync ? new Date(lastSync).toISOString() : null, lastError, addressCount });
+export const webhookDiag = () => ({
+  registered,
+  lastSync: lastSync ? new Date(lastSync).toISOString() : null,
+  lastError,
+  addressCount,
+  maxAddresses: WEBHOOK_MAX_WALLETS,
+});
 
 function publicUrl(): string | null {
   if (process.env.PUBLIC_URL) return process.env.PUBLIC_URL.replace(/\/$/, '');
   if (process.env.RAILWAY_PUBLIC_DOMAIN) return `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`;
   return null;
 }
+
+const safeInteger = (value: string | undefined, fallback: number, minimum: number, maximum: number) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(minimum, Math.min(maximum, Math.floor(parsed)));
+};
+
+// Webhook events are billed and webhook management calls also consume credits.
+// Only proven active wallets belong in the real-time stream. Inactive activity-miner
+// candidates can be vetted during the hourly background run without streaming every
+// transaction they make.
+const WEBHOOK_MAX_WALLETS = safeInteger(process.env.HELIUS_WEBHOOK_MAX_WALLETS, 40, 1, 100);
+const UNCHANGED_SYNC_TTL_MS = 6 * 60 * 60_000;
 
 export function startWalletWebhook(onDiscovery: (ca: string) => void) {
   if (!cfg().wallets.enabled || !cfg().wallets.webhook_enabled) return;
@@ -46,21 +66,30 @@ export async function syncWebhook() {
   if (!url) return;
   const hookUrl = `${url}/api/helius-webhook`;
   try {
-    // Active wallets may generate trusted smart-money signals. Pump.fun activity
-    // candidates are streamed too, but remain observation-only until promoted.
+    // Real-time delivery is reserved for active wallets that have not failed quality
+    // validation. This prevents hundreds of inactive candidates from consuming event
+    // credits while preserving manually-added and still-ungraded active wallets.
     const active = await pool.query(
       `SELECT wallet,winners_hit,active FROM smart_wallets
-        WHERE quality_verdict IS DISTINCT FROM 'REJECT'
-           OR (type='pumpfun_candidate' AND quality_verdict IS NULL)
-        ORDER BY active DESC,winners_hit DESC,last_active DESC NULLS LAST LIMIT $1`,
-      [cfg().wallets.max_tracked_wallets]);
+        WHERE active AND quality_verdict IS DISTINCT FROM 'REJECT'
+        ORDER BY winners_hit DESC,last_active DESC NULLS LAST,last_validated DESC
+        LIMIT $1`,
+      [WEBHOOK_MAX_WALLETS]);
     const addresses: string[] = active.rows.map((row: any) => row.wallet);
-    if (!addresses.length) { lastError = 'no active or candidate wallets yet'; return; }
+    if (!addresses.length) { lastError = 'no active quality-qualified wallets yet'; return; }
+
+    const fingerprint = crypto.createHash('sha256').update(addresses.join(',')).digest('hex');
+    if (registered && fingerprint === lastAddressFingerprint && Date.now() - lastSync < UNCHANGED_SYNC_TTL_MS) {
+      addressCount = addresses.length;
+      lastError = null;
+      return;
+    }
+
     trackedSet.clear();
     signalSet.clear();
     for (const row of active.rows) {
       trackedSet.add(row.wallet);
-      if (row.active) signalSet.add(row.wallet);
+      signalSet.add(row.wallet);
     }
     setWalletWeights(active.rows);
 
@@ -68,9 +97,9 @@ export async function syncWebhook() {
     const existingResult = await heliusRequest<any[]>(base, {}, {
       group: 'admin',
       priority: 'bg',
-      maxAttempts: 3,
+      maxAttempts: 1,
       dedupeKey: `helius-webhooks:list:${hookUrl}`,
-      cacheTtlMs: 5_000,
+      cacheTtlMs: 60_000,
     });
     if (!existingResult.ok) throw new Error(`helius webhook list: ${existingResult.status || 0} ${existingResult.error || 'request deferred'}`);
     const existing = Array.isArray(existingResult.data) ? existingResult.data : [];
@@ -92,15 +121,16 @@ export async function syncWebhook() {
     }, {
       group: 'admin',
       priority: 'bg',
-      maxAttempts: 3,
-      dedupeKey: `helius-webhooks:${mine ? 'update' : 'create'}:${hookUrl}:${addresses.join(',')}`,
+      maxAttempts: 1,
+      dedupeKey: `helius-webhooks:${mine ? 'update' : 'create'}:${hookUrl}:${fingerprint}`,
     });
     if (!response.ok) throw new Error(`helius webhook ${mine ? 'update' : 'create'}: ${response.status || 0} ${response.error || 'request deferred'}`);
     registered = true;
     lastSync = Date.now();
     lastError = null;
     addressCount = addresses.length;
-    console.log(`[wallets] webhook live — ${addresses.length} active/candidate wallets streaming to ${hookUrl}`);
+    lastAddressFingerprint = fingerprint;
+    console.log(`[wallets] webhook live — ${addresses.length} active wallets streaming to ${hookUrl}`);
   } catch (error) {
     registered = false;
     lastError = (error as Error).message;
