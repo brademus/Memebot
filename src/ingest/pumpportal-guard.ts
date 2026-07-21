@@ -18,6 +18,7 @@ interface PumpPortalGuardState {
   lastEventAt: number | null;
   lastBudgetTripAt: number | null;
   lastProviderRejection: string | null;
+  socketGenerations: number;
 }
 
 const state: PumpPortalGuardState = {
@@ -34,11 +35,20 @@ const state: PumpPortalGuardState = {
   lastEventAt: null,
   lastBudgetTripAt: null,
   lastProviderRejection: null,
+  socketGenerations: 0,
 };
 
 const isPumpPortalSocket = (socket: any) => String(socket?.url || '').includes('pumpportal.fun/api/data');
 const rawSend = WebSocket.prototype.send;
 const rawEmit = WebSocket.prototype.emit;
+let guardedSocket: WebSocket | null = null;
+
+function ensureSocket(socket: WebSocket) {
+  if (socket === guardedSocket) return;
+  guardedSocket = socket;
+  state.active.clear();
+  state.socketGenerations++;
+}
 
 function parsePayload(value: unknown): any | null {
   try {
@@ -113,6 +123,7 @@ function guardedSubscription(socket: WebSocket, payload: any): boolean {
 
 (WebSocket.prototype as any).send = function guardedSend(data: unknown, ...args: unknown[]) {
   if (!isPumpPortalSocket(this)) return (rawSend as any).call(this, data, ...args);
+  ensureSocket(this);
   const payload = parsePayload(data);
   if (payload?.method === 'subscribeTokenTrade') {
     guardedSubscription(this, payload);
@@ -127,6 +138,7 @@ function guardedSubscription(socket: WebSocket, payload: any): boolean {
 
 (WebSocket.prototype as any).emit = function guardedEmit(event: string, ...args: unknown[]) {
   if (event === 'message' && isPumpPortalSocket(this)) {
+    ensureSocket(this);
     const payload = parsePayload(args[0]);
     const txType = String(payload?.txType || '').toLowerCase();
     if (payload?.mint && (txType === 'buy' || txType === 'sell')) {
@@ -157,6 +169,7 @@ export function pumpPortalGuardDiag() {
     budgetTripped: state.budgetTripped,
     providerRejected: state.providerRejected,
     lastProviderRejection: state.lastProviderRejection,
+    socketGenerations: state.socketGenerations,
     startedAt: new Date(state.startedAt).toISOString(),
     lastEventAt: state.lastEventAt ? new Date(state.lastEventAt).toISOString() : null,
     lastBudgetTripAt: state.lastBudgetTripAt ? new Date(state.lastBudgetTripAt).toISOString() : null,
