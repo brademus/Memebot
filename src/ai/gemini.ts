@@ -95,7 +95,7 @@ export async function gemini(prompt: string, model: string, maxTokens = 300): Pr
       if (isGeminiHardQuota(res.status, body)) {
         hardBlocked = true;
         blockedAt = Date.now();
-        retryAfterAt = Number.MAX_SAFE_INTEGER;
+        retryAfterAt = 0;
         break;
       }
       if (res.status === 429) {
