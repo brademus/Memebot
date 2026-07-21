@@ -1,8 +1,11 @@
 import WebSocket from 'ws';
 
-const MAX_ACTIVE_TOKENS = Math.max(1, Math.min(250, Number(process.env.PUMPPORTAL_MAX_ACTIVE_TOKENS || 25)));
-const MAX_PAID_EVENTS_PER_BOOT = Math.max(1000, Math.min(100_000,
-  Number(process.env.PUMPPORTAL_MAX_PAID_EVENTS_PER_BOOT || 8000)));
+// Private test-mode hard ceilings. Railway variables may lower these values, but
+// cannot raise them accidentally. At PumpPortal's 0.01 SOL per 10,000 paid-event
+// rate, 3,000 events exposes at most roughly 0.003 SOL during one process boot.
+const MAX_ACTIVE_TOKENS = Math.max(1, Math.min(10, Number(process.env.PUMPPORTAL_MAX_ACTIVE_TOKENS || 10)));
+const MAX_PAID_EVENTS_PER_BOOT = Math.max(500, Math.min(3000,
+  Number(process.env.PUMPPORTAL_MAX_PAID_EVENTS_PER_BOOT || 3000)));
 
 interface PumpPortalGuardState {
   active: Map<string, number>;
@@ -158,6 +161,7 @@ export function pumpPortalGuardDiag() {
   return {
     maxActiveTokens: MAX_ACTIVE_TOKENS,
     maxPaidEventsPerBoot: MAX_PAID_EVENTS_PER_BOOT,
+    maxEstimatedCostPerBootSol: Number((MAX_PAID_EVENTS_PER_BOOT / 10_000 * 0.01).toFixed(6)),
     activeTokens: state.active.size,
     paidEventsThisBoot: state.paidEvents,
     estimatedMeteredCostSol: Number((state.paidEvents / 10_000 * 0.01).toFixed(6)),
@@ -177,4 +181,4 @@ export function pumpPortalGuardDiag() {
 }
 
 (globalThis as any).__pumpPortalGuardDiag = pumpPortalGuardDiag;
-console.log(`[pumpportal-guard] enabled: max ${MAX_ACTIVE_TOKENS} paid token streams; ${MAX_PAID_EVENTS_PER_BOOT} paid events per boot`);
+console.log(`[pumpportal-guard] enabled: max ${MAX_ACTIVE_TOKENS} paid token streams; ${MAX_PAID_EVENTS_PER_BOOT} paid events per boot; max estimated cost ${pumpPortalGuardDiag().maxEstimatedCostPerBootSol} SOL`);
