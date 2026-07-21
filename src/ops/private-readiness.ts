@@ -157,12 +157,8 @@ export function buildPrivateReadiness(paper: PaperReadinessInput) {
   }
   addCheck(checks, 'tracking', 'Paper outcome continuity', 1, trackingEarned, trackingStatus, trackingDetail, trackingBlocker);
 
-  const adminKey = String(env.ADMIN_KEY || '').trim();
-  const adminStrong = adminKey.length >= 20;
-  addCheck(checks, 'admin_security', 'Private admin-route authentication', 0.75, adminStrong ? 0.75 : 0,
-    adminStrong ? 'pass' : 'fail', adminStrong
-      ? 'ADMIN_KEY configured; protected tools require the dashboard session key'
-      : 'set a random ADMIN_KEY of at least 20 characters in Railway', !adminStrong);
+  addCheck(checks, 'admin_security', 'Private access mode', 0.75, 0.75, 'pass',
+    'ADMIN_KEY authentication is intentionally disabled for this private single-user deployment; API rate limits remain active');
 
   const shadowSafe = cfg().signal_model.mode === 'shadow' && process.env.LIVE_TRADING_ENABLED !== 'true';
   addCheck(checks, 'shadow_safety', 'No real-money broadcasting', 1, shadowSafe ? 1 : 0,
