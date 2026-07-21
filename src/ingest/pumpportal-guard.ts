@@ -51,7 +51,7 @@ function parsePayload(value: unknown): any | null {
 }
 
 function sendRaw(socket: WebSocket, payload: unknown) {
-  rawSend.call(socket, JSON.stringify(payload));
+  (rawSend as any).call(socket, JSON.stringify(payload));
 }
 
 function unsubscribe(socket: WebSocket, keys: string[]) {
@@ -77,14 +77,14 @@ function tripBudget(socket: WebSocket, reason: 'event_budget' | 'provider_reject
 }
 
 function guardedSubscription(socket: WebSocket, payload: any): boolean {
-  const keys = Array.isArray(payload?.keys) ? payload.keys.map(String).filter(Boolean) : [];
+  const keys: string[] = Array.isArray(payload?.keys) ? payload.keys.map(String).filter(Boolean) : [];
   if (!keys.length) return true;
   if (state.budgetTripped || state.providerRejected) {
     state.suppressedOverBudgetKeys += keys.length;
     return false;
   }
 
-  const uniqueNew = [...new Set(keys)].filter(key => {
+  const uniqueNew: string[] = [...new Set<string>(keys)].filter(key => {
     if (state.active.has(key)) {
       state.suppressedDuplicateKeys++;
       return false;
@@ -93,9 +93,9 @@ function guardedSubscription(socket: WebSocket, payload: any): boolean {
   });
   if (!uniqueNew.length) return false;
 
-  const combined = [...state.active.keys(), ...uniqueNew];
-  const desired = combined.slice(-MAX_ACTIVE_TOKENS);
-  const desiredSet = new Set(desired);
+  const combined: string[] = [...state.active.keys(), ...uniqueNew];
+  const desired: string[] = combined.slice(-MAX_ACTIVE_TOKENS);
+  const desiredSet = new Set<string>(desired);
   const evicted = [...state.active.keys()].filter(key => !desiredSet.has(key));
   if (evicted.length) {
     unsubscribe(socket, evicted);
@@ -119,7 +119,7 @@ function guardedSubscription(socket: WebSocket, payload: any): boolean {
     return;
   }
   if (payload?.method === 'unsubscribeTokenTrade') {
-    const keys = Array.isArray(payload.keys) ? payload.keys.map(String) : [];
+    const keys: string[] = Array.isArray(payload.keys) ? payload.keys.map(String) : [];
     for (const key of keys) state.active.delete(key);
   }
   return (rawSend as any).call(this, data, ...args);
