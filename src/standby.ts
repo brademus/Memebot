@@ -1,97 +1,79 @@
+import fs from 'fs';
 import http from 'http';
+import path from 'path';
 import { env } from './config';
-import { leadershipDiag, readLeaderAddress } from './leadership';
-
-// cache the leader address briefly so we don't hit Postgres per request
-let cachedAddr: string | null = null;
-let cachedAt = 0;
-let lastProxyError: string | null = null;
-async function leaderAddr(): Promise<string | null> {
-  if (Date.now() - cachedAt < 20_000) return cachedAddr;
-  cachedAddr = await readLeaderAddress();
-  cachedAt = Date.now();
-  return cachedAddr;
-}
+import { leadershipDiag } from './leadership';
 
 export interface StandbyServer {
   close: () => Promise<void>;
 }
 
-/**
- * Keep Railway's replacement container healthy while leadership is held elsewhere.
- * Once leadership becomes available, boot closes this temporary listener and starts
- * the full dashboard + scanner on the same port.
- */
-export async function startStandbyServer(): Promise<StandbyServer> {
-  const server = http.createServer(async (req, res) => {
-    // REVERSE PROXY: if the leader has published its private address, forward the
-    // request to it over Railway's internal network. The public domain then serves
-    // the real dashboard no matter which instance holds leadership.
-    const addr = await leaderAddr().catch(error => {
-      lastProxyError = (error as Error).message;
-      return null;
-    });
-    if (addr) {
-      const [host, port] = addr.split(':');
-      const forwarded = http.request(
-        {
-          host,
-          port: Number(port) || 8080,
-          path: req.url,
-          method: req.method,
-          headers: { ...req.headers, host: `${host}:${port}` },
-          family: 0,
-          timeout: 8_000,
-        },
-        upstream => {
-          res.writeHead(upstream.statusCode || 502, upstream.headers);
-          upstream.pipe(res);
-        },
-      );
-      forwarded.on('error', error => {
-        lastProxyError = error.message;
-        if (!res.headersSent) stub(req, res);
-      });
-      forwarded.on('timeout', () => forwarded.destroy());
-      req.pipe(forwarded);
+const PUBLIC_DIR = path.join(process.cwd(), 'public');
+const MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.ico': 'image/x-icon',
+  '.webp': 'image/webp',
+};
+
+function sendFile(res: http.ServerResponse, filePath: string) {
+  fs.readFile(filePath, (error, data) => {
+    if (error) {
+      res.statusCode = 404;
+      res.end('Not found');
       return;
     }
-    stub(req, res);
-  });
-
-  function stub(req: http.IncomingMessage, res: http.ServerResponse) {
-    const api = req.url?.startsWith('/api');
     res.statusCode = 200;
     res.setHeader('cache-control', 'no-store, no-cache, must-revalidate');
-    if (api) {
+    res.setHeader('content-type', MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream');
+    res.end(data);
+  });
+}
+
+/**
+ * Keep Railway's replacement container healthy while leadership is held elsewhere.
+ * Serve the real dashboard shell directly instead of reverse-proxying through the
+ * service's own private hostname, which can route back to this same standby and loop.
+ */
+export async function startStandbyServer(): Promise<StandbyServer> {
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://standby.local');
+    if (url.pathname.startsWith('/api')) {
+      res.statusCode = 200;
+      res.setHeader('cache-control', 'no-store, no-cache, must-revalidate');
       res.setHeader('content-type', 'application/json; charset=utf-8');
       res.end(JSON.stringify({
         ok: true,
         role: 'standby',
         scanning: false,
-        message: 'Waiting to acquire worker leadership',
+        message: 'Dashboard is online while the scanner acquires worker leadership',
         leadership: leadershipDiag(),
-        proxyDiag: { leaderAddr: cachedAddr, lastProxyError },
       }));
       return;
     }
-    res.setHeader('content-type', 'text/html; charset=utf-8');
-    res.end(`<!doctype html>
-<title>Memewatch standby</title>
-<meta name="viewport" content="width=device-width">
-<meta http-equiv="refresh" content="5">
-<body style="font-family:system-ui;background:#090b10;color:#f5f7ff;padding:32px">
-  <h1>Memewatch is promoting a scanner worker</h1>
-  <p>This deployment is healthy and waiting to acquire leadership. It retries automatically, and this page refreshes every five seconds.</p>
-</body>`);
-  }
+
+    const requested = url.pathname === '/' ? '/index.html' : url.pathname;
+    const normalized = path.normalize(requested).replace(/^(\.\.(\/|\\|$))+/, '');
+    const candidate = path.join(PUBLIC_DIR, normalized);
+    if (candidate.startsWith(PUBLIC_DIR) && fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+      sendFile(res, candidate);
+      return;
+    }
+    sendFile(res, path.join(PUBLIC_DIR, 'index.html'));
+  });
 
   await new Promise<void>((resolve, reject) => {
     const onError = (error: Error) => reject(error);
     server.once('error', onError);
     server.listen(env.PORT, () => {
       server.off('error', onError);
-      console.log(`[standby] health server listening on :${env.PORT}`);
+      console.log(`[standby] dashboard server listening on :${env.PORT}`);
       resolve();
     });
   });
