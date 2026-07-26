@@ -55,6 +55,7 @@ const state: PersistentBudgetState = {
 };
 
 const listeners = new Set<Listener>();
+let initializationPromise: Promise<void> | null = null;
 let reservationInFlight: Promise<boolean> | null = null;
 let actualWriteInFlight: Promise<void> | null = null;
 
@@ -87,21 +88,26 @@ async function refreshTotals(): Promise<void> {
   state.lastRefreshAt = Date.now();
 }
 
-async function initialize(): Promise<void> {
-  if (state.initialized || state.initializing) return;
+function initialize(): Promise<void> {
+  if (state.initialized) return Promise.resolve();
+  if (initializationPromise) return initializationPromise;
   state.initializing = true;
-  try {
-    await ensureTable();
-    await refreshTotals();
-    state.initialized = true;
-    state.databaseAvailable = true;
-    state.lastError = null;
-  } catch (error) {
-    state.databaseAvailable = false;
-    state.lastError = (error as Error).message.slice(0, 300);
-  } finally {
-    state.initializing = false;
-  }
+  initializationPromise = (async () => {
+    try {
+      await ensureTable();
+      await refreshTotals();
+      state.initialized = true;
+      state.databaseAvailable = true;
+      state.lastError = null;
+    } catch (error) {
+      state.databaseAvailable = false;
+      state.lastError = (error as Error).message.slice(0, 300);
+    } finally {
+      state.initializing = false;
+      initializationPromise = null;
+    }
+  })();
+  return initializationPromise;
 }
 
 async function reserveBlock(): Promise<boolean> {
@@ -131,7 +137,7 @@ async function reserveBlock(): Promise<boolean> {
       state.reservedRolling14d = reserved14d;
       state.actualToday = Number(row.actual_today || 0);
       state.actualRolling14d = Number(row.actual_14d || 0);
-      state.exhausted = true;
+      state.exhausted = state.localReservedRemaining <= 0;
       state.lastRefreshAt = Date.now();
       return false;
     }
@@ -192,12 +198,12 @@ async function flushActualEvents(): Promise<void> {
 
 export function ensurePumpPortalPersistentBudget(): void {
   void initialize().then(() => {
-    if (state.localReservedRemaining <= 0) void requestReservation();
+    if (state.localReservedRemaining <= TOP_UP_THRESHOLD) void requestReservation();
   });
 }
 
 export function paidStreamBudgetAvailable(): boolean {
-  return state.databaseAvailable && state.localReservedRemaining > 0 && !state.exhausted;
+  return state.databaseAvailable && state.localReservedRemaining > 0;
 }
 
 export function consumePersistentPaidEvent(): boolean {
@@ -208,6 +214,7 @@ export function consumePersistentPaidEvent(): boolean {
     return false;
   }
   state.localReservedRemaining--;
+  state.exhausted = state.localReservedRemaining <= 0;
   state.pendingActualWrites++;
   if (state.pendingActualWrites >= 25) void flushActualEvents();
   if (state.localReservedRemaining <= TOP_UP_THRESHOLD) void requestReservation();
