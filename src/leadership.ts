@@ -1,18 +1,31 @@
 import { pool } from './db';
 
 const LOCK_NAME = process.env.WORKER_LOCK_KEY || 'memewatch-production-worker-v1';
-const INSTANCE_ID = `${process.env.RAILWAY_REPLICA_ID || process.env.HOSTNAME || 'local'}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+const DEPLOYMENT_ID = process.env.RAILWAY_DEPLOYMENT_ID
+  || process.env.RAILWAY_GIT_COMMIT_SHA
+  || process.env.RAILWAY_REPLICA_ID
+  || process.env.HOSTNAME
+  || `local-${process.pid}`;
+const INSTANCE_ID = `${DEPLOYMENT_ID}:${process.env.RAILWAY_REPLICA_ID || process.env.HOSTNAME || 'local'}:${process.pid}:${Math.random().toString(36).slice(2, 8)}`;
 let leader = false;
 let lastError: string | null = null;
 let attempts = 0;
+let takeoverRequestedAt: string | null = null;
+let lastYieldAt: string | null = null;
 let leadershipSchemaReady: Promise<void> | null = null;
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let yieldTimer: ReturnType<typeof setInterval> | null = null;
 
 export const leadershipDiag = () => ({
   role: leader ? 'leader' : 'follower',
   lockName: LOCK_NAME,
+  deploymentId: DEPLOYMENT_ID,
+  instanceId: INSTANCE_ID,
   coordinated: !!pool,
   lastError,
   attempts,
+  takeoverRequestedAt,
+  lastYieldAt,
 });
 
 /**
@@ -32,7 +45,6 @@ export async function ensureLeadershipSchema(): Promise<void> {
            value TEXT
          )`,
       );
-      // Existing databases may have the earlier two-column table.
       await pool.query(`ALTER TABLE leadership_claims ADD COLUMN IF NOT EXISTS value TEXT`);
     })().catch(error => {
       leadershipSchemaReady = null;
@@ -43,9 +55,9 @@ export async function ensureLeadershipSchema(): Promise<void> {
 }
 
 /**
- * Acquire an expiring PostgreSQL lease. The leader refreshes it every 30 seconds;
- * another worker can take over after 90 seconds without depending on a dead session
- * being noticed by PostgreSQL.
+ * Acquire an expiring PostgreSQL lease. The active worker refreshes every 30 seconds;
+ * the expiry remains a final crash-recovery fallback. Normal Railway deployments use
+ * the explicit deployment takeover protocol below and release immediately.
  */
 export async function acquireWorkerLeadership(): Promise<boolean> {
   if (leader) return true;
@@ -69,24 +81,26 @@ export async function acquireWorkerLeadership(): Promise<boolean> {
     if (!r.rowCount || r.rows[0].value !== INSTANCE_ID) {
       leader = false;
       lastError = null;
-      console.warn('[leadership] follower — a live lease is held by another instance');
+      console.warn('[leadership] follower — a live lease is held by another deployment');
       return false;
     }
+
     leader = true;
     lastError = null;
-    const hb = setInterval(async () => {
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    heartbeatTimer = setInterval(async () => {
       try {
         const beat = await pool!.query(
           `UPDATE leadership_claims SET claimed_at = now() WHERE name = 'lease' AND value = $1`, [INSTANCE_ID]);
         if (!beat.rowCount) {
-          console.error('[leadership] lease lost (taken by another instance) — exiting for clean failover');
+          console.error('[leadership] lease lost — exiting for clean failover');
           process.exit(1);
         }
       } catch (error) {
         console.error('[leadership] heartbeat error:', (error as Error).message);
       }
     }, 30_000);
-    hb.unref();
+    heartbeatTimer.unref();
     console.log(`[leadership] lease acquired: ${LOCK_NAME} as ${INSTANCE_ID}`);
     return true;
   } catch (error) {
@@ -99,6 +113,10 @@ export async function acquireWorkerLeadership(): Promise<boolean> {
 
 export async function releaseWorkerLeadership() {
   leader = false;
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
   if (!pool) return;
   await ensureLeadershipSchema().catch(() => {});
   await pool.query(
@@ -106,41 +124,72 @@ export async function releaseWorkerLeadership() {
   ).catch(() => {});
 }
 
-// ===== DOMAIN-PRIORITY YIELD PROTOCOL =====
-export const isPrimaryInstance = () => process.env.LEADERSHIP_PRIORITY === 'primary';
-
+/**
+ * A replacement deployment records its deployment ID while waiting. All replicas from
+ * the same deployment share the same value, so they never force each other to churn.
+ * A leader from an older deployment sees the different value and yields immediately.
+ */
 export async function registerPrimaryClaim() {
-  if (!pool || !isPrimaryInstance()) return;
+  if (!pool || leader) return;
   await ensureLeadershipSchema().catch(() => {});
   await pool.query(
-    `INSERT INTO leadership_claims (name, claimed_at) VALUES ('primary', now())
-     ON CONFLICT (name) DO UPDATE SET claimed_at = now()`,
-  ).catch(() => {});
+    `INSERT INTO leadership_claims (name, claimed_at, value) VALUES ('primary', now(), $1)
+     ON CONFLICT (name) DO UPDATE SET claimed_at = now(), value = EXCLUDED.value`,
+    [DEPLOYMENT_ID],
+  ).then(() => {
+    takeoverRequestedAt = new Date().toISOString();
+  }).catch(error => {
+    lastError = `takeover claim: ${(error as Error).message}`;
+  });
 }
 
 export async function clearPrimaryClaim() {
   if (!pool) return;
   await ensureLeadershipSchema().catch(() => {});
-  await pool.query(`DELETE FROM leadership_claims WHERE name = 'primary'`).catch(() => {});
+  await pool.query(
+    `DELETE FROM leadership_claims
+      WHERE name = 'primary'
+        AND (value = $1 OR value IS NULL OR claimed_at < now() - interval '90 seconds')`,
+    [DEPLOYMENT_ID],
+  ).catch(() => {});
 }
 
 export function startYieldWatch() {
-  if (!pool || isPrimaryInstance() || !leader) return;
-  const timer = setInterval(async () => {
+  if (!pool || !leader || yieldTimer) return;
+  const check = async () => {
     try {
       const r = await pool!.query(
-        `SELECT 1 FROM leadership_claims WHERE name = 'primary' AND claimed_at > now() - interval '90 seconds'`);
-      if (r.rowCount) {
-        console.log('[leadership] fresh PRIMARY claim detected — yielding leadership for the domain-holding instance');
-        clearInterval(timer);
-        process.kill(process.pid, 'SIGTERM');
+        `SELECT value FROM leadership_claims
+          WHERE name = 'primary'
+            AND value IS NOT NULL
+            AND value IS DISTINCT FROM $1
+            AND claimed_at > now() - interval '90 seconds'`,
+        [DEPLOYMENT_ID],
+      );
+      if (!r.rowCount) return;
+
+      lastYieldAt = new Date().toISOString();
+      console.log(`[leadership] replacement deployment ${r.rows[0].value} requested takeover — releasing worker lease`);
+      if (yieldTimer) {
+        clearInterval(yieldTimer);
+        yieldTimer = null;
       }
-    } catch { /* never yield on error */ }
-  }, 30_000);
-  timer.unref();
+      await releaseWorkerLeadership();
+      process.exit(0);
+    } catch (error) {
+      lastError = `yield watch: ${(error as Error).message}`;
+    }
+  };
+
+  void check();
+  yieldTimer = setInterval(() => void check(), 3_000);
+  yieldTimer.unref();
 }
 
-// ===== LEADER ADDRESS PUBLICATION (for the standby reverse proxy) =====
+// Retained for compatibility with older diagnostics; takeover is now automatic.
+export const isPrimaryInstance = () => process.env.LEADERSHIP_PRIORITY === 'primary';
+
+// ===== LEADER ADDRESS PUBLICATION (diagnostics only) =====
 let addrTimer: ReturnType<typeof setInterval> | null = null;
 export function startLeaderAddressPublication() {
   if (!pool) return;
