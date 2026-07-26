@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="theme-color" content="#07090d" />
+  <title>MEMEWATCH Diagnostics</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; background:#07090d; color:#f5f7ff; }
+    body { margin:0; padding:24px; }
+    main { max-width:1100px; margin:0 auto; }
+    header { display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
+    h1 { margin:0; font-size:24px; }
+    p { color:#aab1c2; }
+    button, a { border:1px solid #303848; background:#111722; color:#f5f7ff; border-radius:9px; padding:10px 14px; text-decoration:none; cursor:pointer; }
+    .actions { display:flex; gap:8px; flex-wrap:wrap; }
+    .notice { margin:18px 0; padding:12px 14px; border:1px solid #303848; border-radius:10px; background:#0d121b; }
+    pre { white-space:pre-wrap; word-break:break-word; background:#0a0f17; border:1px solid #252d3b; border-radius:12px; padding:18px; min-height:240px; overflow:auto; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><h1>Read-only runtime diagnostics</h1><p>Sanitized deployment, variable-presence, database, subsystem, and active-configuration data.</p></div>
+    <div class="actions"><button id="refresh">Refresh</button><button id="copy">Copy JSON</button><a href="/read-only-diagnostics.json" download>Download JSON</a><a href="/">Dashboard</a></div>
+  </header>
+  <div class="notice">This page never includes secret values, database URLs, private keys, seed phrases, or raw database rows.</div>
+  <pre id="output">Loading diagnostics…</pre>
+</main>
+<script>
+  const output = document.getElementById('output');
+  let text = '';
+  async function load() {
+    output.textContent = 'Loading diagnostics…';
+    try {
+      const response = await fetch('/read-only-diagnostics.json', { cache: 'no-store' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      text = JSON.stringify(data, null, 2);
+      output.textContent = text;
+    } catch (error) {
+      text = '';
+      output.textContent = `Diagnostics are not available yet: ${error.message}. The first snapshot is created after the active scanner starts.`;
+    }
+  }
+  document.getElementById('refresh').onclick = load;
+  document.getElementById('copy').onclick = async () => {
+    if (!text) return;
+    await navigator.clipboard.writeText(text);
+    document.getElementById('copy').textContent = 'Copied ✓';
+    setTimeout(() => { document.getElementById('copy').textContent = 'Copy JSON'; }, 1500);
+  };
+  load();
+</script>
+</body>
+</html>

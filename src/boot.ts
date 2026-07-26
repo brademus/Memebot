@@ -25,6 +25,11 @@ async function startLeaderWorker() {
   // This alarm compares mature model decisions with their expected paper evidence rows.
   const { startPaperEvidenceHealthMonitor } = await import('./paper/persistence-health');
   startPaperEvidenceHealthMonitor();
+
+  // Publish an allowlisted, aggregate-only diagnostics snapshot through the existing
+  // static dashboard server. No raw rows, secret values, or write controls are exposed.
+  const { startReadOnlyDiagnosticsPublisher } = await import('./ops/read-only-diagnostics-publisher');
+  startReadOnlyDiagnosticsPublisher();
 }
 
 async function boot() {
