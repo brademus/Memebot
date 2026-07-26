@@ -171,3 +171,24 @@ SELECT
   CASE WHEN p.final_multiple <= 0.5 THEN true ELSE false END AS severe_loss,
   CASE WHEN p.closed AND p.exit_reason IS DISTINCT FROM 'tracking_lost' THEN true ELSE false END AS label_resolved
 FROM paper_trades p;
+
+-- The first deployment containing the database/lite-mode repair establishes a clean
+-- forward-evidence epoch. Historical rows remain intact but no longer contaminate current
+-- readiness and profitability diagnostics.
+CREATE TABLE IF NOT EXISTS evidence_epochs (
+  name TEXT PRIMARY KEY,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+INSERT INTO evidence_epochs (name, metadata)
+VALUES ('post_infrastructure_repair_v1', '{"purpose":"clean forward evidence after PostgreSQL, simulation-wallet, tracking, and lite-mode repairs"}'::jsonb)
+ON CONFLICT (name) DO NOTHING;
+
+-- Report-path indexes. These are intentionally narrow and idempotent; they accelerate
+-- time-window summaries without indexing the large JSON payloads.
+CREATE INDEX IF NOT EXISTS idx_paper_entry_at ON paper_trades(entry_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_exit_at ON paper_trades(exit_at DESC) WHERE exit_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_paper_closed_entry ON paper_trades(closed, entry_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tokens_source_first_seen ON tokens(source, first_seen DESC);
+CREATE INDEX IF NOT EXISTS idx_wallet_hits_ca_buy_at ON wallet_hits(ca, buy_at DESC);
+CREATE INDEX IF NOT EXISTS idx_outcomes_taken_at ON outcomes(taken_at DESC);

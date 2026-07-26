@@ -3,7 +3,7 @@ export type QuotePhase = 'legacy' | 'shadow' | 'pre_key' | 'post_key';
 export function quotePhase(status: string | null | undefined, keyPresent: boolean | null | undefined): QuotePhase {
   const value = String(status || 'unknown');
   if (value === 'legacy_mark') return 'legacy';
-  if (value === 'shadow_raw_no_execution') return 'shadow';
+  if (value === 'shadow_raw_no_execution' || value === 'pregrad_observation_only') return 'shadow';
   if (value === 'jupiter_api_key_missing' || keyPresent === false) return 'pre_key';
   return 'post_key';
 }
@@ -11,7 +11,7 @@ export function quotePhase(status: string | null | undefined, keyPresent: boolea
 export function quoteCategory(status: string | null | undefined): string {
   const value = String(status || 'unknown');
   if (value === 'legacy_mark') return 'legacy';
-  if (value === 'shadow_raw_no_execution') return 'research_only';
+  if (value === 'shadow_raw_no_execution' || value === 'pregrad_observation_only') return 'research_only';
   if (value === 'executable_quote' || value === 'executable_simulated' || value === 'executable_exit_simulated') return 'simulated_executable';
   if (value === 'quote_pending') return 'pending';
   if (value === 'jupiter_api_key_missing') return 'missing_key';

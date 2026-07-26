@@ -287,7 +287,9 @@ export async function paperScoreboard(days = 30): Promise<any[]> {
        ROUND(AVG(duration_seconds)::numeric,0) AS avg_duration_seconds,
        COALESCE(SUM(snapshot_count),0)::bigint AS telemetry_snapshots,
        COALESCE(SUM(event_count),0)::bigint AS telemetry_events
-     FROM paper_trades WHERE entry_at>now()-($1||' days')::interval
+     FROM paper_trades
+     WHERE entry_at>now()-($1||' days')::interval
+       AND entry_at>=COALESCE((SELECT started_at FROM evidence_epochs WHERE name='post_infrastructure_repair_v1'),'-infinity'::timestamptz)
      GROUP BY signal,model_version ORDER BY model_version DESC,pct_3x_executable DESC NULLS LAST`, [String(days)],
   ).catch(() => null);
   return (result?.rows || []).map((row: any) => {
@@ -303,14 +305,15 @@ export async function paperScoreboard(days = 30): Promise<any[]> {
   });
 }
 
-export async function paperQuoteStatusBreakdown(days = 30): Promise<any[]> {
+export async function paperQuoteStatusBreakdown(days = 30, cleanEpoch = true): Promise<any[]> {
   if (!pool) return [];
   const result = await pool.query(
     `SELECT model_version,quote_status,quote_key_present,transaction_built,simulation_ok,COUNT(*)::int AS n,
             MIN(entry_at) AS first_at,MAX(entry_at) AS last_at
        FROM paper_trades WHERE entry_at>now()-($1||' days')::interval
+         AND ($2::boolean=false OR entry_at>=COALESCE((SELECT started_at FROM evidence_epochs WHERE name='post_infrastructure_repair_v1'),'-infinity'::timestamptz))
        GROUP BY model_version,quote_status,quote_key_present,transaction_built,simulation_ok
-       ORDER BY model_version DESC,n DESC`, [String(days)],
+       ORDER BY model_version DESC,n DESC`, [String(days), cleanEpoch],
   ).catch(() => ({ rows: [] as any[] }));
   return result.rows.map((row: any) => ({ ...row, phase: quotePhase(row.quote_status, row.quote_key_present),
     category: quoteCategory(row.quote_status), current_model: row.model_version === MODEL_VERSION }));
@@ -328,9 +331,12 @@ export async function paperDiag() {
       hit3x: 0,
       quotePending: 0,
       quoteStatuses: [] as any[],
+      historicalQuoteStatuses: [] as any[],
       recentClosed: 0,
       recentTrackingLost: 0,
       recentTrackingLostPct: null as number | null,
+      evidenceEpochAt: null as string | null,
+      postRepairTotal: 0,
       executionEpochAt: null as string | null,
       trackingRecovery: trackingRecoveryDiag(),
       telemetry: await paperTelemetryDiag(),
@@ -338,17 +344,22 @@ export async function paperDiag() {
     return { ...base, privateReadiness: buildPrivateReadiness(base) };
   }
   const result = await pool.query(
-    `SELECT COUNT(*) FILTER (WHERE NOT closed) AS open,COUNT(*) AS total,
+    `WITH epoch AS (
+       SELECT COALESCE((SELECT started_at FROM evidence_epochs WHERE name='post_infrastructure_repair_v1'),'-infinity'::timestamptz) AS at
+     )
+     SELECT COUNT(*) FILTER (WHERE NOT closed) AS open,COUNT(*) AS total,
        COUNT(*) FILTER (WHERE execution_eligible) AS executable,COUNT(*) FILTER (WHERE transaction_built) AS transaction_built,
        COUNT(*) FILTER (WHERE simulation_ok) AS simulation_ok,COUNT(*) FILTER (WHERE observed_target_hit_at IS NOT NULL) AS observed_hit3x,
        COUNT(*) FILTER (WHERE execution_eligible AND target_hit_at IS NOT NULL) AS hit3x,
        COUNT(*) FILTER (WHERE quote_status='quote_pending') AS quote_pending,
        COUNT(*) FILTER (WHERE quote_status='jupiter_api_key_missing') AS missing_api_key,
        COUNT(*) FILTER (WHERE execution_eligible AND observed_target_hit_at IS NOT NULL AND target_hit_at IS NULL) AS exit_unverified,
-       COUNT(*) FILTER (WHERE exit_at>now()-interval '24 hours') AS recent_closed,
-       COUNT(*) FILTER (WHERE exit_at>now()-interval '24 hours' AND exit_reason='tracking_lost') AS recent_tracking_lost,
-       MIN(entry_at) FILTER (WHERE model_version=$1 AND simulation_ok) AS execution_epoch_at
-     FROM paper_trades`, [MODEL_VERSION],
+       COUNT(*) FILTER (WHERE entry_at>=epoch.at) AS post_repair_total,
+       COUNT(*) FILTER (WHERE entry_at>=epoch.at AND exit_at>now()-interval '24 hours') AS recent_closed,
+       COUNT(*) FILTER (WHERE entry_at>=epoch.at AND exit_at>now()-interval '24 hours' AND exit_reason='tracking_lost') AS recent_tracking_lost,
+       MIN(entry_at) FILTER (WHERE entry_at>=epoch.at AND model_version=$1 AND simulation_ok) AS execution_epoch_at,
+       epoch.at AS evidence_epoch_at
+     FROM paper_trades CROSS JOIN epoch GROUP BY epoch.at`, [MODEL_VERSION],
   ).catch(() => ({ rows: [{}] }));
   const row = result.rows[0] || {};
   const recentClosed = numberValue(row.recent_closed);
@@ -365,8 +376,11 @@ export async function paperDiag() {
     recentClosed,
     recentTrackingLost,
     recentTrackingLostPct,
+    evidenceEpochAt: row.evidence_epoch_at ? new Date(row.evidence_epoch_at).toISOString() : null,
+    postRepairTotal: numberValue(row.post_repair_total),
     executionEpochAt: row.execution_epoch_at ? new Date(row.execution_epoch_at).toISOString() : null,
-    quoteStatuses: await paperQuoteStatusBreakdown(30),
+    quoteStatuses: await paperQuoteStatusBreakdown(30, true),
+    historicalQuoteStatuses: await paperQuoteStatusBreakdown(30, false),
     trackingRecovery: trackingRecoveryDiag(),
     telemetry: await paperTelemetryDiag(),
   };

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TokenRecord } from '../types';
-import { quoteExecutableEntry, quoteExecutableExit } from './execution';
+import { executionVenue, quoteExecutableEntry, quoteExecutableExit } from './execution';
 
 const token = { ca: '7YttLkHDo6NEQv7YQwKkK8uZZzYxqkZQ2u4xJr6pump', liquidityUsd: 100_000 } as TokenRecord;
 const originalFetch = globalThis.fetch;
@@ -44,6 +44,18 @@ test('marks a signal ineligible when the Jupiter API key is absent', async () =>
   const result = await quoteExecutableEntry(token, 0.00001);
   assert.equal(result.eligible, false);
   assert.equal(result.status, 'jupiter_api_key_missing');
+});
+
+test('keeps pre-graduation Pump.fun entries as research without calling Jupiter', async () => {
+  configure();
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; throw new Error('network should not be called'); };
+  const pregrad = { ...token, dex: 'pumpfun', gradAt: null } as TokenRecord;
+  assert.equal(executionVenue(pregrad), 'pumpfun_curve_research');
+  const result = await quoteExecutableEntry(pregrad, 0.00001);
+  assert.equal(result.eligible, false);
+  assert.equal(result.status, 'pregrad_observation_only');
+  assert.equal(calls, 0);
 });
 
 test('requires a simulation wallet for executable evidence', async () => {
