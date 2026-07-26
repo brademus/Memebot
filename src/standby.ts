@@ -124,10 +124,11 @@ export async function startStandbyServer(): Promise<StandbyServer> {
   return {
     close: () => new Promise<void>((resolve, reject) => {
       let settled = false;
+      let forceTimer: ReturnType<typeof setTimeout> | null = null;
       const finish = (error?: Error | null) => {
         if (settled) return;
         settled = true;
-        clearTimeout(forceTimer);
+        if (forceTimer) clearTimeout(forceTimer);
         if (error && (error as NodeJS.ErrnoException).code !== 'ERR_SERVER_NOT_RUNNING') reject(error);
         else resolve();
       };
@@ -150,7 +151,7 @@ export async function startStandbyServer(): Promise<StandbyServer> {
 
       // Railway/browser keep-alive sockets can survive response.end(). Force them down
       // after a brief drain so the active Express server can bind the port immediately.
-      const forceTimer = setTimeout(() => {
+      forceTimer = setTimeout(() => {
         for (const socket of sockets) socket.destroy();
         sockets.clear();
         server.closeAllConnections?.();
