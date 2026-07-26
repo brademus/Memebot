@@ -22,6 +22,21 @@ async function startLeaderWorker() {
   startPaperEvidenceHealthMonitor();
 }
 
+async function closeStandbyForPromotion(standby: StandbyServer) {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  try {
+    await Promise.race([
+      standby.close(),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error('standby server did not release the scanner port within 5 seconds')), 5_000);
+        timeout.unref();
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 async function boot() {
   let standby: StandbyServer | null = null;
   let attempt = 0;
@@ -37,12 +52,14 @@ async function boot() {
 
   if (standby) {
     console.log('[boot] leadership available; promoting standby into active scanner');
-    await standby.close();
+    await closeStandbyForPromotion(standby);
+    console.log('[boot] standby released; starting scanner worker');
   }
   if (isPrimaryInstance()) await clearPrimaryClaim();   // stop signaling once we lead
   startYieldWatch();                                    // non-primary leaders yield to a waiting primary
-  startLeaderAddressPublication();                      // standby proxies the public domain to this address
+  startLeaderAddressPublication();                      // publish active worker diagnostics
   await startLeaderWorker();
+  console.log('[boot] scanner worker started');
 }
 
 boot().catch(error => {
