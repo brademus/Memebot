@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { pool } from '../db';
 
 const TABLES = [
@@ -39,7 +40,7 @@ export const databaseMaintenanceDiag = () => ({
   lastDurationsMs,
 });
 
-async function ensureMaintenanceObjects(client: any) {
+async function ensureMaintenanceObjects(client: PoolClient) {
   // Analyze sooner than PostgreSQL defaults on the high-churn evidence tables. These
   // settings do not delete rows or rewrite historical evidence.
   for (const table of ['tokens', 'outcomes', 'paper_trades', 'paper_trade_snapshots', 'trade_events']) {
@@ -87,7 +88,7 @@ export async function runDatabaseMaintenance(): Promise<void> {
   lastStartedAt = new Date().toISOString();
   lastError = null;
   const durations: Record<string, number> = {};
-  let client: Awaited<ReturnType<typeof pool.connect>> | null = null;
+  let client: PoolClient | null = null;
   let locked = false;
   try {
     client = await pool.connect();
