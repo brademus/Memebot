@@ -150,13 +150,23 @@ async function probeSize(tokenMint: string, sol: number, controller: AbortContro
   };
 }
 
+/**
+ * Jupiter can only prove routed DEX execution. A Pump.fun mint that is still on its
+ * bonding curve is deliberately retained as a forward research observation instead of
+ * being mislabeled as an execution failure. This path requires no paid PumpPortal feed.
+ */
+export function executionVenue(token: TokenRecord): 'pumpfun_curve_research' | 'jupiter' {
+  return token.dex === 'pumpfun' && !token.gradAt ? 'pumpfun_curve_research' : 'jupiter';
+}
+
 export async function quoteExecutableEntry(token: TokenRecord, markPrice: number): Promise<ExecutableQuote> {
   const startedAt = Date.now();
+  if (!token.ca || !markPrice || markPrice <= 0) return failedEntry('invalid_mark', startedAt);
+  if (executionVenue(token) === 'pumpfun_curve_research') return failedEntry('pregrad_observation_only', startedAt);
   if (!process.env.JUPITER_API_KEY) return failedEntry('jupiter_api_key_missing', startedAt);
   if (!process.env.SIMULATION_WALLET && cfg().signal_model.require_transaction_simulation)
     return failedEntry('simulation_wallet_missing', startedAt);
   if (!rpcUrl() && cfg().signal_model.require_transaction_simulation) return failedEntry('solana_rpc_missing', startedAt);
-  if (!token.ca || !markPrice || markPrice <= 0) return failedEntry('invalid_mark', startedAt);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), Math.max(8_000, executionSettings.quoteTimeoutMs * 4));
