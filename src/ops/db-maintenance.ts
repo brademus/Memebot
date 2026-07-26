@@ -20,6 +20,7 @@ const INTERVAL_MS = 6 * 60 * 60_000;
 let running = false;
 let runs = 0;
 let analyzed = 0;
+let maintenanceObjectsReady = false;
 let lastStartedAt: string | null = null;
 let lastFinishedAt: string | null = null;
 let lastError: string | null = null;
@@ -30,6 +31,7 @@ export const databaseMaintenanceDiag = () => ({
   running,
   runs,
   analyzed,
+  maintenanceObjectsReady,
   intervalHours: INTERVAL_MS / 3_600_000,
   lastStartedAt,
   lastFinishedAt,
@@ -37,11 +39,53 @@ export const databaseMaintenanceDiag = () => ({
   lastDurationsMs,
 });
 
+async function ensureMaintenanceObjects(client: any) {
+  // Analyze sooner than PostgreSQL defaults on the high-churn evidence tables. These
+  // settings do not delete rows or rewrite historical evidence.
+  for (const table of ['tokens', 'outcomes', 'paper_trades', 'paper_trade_snapshots', 'trade_events']) {
+    await client.query(`ALTER TABLE ${table} SET (
+      autovacuum_analyze_scale_factor = 0.01,
+      autovacuum_analyze_threshold = 500,
+      autovacuum_vacuum_scale_factor = 0.05,
+      autovacuum_vacuum_threshold = 1000
+    )`).catch(() => {});
+  }
+
+  // Entry context already preserves the full immutable feature set. Later time-series
+  // snapshots keep scalar market columns and compact duplicate JSON, preventing the
+  // snapshot table from continuing to grow at the previous multi-gigabyte rate.
+  await client.query(`
+    CREATE OR REPLACE FUNCTION memebot_compact_snapshot_json()
+    RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+      IF NEW.bucket_seconds > 0 THEN
+        IF NEW.smart_wallets IS NOT NULL THEN
+          NEW.smart_wallets = NEW.smart_wallets - 'hits';
+        END IF;
+        IF NEW.model_decision IS NOT NULL THEN
+          NEW.model_decision = NEW.model_decision - 'features' - 'hazards' - 'execution';
+        END IF;
+        IF NEW.entity_graph IS NOT NULL THEN
+          NEW.entity_graph = NEW.entity_graph - 'details' - 'edges' - 'nodes';
+        END IF;
+      END IF;
+      RETURN NEW;
+    END;
+    $$;
+    DROP TRIGGER IF EXISTS trg_memebot_compact_snapshot_json ON paper_trade_snapshots;
+    CREATE TRIGGER trg_memebot_compact_snapshot_json
+      BEFORE INSERT ON paper_trade_snapshots
+      FOR EACH ROW EXECUTE FUNCTION memebot_compact_snapshot_json();
+  `);
+  maintenanceObjectsReady = true;
+}
+
 export async function runDatabaseMaintenance(): Promise<void> {
   if (!pool || running) return;
   running = true;
   runs++;
   lastStartedAt = new Date().toISOString();
+  lastError = null;
   const durations: Record<string, number> = {};
   let client: Awaited<ReturnType<typeof pool.connect>> | null = null;
   let locked = false;
@@ -53,6 +97,7 @@ export async function runDatabaseMaintenance(): Promise<void> {
     locked = claim.rows[0]?.acquired === true;
     if (!locked) return;
 
+    await ensureMaintenanceObjects(client);
     for (const table of TABLES) {
       const started = Date.now();
       try {
