@@ -52,6 +52,13 @@ export function startServer() {
     res.status(code).end();
   });
 
+  app.get('/health', async (_req, res) => {
+    const { handleHealth, statusToHttpCode } = await import('./health');
+    const result = await handleHealth();
+    const statusCode = statusToHttpCode(result.status);
+    res.status(statusCode).json(result);
+  });
+
   app.use('/api', publicApiLimit);
 
   app.use([

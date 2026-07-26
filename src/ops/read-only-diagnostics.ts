@@ -9,6 +9,10 @@ import { webhookDiag } from '../wallets/webhook';
 import { paperDiag } from '../paper/paper';
 import { geminiConfigured, geminiLastError } from '../ai/gemini';
 import { databaseMaintenanceDiag } from './db-maintenance';
+import { paperSnapshotRetentionDiag } from './paper-snapshot-retention';
+import { telegramDiag } from '../alerts/telegram';
+import { heliusQuotaGuardDiag } from '../helius-quota-guard';
+import { jupiterCanaryDiag } from '../paper/jupiter-canary';
 
 const REQUIRED_VARIABLES = [
   'DATABASE_URL',
@@ -198,6 +202,33 @@ async function databaseDiagnostics() {
     });
   }
 
+  if (existing.has('paper_trades')) {
+    output.freshness.stalePaperTrades = await step('freshness_stale_paper_trades', async () => {
+      const rows = (await pool!.query(
+        `SELECT
+           COUNT(*) FILTER (WHERE NOT closed AND last_at > now() - interval '5 minutes')::int AS fresh_under_5m,
+           COUNT(*) FILTER (WHERE NOT closed AND last_at <= now() - interval '5 minutes' AND last_at > now() - interval '1 hour')::int AS stale_5m_1h,
+           COUNT(*) FILTER (WHERE NOT closed AND last_at <= now() - interval '1 hour' AND last_at > now() - interval '6 hours')::int AS stale_1h_6h,
+           COUNT(*) FILTER (WHERE NOT closed AND last_at <= now() - interval '6 hours' AND last_at > now() - interval '24 hours')::int AS stale_6h_24h,
+           COUNT(*) FILTER (WHERE NOT closed AND last_at <= now() - interval '24 hours')::int AS stale_over_24h,
+           COUNT(*) FILTER (WHERE NOT closed AND last_at > now() - interval '5 minutes' AND last_at <= now() - interval '6 hours')::int AS within_tracking_grace,
+           COUNT(*) FILTER (WHERE NOT closed AND last_at <= now() - interval '5 minutes' AND last_at > now() - interval '6 hours')::int AS within_tracking_grace,
+           COUNT(*) FILTER (WHERE NOT closed AND last_at <= now() - interval '6 hours')::int AS beyond_tracking_grace,
+         FROM paper_trades`
+      )).rows[0];
+      return {
+        freshUnder5m: Number(rows.fresh_under_5m || 0),
+        stale5m1h: Number(rows.stale_5m_1h || 0),
+        stale1h6h: Number(rows.stale_1h_6h || 0),
+        stale6h24h: Number(rows.stale_6h_24h || 0),
+        staleOver24h: Number(rows.stale_over_24h || 0),
+        withinTrackingGrace: Number(rows.within_tracking_grace || 0),
+        beyondTrackingGrace: Number(rows.beyond_tracking_grace || 0),
+        trackingLostClosed24h: Number(rows.tracking_lost_closed_24h || 0),
+      };
+    });
+  }
+
   if (existing.has('trade_events')) {
     output.freshness.tradeEvents = await step('freshness_trade_events', async () => {
       const row = (await pool!.query(
@@ -286,6 +317,10 @@ export async function buildReadOnlyDiagnostics() {
     database: await databaseDiagnostics(),
     subsystems: {
       databaseMaintenance: databaseMaintenanceDiag(),
+      paperSnapshotRetention: paperSnapshotRetentionDiag(),
+      telegram: telegramDiag(),
+      heliusQuota: heliusQuotaGuardDiag(),
+      jupiter: jupiterCanaryDiag(),
       pumpPortal: pumpfunStreamDiag(),
       pumpPortalCostGuard: pumpPortalGuardDiag(),
       helius: heliusHealth(),

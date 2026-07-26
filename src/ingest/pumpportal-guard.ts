@@ -5,6 +5,9 @@ import {
   onPumpPortalBudgetAvailable,
   paidStreamBudgetAvailable,
   pumpPortalPersistentBudgetDiag,
+  notifySubscriptionChange,
+  canResubscribeAfterCooldown,
+  suppressedStaleResubscriptionsIncrement,
 } from './pumpportal-persistent-budget';
 
 // Paid token subscriptions are intentionally narrow. The actual paid-message ceiling is
@@ -18,6 +21,7 @@ interface PumpPortalGuardState {
   paidEvents: number;
   suppressedDuplicateKeys: number;
   suppressedOverBudgetKeys: number;
+  suppressedStaleDuringCooldownKeys: number;
   evictedKeys: number;
   subscribeCommands: number;
   unsubscribeCommands: number;
@@ -36,6 +40,7 @@ const state: PumpPortalGuardState = {
   paidEvents: 0,
   suppressedDuplicateKeys: 0,
   suppressedOverBudgetKeys: 0,
+  suppressedStaleDuringCooldownKeys: 0,
   evictedKeys: 0,
   subscribeCommands: 0,
   unsubscribeCommands: 0,
@@ -65,7 +70,8 @@ function parsePayload(value: unknown): any | null {
     if (typeof value === 'string') return JSON.parse(value);
     if (Buffer.isBuffer(value)) return JSON.parse(value.toString('utf8'));
     if (value instanceof ArrayBuffer) return JSON.parse(Buffer.from(value).toString('utf8'));
-    if (ArrayBuffer.isView(value)) return JSON.parse(Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('utf8'));
+    if (ArrayBuffer.isView(value))
+      return JSON.parse(Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('utf8'));
   } catch {}
   return null;
 }
@@ -78,6 +84,7 @@ function unsubscribe(socket: WebSocket, keys: string[]) {
   if (!keys.length || socket.readyState !== WebSocket.OPEN) return;
   sendRaw(socket, { method: 'unsubscribeTokenTrade', keys });
   state.unsubscribeCommands++;
+  notifySubscriptionChange();
 }
 
 function queueForBudget(keys: string[]) {
@@ -101,16 +108,27 @@ function tripBudget(socket: WebSocket, reason: 'event_budget' | 'provider_reject
   const active = [...state.active.keys()];
   state.active.clear();
   unsubscribe(socket, active);
-  console.error(`[pumpportal-guard] paid stream paused: ${reason}; events=${state.paidEvents}; active_unsubscribed=${active.length}`);
+  console.error(
+    `[pumpportal-guard] paid stream paused: ${reason}; events=${state.paidEvents}; active_unsubscribed=${active.length}`,
+  );
 }
 
 function guardedSubscription(socket: WebSocket, payload: any): boolean {
   const keys: string[] = Array.isArray(payload?.keys) ? payload.keys.map(String).filter(Boolean) : [];
   if (!keys.length) return true;
+
   if (state.providerRejected) {
     state.suppressedOverBudgetKeys += keys.length;
     return false;
   }
+
+  // Check cooldown to prevent thrash
+  if (!canResubscribeAfterCooldown()) {
+    state.suppressedStaleDuringCooldownKeys += keys.length;
+    suppressedStaleResubscriptionsIncrement();
+    return false;
+  }
+
   if (!paidStreamBudgetAvailable()) {
     queueForBudget(keys);
     state.suppressedOverBudgetKeys += keys.length;
@@ -119,7 +137,7 @@ function guardedSubscription(socket: WebSocket, payload: any): boolean {
   }
 
   state.budgetTripped = false;
-  const uniqueNew: string[] = [...new Set<string>(keys)].filter(key => {
+  const uniqueNew: string[] = [...new Set<string>(keys)].filter((key) => {
     if (state.active.has(key)) {
       state.suppressedDuplicateKeys++;
       return false;
@@ -131,24 +149,33 @@ function guardedSubscription(socket: WebSocket, payload: any): boolean {
   const combined: string[] = [...state.active.keys(), ...uniqueNew];
   const desired: string[] = combined.slice(-MAX_ACTIVE_TOKENS);
   const desiredSet = new Set<string>(desired);
-  const evicted = [...state.active.keys()].filter(key => !desiredSet.has(key));
+  const evicted = [...state.active.keys()].filter((key) => !desiredSet.has(key));
   if (evicted.length) {
     unsubscribe(socket, evicted);
     state.evictedKeys += evicted.length;
     for (const key of evicted) state.active.delete(key);
   }
 
-  const accepted = uniqueNew.filter(key => desiredSet.has(key));
+  const accepted = uniqueNew.filter((key) => desiredSet.has(key));
   for (const key of accepted) state.active.set(key, Date.now());
   if (!accepted.length) return false;
   sendRaw(socket, { method: 'subscribeTokenTrade', keys: accepted });
   state.subscribeCommands++;
+  notifySubscriptionChange();
   return false;
 }
 
 function flushPendingSubscriptions() {
   const socket = guardedSocket;
-  if (!socket || socket.readyState !== WebSocket.OPEN || state.providerRejected || !paidStreamBudgetAvailable()) return;
+  if (
+    !socket ||
+    socket.readyState !== WebSocket.OPEN ||
+    state.providerRejected ||
+    !paidStreamBudgetAvailable() ||
+    !canResubscribeAfterCooldown()
+  ) {
+    return;
+  }
   const keys = [...state.pendingKeys];
   if (!keys.length) return;
   state.pendingKeys.clear();
@@ -199,15 +226,15 @@ export function pumpPortalGuardDiag() {
   const persistentBudget = pumpPortalPersistentBudgetDiag();
   return {
     maxActiveTokens: MAX_ACTIVE_TOKENS,
-    budgetMode: 'postgres_daily_and_rolling_14d',
-    maxPaidEventsPerBoot: null,
-    maxEstimatedCostPerBootSol: null,
+    budgetMode: 'postgres_daily_and_rolling_14d_with_time_aware_pacing',
+    pacingStrategy: 'proportional_to_day_remaining',
     activeTokens: state.active.size,
     pendingBudgetKeys: state.pendingKeys.size,
     paidEventsThisBoot: state.paidEvents,
     estimatedMeteredCostSol: Number((state.paidEvents / 10_000 * 0.01).toFixed(6)),
     suppressedDuplicateKeys: state.suppressedDuplicateKeys,
     suppressedOverBudgetKeys: state.suppressedOverBudgetKeys,
+    suppressedStaleDuringCooldownKeys: state.suppressedStaleDuringCooldownKeys,
     evictedKeys: state.evictedKeys,
     subscribeCommands: state.subscribeCommands,
     unsubscribeCommands: state.unsubscribeCommands,
@@ -224,4 +251,6 @@ export function pumpPortalGuardDiag() {
 
 (globalThis as any).__pumpPortalGuardDiag = pumpPortalGuardDiag;
 const budget = pumpPortalPersistentBudgetDiag();
-console.log(`[pumpportal-guard] enabled: max ${MAX_ACTIVE_TOKENS} paid token streams; persistent daily cap ${budget.dailyEventLimit} events; rolling 14-day cap ${budget.rolling14dEventLimit} events (${budget.maxRolling14dCostSol} SOL maximum)`);
+console.log(
+  `[pumpportal-guard] enabled: max ${MAX_ACTIVE_TOKENS} paid token streams; persistent daily cap ${budget.dailyEventLimit} events; rolling 14-day cap ${budget.rolling14dEventLimit} events (${budget.maxRolling14dCostSol} SOL maximum)`,
+);
