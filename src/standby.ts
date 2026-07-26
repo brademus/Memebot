@@ -43,11 +43,15 @@ function sendFile(res: http.ServerResponse, filePath: string) {
  */
 export async function startStandbyServer(): Promise<StandbyServer> {
   const streams = new Set<http.ServerResponse>();
+  const sockets = new Set<import('net').Socket>();
+  const heartbeatTimers = new Map<http.ServerResponse, ReturnType<typeof setInterval>>();
+
   const server = http.createServer((req, res) => {
     const url = new URL(req.url || '/', 'http://standby.local');
 
-    // EventSource requires a real text/event-stream response. Returning JSON here
-    // makes the dashboard remain stuck on “reconnecting” throughout deployment handoff.
+    // EventSource requires a real text/event-stream response. Keep it connected while
+    // standby is active, but use the default message event so the dashboard can render
+    // the standby payload instead of looking disconnected.
     if (url.pathname === '/api/stream') {
       res.statusCode = 200;
       res.setHeader('content-type', 'text/event-stream; charset=utf-8');
@@ -55,8 +59,10 @@ export async function startStandbyServer(): Promise<StandbyServer> {
       res.setHeader('connection', 'keep-alive');
       res.setHeader('x-accel-buffering', 'no');
       res.flushHeaders?.();
-      res.write(`event: standby\ndata: ${JSON.stringify({
-        ok: true,
+      res.write(`data: ${JSON.stringify({
+        tokens: [],
+        scans: [],
+        seenFeed: [],
         role: 'standby',
         scanning: false,
         message: 'Dashboard connected while the scanner acquires worker leadership',
@@ -67,8 +73,10 @@ export async function startStandbyServer(): Promise<StandbyServer> {
       }, 10_000);
       heartbeat.unref();
       streams.add(res);
+      heartbeatTimers.set(res, heartbeat);
       req.on('close', () => {
         clearInterval(heartbeat);
+        heartbeatTimers.delete(res);
         streams.delete(res);
       });
       return;
@@ -98,6 +106,11 @@ export async function startStandbyServer(): Promise<StandbyServer> {
     sendFile(res, path.join(PUBLIC_DIR, 'index.html'));
   });
 
+  server.on('connection', socket => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
+
   await new Promise<void>((resolve, reject) => {
     const onError = (error: Error) => reject(error);
     server.once('error', onError);
@@ -110,16 +123,40 @@ export async function startStandbyServer(): Promise<StandbyServer> {
 
   return {
     close: () => new Promise<void>((resolve, reject) => {
-      // End standby EventSource connections so server.close can complete and the
-      // browser immediately reconnects to the promoted full application stream.
-      for (const stream of streams) {
+      let settled = false;
+      let forceTimer: ReturnType<typeof setTimeout> | null = null;
+      const finish = (error?: Error | null) => {
+        if (settled) return;
+        settled = true;
+        if (forceTimer) clearTimeout(forceTimer);
+        if (error && (error as NodeJS.ErrnoException).code !== 'ERR_SERVER_NOT_RUNNING') reject(error);
+        else resolve();
+      };
+
+      // End every long-lived EventSource response before closing the listener. Merely
+      // calling server.close() waits indefinitely for these connections and prevents
+      // boot.ts from ever starting the scanner worker.
+      for (const [stream, heartbeat] of heartbeatTimers) {
+        clearInterval(heartbeat);
         if (!stream.writableEnded) {
-          stream.write('event: handoff\ndata: {"role":"promoting"}\n\n');
+          stream.write('data: {"role":"promoting","scanning":false}\n\n');
           stream.end();
         }
       }
+      heartbeatTimers.clear();
       streams.clear();
-      server.close(error => error ? reject(error) : resolve());
+
+      server.close(error => finish(error));
+      server.closeIdleConnections?.();
+
+      // Railway/browser keep-alive sockets can survive response.end(). Force them down
+      // after a brief drain so the active Express server can bind the port immediately.
+      forceTimer = setTimeout(() => {
+        for (const socket of sockets) socket.destroy();
+        sockets.clear();
+        server.closeAllConnections?.();
+      }, 250);
+      forceTimer.unref();
     }),
   };
 }
