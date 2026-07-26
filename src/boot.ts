@@ -1,5 +1,10 @@
-import { acquireWorkerLeadership, registerPrimaryClaim, clearPrimaryClaim, startYieldWatch, isPrimaryInstance, startLeaderAddressPublication } from './leadership';
-import { startStandbyServer, StandbyServer } from './standby';
+import {
+  acquireWorkerLeadership,
+  registerPrimaryClaim,
+  clearPrimaryClaim,
+  startYieldWatch,
+  startLeaderAddressPublication,
+} from './leadership';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -22,44 +27,28 @@ async function startLeaderWorker() {
   startPaperEvidenceHealthMonitor();
 }
 
-async function closeStandbyForPromotion(standby: StandbyServer) {
-  let timeout: ReturnType<typeof setTimeout> | null = null;
-  try {
-    await Promise.race([
-      standby.close(),
-      new Promise<never>((_resolve, reject) => {
-        timeout = setTimeout(() => reject(new Error('standby server did not release the scanner port within 5 seconds')), 5_000);
-        timeout.unref();
-      }),
-    ]);
-  } finally {
-    if (timeout) clearTimeout(timeout);
-  }
-}
-
 async function boot() {
-  let standby: StandbyServer | null = null;
   let attempt = 0;
 
+  // Do not expose a dashboard-only standby. Railway keeps the previous healthy deploy
+  // serving traffic while this replacement waits. The replacement asks the old worker
+  // to release its database lease, and only opens the public port after the scanner is
+  // genuinely ready to start. This prevents a green/live UI with zero scans or calls.
   while (!(await acquireWorkerLeadership())) {
     attempt++;
-    await registerPrimaryClaim();   // a waiting primary signals the current leader to yield
-    if (!standby) standby = await startStandbyServer();
-    const delay = Math.min(15_000, 2_000 + attempt * 1_000) + Math.floor(Math.random() * 1_000);
-    console.log(`[boot] standby follower; retrying worker leadership in ${delay}ms`);
+    await registerPrimaryClaim();
+    const delay = Math.min(10_000, 1_000 + attempt * 750) + Math.floor(Math.random() * 500);
+    console.log(`[boot] waiting for active scanner takeover; retrying in ${delay}ms`);
     await sleep(delay);
   }
 
-  if (standby) {
-    console.log('[boot] leadership available; promoting standby into active scanner');
-    await closeStandbyForPromotion(standby);
-    console.log('[boot] standby released; starting scanner worker');
-  }
-  if (isPrimaryInstance()) await clearPrimaryClaim();   // stop signaling once we lead
-  startYieldWatch();                                    // non-primary leaders yield to a waiting primary
-  startLeaderAddressPublication();                      // publish active worker diagnostics
+  await clearPrimaryClaim();
+  startYieldWatch();
+  startLeaderAddressPublication();
+
+  console.log('[boot] leadership confirmed; starting scanner worker');
   await startLeaderWorker();
-  console.log('[boot] scanner worker started');
+  console.log('[boot] scanner worker started and dashboard is active');
 }
 
 boot().catch(error => {
