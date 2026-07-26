@@ -26,6 +26,11 @@ async function startLeaderWorker() {
   const { startPaperEvidenceHealthMonitor } = await import('./paper/persistence-health');
   startPaperEvidenceHealthMonitor();
 
+  // Keep PostgreSQL planner statistics current without blocking scanner-critical work.
+  // The maintenance pass is advisory-locked, bounded, and delayed until boot is stable.
+  const { startDatabaseMaintenance } = await import('./ops/db-maintenance');
+  startDatabaseMaintenance();
+
   // Publish an allowlisted, aggregate-only diagnostics snapshot through the existing
   // static dashboard server. No raw rows, secret values, or write controls are exposed.
   const { startReadOnlyDiagnosticsPublisher } = await import('./ops/read-only-diagnostics-publisher');
