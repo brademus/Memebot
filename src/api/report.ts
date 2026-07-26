@@ -1,3 +1,4 @@
+import { buildCleanEvidence } from './clean-evidence';
 import { buildHistoricalReview } from './historical-review';
 import { buildMasterReview } from './master-review';
 import { buildReport as buildForwardReport } from './report-v2';
@@ -40,11 +41,12 @@ async function runSection(
 export async function buildReport(days = 1) {
   // The complete review remains one copyable object, but no optional section may hold
   // the HTTP request open indefinitely. Each section degrades to an explicit error field.
-  const [base, signalStack, master, historical] = await Promise.all([
+  const [base, signalStack, master, historical, cleanEvidence] = await Promise.all([
     runSection('base calibration report', () => buildForwardReport(days)),
     runSection('Signal Stack report', () => buildSignalReport(days)),
     runSection('daily trade review', () => buildMasterReview(days)),
     runSection('historical trade review', () => buildHistoricalReview()),
+    runSection('clean post-repair evidence', () => buildCleanEvidence(days)),
   ]);
 
   const masterRecord = master.value;
@@ -58,6 +60,7 @@ export async function buildReport(days = 1) {
   return {
     ...base.value,
     signalStack: signalStack.value,
+    cleanEvidence: cleanEvidence.value,
     ...masterRecord,
     ...historicalRecord,
     ...(overall ? { overall } : {}),
@@ -68,6 +71,7 @@ export async function buildReport(days = 1) {
         signalStack: { durationMs: signalStack.durationMs, timedOut: signalStack.timedOut },
         daily: { durationMs: master.durationMs, timedOut: master.timedOut },
         historical: { durationMs: historical.durationMs, timedOut: historical.timedOut },
+        cleanEvidence: { durationMs: cleanEvidence.durationMs, timedOut: cleanEvidence.timedOut },
       },
     },
   };
