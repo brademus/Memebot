@@ -1,14 +1,20 @@
 import WebSocket from 'ws';
+import {
+  consumePersistentPaidEvent,
+  ensurePumpPortalPersistentBudget,
+  onPumpPortalBudgetAvailable,
+  paidStreamBudgetAvailable,
+  pumpPortalPersistentBudgetDiag,
+} from './pumpportal-persistent-budget';
 
-// Private test-mode hard ceilings. Railway variables may lower these values, but
-// cannot raise them accidentally. At PumpPortal's 0.01 SOL per 10,000 paid-event
-// rate, 3,000 events exposes at most roughly 0.003 SOL during one process boot.
+// Paid token subscriptions are intentionally narrow. The actual paid-message ceiling is
+// persisted in PostgreSQL by pumpportal-persistent-budget.ts, so Railway restarts cannot
+// reset the daily or rolling 14-day allowance.
 const MAX_ACTIVE_TOKENS = Math.max(1, Math.min(10, Number(process.env.PUMPPORTAL_MAX_ACTIVE_TOKENS || 10)));
-const MAX_PAID_EVENTS_PER_BOOT = Math.max(500, Math.min(3000,
-  Number(process.env.PUMPPORTAL_MAX_PAID_EVENTS_PER_BOOT || 3000)));
 
 interface PumpPortalGuardState {
   active: Map<string, number>;
+  pendingKeys: Set<string>;
   paidEvents: number;
   suppressedDuplicateKeys: number;
   suppressedOverBudgetKeys: number;
@@ -26,6 +32,7 @@ interface PumpPortalGuardState {
 
 const state: PumpPortalGuardState = {
   active: new Map(),
+  pendingKeys: new Set(),
   paidEvents: 0,
   suppressedDuplicateKeys: 0,
   suppressedOverBudgetKeys: 0,
@@ -73,11 +80,19 @@ function unsubscribe(socket: WebSocket, keys: string[]) {
   state.unsubscribeCommands++;
 }
 
+function queueForBudget(keys: string[]) {
+  for (const key of keys) state.pendingKeys.add(key);
+  const retained = [...state.pendingKeys].slice(-MAX_ACTIVE_TOKENS);
+  state.pendingKeys.clear();
+  for (const key of retained) state.pendingKeys.add(key);
+}
+
 function tripBudget(socket: WebSocket, reason: 'event_budget' | 'provider_rejection', detail?: string) {
   if (reason === 'event_budget') {
     if (state.budgetTripped) return;
     state.budgetTripped = true;
     state.lastBudgetTripAt = Date.now();
+    queueForBudget([...state.active.keys()]);
   } else {
     if (state.providerRejected) return;
     state.providerRejected = true;
@@ -92,11 +107,18 @@ function tripBudget(socket: WebSocket, reason: 'event_budget' | 'provider_reject
 function guardedSubscription(socket: WebSocket, payload: any): boolean {
   const keys: string[] = Array.isArray(payload?.keys) ? payload.keys.map(String).filter(Boolean) : [];
   if (!keys.length) return true;
-  if (state.budgetTripped || state.providerRejected) {
+  if (state.providerRejected) {
     state.suppressedOverBudgetKeys += keys.length;
     return false;
   }
+  if (!paidStreamBudgetAvailable()) {
+    queueForBudget(keys);
+    state.suppressedOverBudgetKeys += keys.length;
+    ensurePumpPortalPersistentBudget();
+    return false;
+  }
 
+  state.budgetTripped = false;
   const uniqueNew: string[] = [...new Set<string>(keys)].filter(key => {
     if (state.active.has(key)) {
       state.suppressedDuplicateKeys++;
@@ -124,6 +146,16 @@ function guardedSubscription(socket: WebSocket, payload: any): boolean {
   return false;
 }
 
+function flushPendingSubscriptions() {
+  const socket = guardedSocket;
+  if (!socket || socket.readyState !== WebSocket.OPEN || state.providerRejected || !paidStreamBudgetAvailable()) return;
+  const keys = [...state.pendingKeys];
+  if (!keys.length) return;
+  state.pendingKeys.clear();
+  state.budgetTripped = false;
+  guardedSubscription(socket, { method: 'subscribeTokenTrade', keys });
+}
+
 (WebSocket.prototype as any).send = function guardedSend(data: unknown, ...args: unknown[]) {
   if (!isPumpPortalSocket(this)) return (rawSend as any).call(this, data, ...args);
   ensureSocket(this);
@@ -134,7 +166,10 @@ function guardedSubscription(socket: WebSocket, payload: any): boolean {
   }
   if (payload?.method === 'unsubscribeTokenTrade') {
     const keys: string[] = Array.isArray(payload.keys) ? payload.keys.map(String) : [];
-    for (const key of keys) state.active.delete(key);
+    for (const key of keys) {
+      state.active.delete(key);
+      state.pendingKeys.delete(key);
+    }
   }
   return (rawSend as any).call(this, data, ...args);
 };
@@ -147,7 +182,7 @@ function guardedSubscription(socket: WebSocket, payload: any): boolean {
     if (payload?.mint && (txType === 'buy' || txType === 'sell')) {
       state.paidEvents++;
       state.lastEventAt = Date.now();
-      if (state.paidEvents >= MAX_PAID_EVENTS_PER_BOOT) tripBudget(this, 'event_budget');
+      if (!consumePersistentPaidEvent()) tripBudget(this, 'event_budget');
     } else {
       const text = payload ? JSON.stringify(payload) : '';
       if (/minimum balance not met|funded with at least 0\.02 sol/i.test(text))
@@ -157,12 +192,18 @@ function guardedSubscription(socket: WebSocket, payload: any): boolean {
   return (rawEmit as any).call(this, event, ...args);
 };
 
+onPumpPortalBudgetAvailable(() => flushPendingSubscriptions());
+ensurePumpPortalPersistentBudget();
+
 export function pumpPortalGuardDiag() {
+  const persistentBudget = pumpPortalPersistentBudgetDiag();
   return {
     maxActiveTokens: MAX_ACTIVE_TOKENS,
-    maxPaidEventsPerBoot: MAX_PAID_EVENTS_PER_BOOT,
-    maxEstimatedCostPerBootSol: Number((MAX_PAID_EVENTS_PER_BOOT / 10_000 * 0.01).toFixed(6)),
+    budgetMode: 'postgres_daily_and_rolling_14d',
+    maxPaidEventsPerBoot: null,
+    maxEstimatedCostPerBootSol: null,
     activeTokens: state.active.size,
+    pendingBudgetKeys: state.pendingKeys.size,
     paidEventsThisBoot: state.paidEvents,
     estimatedMeteredCostSol: Number((state.paidEvents / 10_000 * 0.01).toFixed(6)),
     suppressedDuplicateKeys: state.suppressedDuplicateKeys,
@@ -177,8 +218,10 @@ export function pumpPortalGuardDiag() {
     startedAt: new Date(state.startedAt).toISOString(),
     lastEventAt: state.lastEventAt ? new Date(state.lastEventAt).toISOString() : null,
     lastBudgetTripAt: state.lastBudgetTripAt ? new Date(state.lastBudgetTripAt).toISOString() : null,
+    persistentBudget,
   };
 }
 
 (globalThis as any).__pumpPortalGuardDiag = pumpPortalGuardDiag;
-console.log(`[pumpportal-guard] enabled: max ${MAX_ACTIVE_TOKENS} paid token streams; ${MAX_PAID_EVENTS_PER_BOOT} paid events per boot; max estimated cost ${pumpPortalGuardDiag().maxEstimatedCostPerBootSol} SOL`);
+const budget = pumpPortalPersistentBudgetDiag();
+console.log(`[pumpportal-guard] enabled: max ${MAX_ACTIVE_TOKENS} paid token streams; persistent daily cap ${budget.dailyEventLimit} events; rolling 14-day cap ${budget.rolling14dEventLimit} events (${budget.maxRolling14dCostSol} SOL maximum)`);
