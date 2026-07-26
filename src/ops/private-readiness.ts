@@ -13,6 +13,8 @@ export interface PaperReadinessInput {
   recentTrackingLost: number;
   recentTrackingLostPct: number | null;
   executionEpochAt: string | null;
+  evidenceEpochAt?: string | null;
+  postRepairTotal?: number;
 }
 
 interface ReadinessCheck {
@@ -89,50 +91,62 @@ export function buildPrivateReadiness(paper: PaperReadinessInput) {
     paper.db ? 'pass' : 'fail', paper.db ? 'database attached' : 'DATABASE_URL is missing or unavailable', !paper.db);
 
   const pumpHealthy = pump.connected && pump.effectiveMode === 'full' && pump.reason === 'healthy';
-  addCheck(checks, 'pumpportal', 'PumpPortal paid trade stream', 1.5, pumpHealthy ? 1.5 : warmup ? 0.5 : 0,
-    pumpHealthy ? 'pass' : warmup ? 'collecting' : 'fail',
-    pumpHealthy ? `healthy; ${pump.messages.tradesReceived} paid trades received this boot`
-      : `mode=${pump.effectiveMode}; reason=${pump.reason}`, !pumpHealthy && !warmup);
+  const liteOperational = pump.connected && pump.effectiveMode === 'lite';
+  addCheck(checks, 'pumpportal', 'Pump.fun market-data mode', 1.5,
+    pumpHealthy ? 1.5 : liteOperational ? 1.0 : warmup ? 0.5 : 0,
+    pumpHealthy ? 'pass' : liteOperational ? 'warn' : warmup ? 'collecting' : 'fail',
+    pumpHealthy ? `full exact-trade mode; ${pump.messages.tradesReceived} paid trades received this boot`
+      : liteOperational
+        ? `lite aggregate mode is active; paid exact-trade data is optional and unavailable (${pump.reason})`
+        : `market stream unavailable; reason=${pump.reason}`,
+    !pumpHealthy && !liteOperational && !warmup);
 
-  let coverageEarned = 0.75;
-  let coverageStatus: ReadinessCheck['status'] = 'collecting';
-  let coverageBlocker = false;
-  if (coverage.active >= 5 && coverage.coveragePct !== null) {
-    if (coverage.coveragePct >= 95) { coverageEarned = 0.75; coverageStatus = 'pass'; }
-    else if (coverage.coveragePct >= 75) { coverageEarned = 0.5; coverageStatus = 'warn'; }
-    else { coverageEarned = 0; coverageStatus = 'fail'; coverageBlocker = coverage.active >= 10; }
+  if (liteOperational) {
+    addCheck(checks, 'pumpportal_coverage', 'Per-token exact-trade coverage', 0.75, 0.5, 'warn',
+      'paid exact-trade coverage is intentionally unavailable; Dexscreener aggregate buys, sells, volume, price, and liquidity remain active', false);
+  } else {
+    let coverageEarned = 0.75;
+    let coverageStatus: ReadinessCheck['status'] = 'collecting';
+    let coverageBlocker = false;
+    if (coverage.active >= 5 && coverage.coveragePct !== null) {
+      if (coverage.coveragePct >= 95) { coverageEarned = 0.75; coverageStatus = 'pass'; }
+      else if (coverage.coveragePct >= 75) { coverageEarned = 0.5; coverageStatus = 'warn'; }
+      else { coverageEarned = 0; coverageStatus = 'fail'; coverageBlocker = coverage.active >= 10; }
+    }
+    addCheck(checks, 'pumpportal_coverage', 'Per-token exact-trade coverage', 0.75, coverageEarned, coverageStatus,
+      coverage.active < 5 ? `collecting; ${coverage.active} recently active Pump.fun tokens`
+        : `${coverage.coveragePct}% (${coverage.fresh}/${coverage.active}) have a trade event within four minutes`, coverageBlocker);
   }
-  addCheck(checks, 'pumpportal_coverage', 'Per-token exact-trade coverage', 0.75, coverageEarned, coverageStatus,
-    coverage.active < 5 ? `collecting; ${coverage.active} recently active Pump.fun tokens`
-      : `${coverage.coveragePct}% (${coverage.fresh}/${coverage.active}) have a trade event within four minutes`, coverageBlocker);
 
   const heliusBlocked = Object.values(helius.groups || {}).some((group: any) => group.blocked);
   const heliusHealthy = helius.configured && !heliusBlocked && Number(helius.http429Pct || 0) < 1;
   addCheck(checks, 'helius', 'Helius request protection', 1, heliusHealthy ? 1 : helius.configured && !heliusBlocked ? 0.7 : 0,
     heliusHealthy ? 'pass' : helius.configured && !heliusBlocked ? 'warn' : 'fail',
     helius.configured
-      ? `${helius.successPct}% success; ${helius.got429} × 429; circuits ${heliusBlocked ? 'blocked' : 'open'}`
+      ? `${helius.successPct}% success; ${helius.got429} × 429; circuits ${heliusBlocked ? 'blocked' : 'available'}`
       : 'HELIUS_API_KEY missing', !heliusHealthy && !warmup);
 
   const jupiterConfigured = !!env.JUPITER_API_KEY;
   addCheck(checks, 'jupiter', 'Jupiter quote API', 0.5, jupiterConfigured ? 0.5 : 0,
-    jupiterConfigured ? 'pass' : 'fail', jupiterConfigured ? 'JUPITER_API_KEY configured' : 'JUPITER_API_KEY missing', !jupiterConfigured);
+    jupiterConfigured ? 'pass' : 'fail', jupiterConfigured ? 'JUPITER_API_KEY configured for routed DEX tokens' : 'JUPITER_API_KEY missing', !jupiterConfigured);
 
   const simulationWallet = String(process.env.SIMULATION_WALLET || '').trim();
   const simulationWalletValid = SOLANA_ADDRESS.test(simulationWallet);
   addCheck(checks, 'simulation_wallet', 'Simulation wallet public address', 0.75, simulationWalletValid ? 0.75 : 0,
     simulationWalletValid ? 'pass' : 'fail', simulationWalletValid
       ? `configured (${simulationWallet.slice(0, 4)}…${simulationWallet.slice(-4)})`
-      : 'set SIMULATION_WALLET to the public address of the wallet you would actually trade from', !simulationWalletValid);
+      : 'set SIMULATION_WALLET to a valid public Solana address', !simulationWalletValid);
 
   const executionProven = paper.transactionBuilt > 0 && paper.simulationOk > 0;
-  addCheck(checks, 'execution_proof', 'Entry transaction build and simulation', 1,
-    executionProven ? 1 : simulationWalletValid && jupiterConfigured ? 0.25 : 0,
+  addCheck(checks, 'execution_proof', 'Routed entry transaction build and simulation', 1,
+    executionProven ? 1 : simulationWalletValid && jupiterConfigured ? 0.4 : 0,
     executionProven ? 'pass' : simulationWalletValid && jupiterConfigured ? 'collecting' : 'fail',
     executionProven
       ? `${paper.transactionBuilt} transactions built; ${paper.simulationOk} simulations succeeded; epoch ${paper.executionEpochAt || 'active'}`
-      : simulationWalletValid && jupiterConfigured ? 'configured; waiting for the next qualifying paper call'
-        : 'cannot prove executable entries until Jupiter and SIMULATION_WALLET are configured', !executionProven && !warmup);
+      : simulationWalletValid && jupiterConfigured
+        ? 'configured; pre-graduation Pump.fun entries remain research-only and routed DEX calls will be simulated when available'
+        : 'cannot prove routed entries until Jupiter and SIMULATION_WALLET are configured',
+    !simulationWalletValid || !jupiterConfigured);
 
   const telegramConfigured = telegram.configured;
   const lastTelegramSuccess = telegram.lastSuccessAt ? Date.parse(telegram.lastSuccessAt) : 0;
@@ -148,9 +162,9 @@ export function buildPrivateReadiness(paper: PaperReadinessInput) {
   let trackingEarned = 1;
   let trackingStatus: ReadinessCheck['status'] = 'collecting';
   let trackingBlocker = false;
-  let trackingDetail = `collecting; ${paper.recentClosed} calls closed in the last 24 hours`;
+  let trackingDetail = `clean epoch ${paper.evidenceEpochAt || 'starting'}; ${paper.recentClosed} post-repair calls closed in the last 24 hours`;
   if (paper.recentClosed >= 5 && recentPct !== null) {
-    trackingDetail = `${recentPct}% tracking_lost (${paper.recentTrackingLost}/${paper.recentClosed}) in the last 24 hours`;
+    trackingDetail = `${recentPct}% tracking_lost (${paper.recentTrackingLost}/${paper.recentClosed}) for post-repair entries closed in the last 24 hours`;
     if (recentPct <= 5) trackingStatus = 'pass';
     else if (recentPct <= 15) { trackingStatus = 'warn'; trackingEarned = 0.6; }
     else { trackingStatus = 'fail'; trackingEarned = 0; trackingBlocker = true; }
