@@ -8,6 +8,7 @@ import { heliusHealth } from '../helius';
 import { webhookDiag } from '../wallets/webhook';
 import { paperDiag } from '../paper/paper';
 import { geminiConfigured, geminiLastError } from '../ai/gemini';
+import { databaseMaintenanceDiag } from './db-maintenance';
 
 const REQUIRED_VARIABLES = [
   'DATABASE_URL',
@@ -38,6 +39,7 @@ const CORE_TABLES = [
   'smart_wallets',
   'wallet_hits',
   'leadership_claims',
+  'evidence_epochs',
 ] as const;
 
 const iso = (value: unknown) => value ? new Date(String(value)).toISOString() : null;
@@ -151,6 +153,12 @@ async function databaseDiagnostics() {
     )) as number | null;
   }
   output.exactCounts = exactCounts;
+
+  if (existing.has('evidence_epochs')) {
+    output.evidenceEpochs = await step('evidence_epochs', async () => (await pool!.query(
+      `SELECT name,started_at FROM evidence_epochs ORDER BY started_at`,
+    )).rows.map((row: any) => ({ name: row.name, startedAt: iso(row.started_at) })));
+  }
 
   if (existing.has('tokens')) {
     output.freshness.tokens = await step('freshness_tokens', async () => {
@@ -277,6 +285,7 @@ export async function buildReadOnlyDiagnostics() {
     },
     database: await databaseDiagnostics(),
     subsystems: {
+      databaseMaintenance: databaseMaintenanceDiag(),
       pumpPortal: pumpfunStreamDiag(),
       pumpPortalCostGuard: pumpPortalGuardDiag(),
       helius: heliusHealth(),
