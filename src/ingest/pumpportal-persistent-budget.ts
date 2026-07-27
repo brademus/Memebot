@@ -145,7 +145,7 @@ async function ensureTables(): Promise<void> {
   state.legacyReservationsCleared += Number(cleared.rowCount || 0);
 }
 
-async function cleanupExpiredLeases(client = pool): Promise<number> {
+async function cleanupExpiredLeases(client: any = pool): Promise<number> {
   if (!client) return 0;
   const result = await client.query(`DELETE FROM pumpportal_paid_leases
     WHERE expires_at<=now() RETURNING lease_id`);
