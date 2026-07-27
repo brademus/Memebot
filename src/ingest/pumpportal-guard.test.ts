@@ -17,6 +17,9 @@ test('PumpPortal guard owns subscriptions and preserves the persistent spending 
   assert.ok(diag.persistentBudget.maxDailyCostSol <= 0.004);
   assert.ok(diag.persistentBudget.maxRolling14dCostSol <= 0.05);
   assert.equal(diag.persistentBudget.failClosedWithoutDatabase, true);
+  assert.equal(diag.persistentBudget.reservationModel, 'expiring_process_lease');
+  assert.equal(diag.persistentBudget.legacyReservationLeakProtected, true);
+  assert.ok(diag.persistentBudget.reservationLeaseSeconds >= 120);
   assert.equal(diag.paidEventsThisBoot, 0);
   assert.equal(diag.budgetTripped, false);
   assert.equal(diag.providerRejected, false);
