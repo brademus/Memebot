@@ -27,6 +27,8 @@ async function startLeaderWorker() {
   // is persisted with its evidence for strategy refinement.
   const { startStrategyLifecycle } = await import('./paper/strategy-lifecycle');
   startStrategyLifecycle();
+  const { startStrategyLedgerReconciler } = await import('./paper/strategy-ledger-reconciler');
+  startStrategyLedgerReconciler();
 
   const { startDatabaseMaintenance } = await import('./ops/db-maintenance');
   startDatabaseMaintenance();
