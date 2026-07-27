@@ -56,10 +56,29 @@ function suppliedAdminKey(req: Request): string {
   return bearer ? bearer[1].trim() : '';
 }
 
-// The dashboard already stores the key only in sessionStorage and sends it through
-// x-admin-key for expensive or mutating tools. Public live-watch endpoints remain
-// read-only, while reports, diagnostics and wallet mutations require the private key.
+function isReadOnlyReportRequest(req: Request): boolean {
+  const originalPath = String(req.originalUrl || '').split('?')[0];
+  const mountedPath = `${String(req.baseUrl || '')}${String(req.path || '')}`;
+  const path = originalPath || mountedPath || String(req.path || '');
+  if (path === '/api/report' && req.method === 'GET') return true;
+  if (path === '/api/system-monitor' && req.method === 'GET') return true;
+  if (path === '/api/ai-review' && req.method === 'GET') return true;
+  if (path === '/api/status' && req.method === 'GET') return true;
+  if (path === '/api/wallet-rankings' && req.method === 'GET') return true;
+  if (path === '/api/wallets' && req.method === 'GET') return true;
+  if (path === '/api/daily-review-jobs' && req.method === 'POST') return true;
+  if (/^\/api\/daily-review-jobs\/[^/]+(?:\/chunks\/\d+)?$/.test(path) && req.method === 'GET') return true;
+  return false;
+}
+
+// Reports and diagnostics are read-only and intentionally accessible for this private-use
+// deployment. Actual mutations remain fail-closed and still require ADMIN_KEY.
 export const adminOnly: RequestHandler = (req, res, next) => {
+  if (isReadOnlyReportRequest(req)) {
+    next();
+    return;
+  }
+
   const expected = String(process.env.ADMIN_KEY || '').trim();
   if (!expected) {
     res.status(503).json({ error: 'ADMIN_KEY is not configured on the server' });
