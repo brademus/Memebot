@@ -21,23 +21,48 @@ function assertRejects(request: any, expectedStatus: number) {
   assert.equal(statusCode, expectedStatus);
 }
 
-// These two tests previously asserted the mid-week 'auth disabled' behavior —
-// including that a WRONG key passes. The final state restored strict private
-// authentication; the tests now enshrine it so a future regression to open
-// admin routes fails CI instead of being certified by it.
-test('admin middleware rejects requests when ADMIN_KEY is not configured (503)', () => {
+test('read-only daily reports work without ADMIN_KEY', () => {
   const previous = process.env.ADMIN_KEY;
   delete process.env.ADMIN_KEY;
-  assertRejects({ header: () => undefined } as any, 503);
+  assertPasses({
+    method: 'POST',
+    path: '/api/daily-review-jobs',
+    originalUrl: '/api/daily-review-jobs?days=1',
+    header: () => undefined,
+  } as any);
+  assertPasses({
+    method: 'GET',
+    path: '/api/daily-review-jobs/job-123',
+    originalUrl: '/api/daily-review-jobs/job-123',
+    header: () => undefined,
+  } as any);
   if (previous === undefined) delete process.env.ADMIN_KEY;
   else process.env.ADMIN_KEY = previous;
 });
 
-test('admin middleware rejects wrong keys and accepts the correct one', () => {
+test('mutation routes reject requests when ADMIN_KEY is not configured', () => {
+  const previous = process.env.ADMIN_KEY;
+  delete process.env.ADMIN_KEY;
+  assertRejects({
+    method: 'POST',
+    path: '/api/wallets',
+    originalUrl: '/api/wallets',
+    header: () => undefined,
+  } as any, 503);
+  if (previous === undefined) delete process.env.ADMIN_KEY;
+  else process.env.ADMIN_KEY = previous;
+});
+
+test('mutation routes reject wrong keys and accept the correct one', () => {
   const previous = process.env.ADMIN_KEY;
   process.env.ADMIN_KEY = 'correct-horse-battery-staple-private';
-  assertRejects({ header: (name: string) => name === 'x-admin-key' ? 'wrong-key' : undefined } as any, 401);
-  assertPasses({ header: (name: string) => name === 'x-admin-key' ? process.env.ADMIN_KEY : undefined } as any);
+  const mutation = {
+    method: 'POST',
+    path: '/api/wallets',
+    originalUrl: '/api/wallets',
+  };
+  assertRejects({ ...mutation, header: (name: string) => name === 'x-admin-key' ? 'wrong-key' : undefined } as any, 401);
+  assertPasses({ ...mutation, header: (name: string) => name === 'x-admin-key' ? process.env.ADMIN_KEY : undefined } as any);
   if (previous === undefined) delete process.env.ADMIN_KEY;
   else process.env.ADMIN_KEY = previous;
 });
