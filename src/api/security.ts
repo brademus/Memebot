@@ -57,7 +57,9 @@ function suppliedAdminKey(req: Request): string {
 }
 
 function isReadOnlyReportRequest(req: Request): boolean {
-  const path = req.path || req.originalUrl.split('?')[0];
+  const originalPath = String(req.originalUrl || '').split('?')[0];
+  const mountedPath = `${String(req.baseUrl || '')}${String(req.path || '')}`;
+  const path = originalPath || mountedPath || String(req.path || '');
   if (path === '/api/report' && req.method === 'GET') return true;
   if (path === '/api/system-monitor' && req.method === 'GET') return true;
   if (path === '/api/ai-review' && req.method === 'GET') return true;
