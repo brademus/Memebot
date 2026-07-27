@@ -6,9 +6,9 @@ test('PumpPortal guard persists a conservative daily and rolling two-week budget
   const diag = pumpPortalGuardDiag();
   assert.ok(diag.maxActiveTokens <= 10);
   assert.ok(diag.maxPendingTokens <= 250);
-  assert.ok(diag.minActiveDwellSeconds >= 30);
+  assert.ok(diag.quietSlotLeaseSeconds >= 300);
   assert.ok(diag.providerRetrySeconds >= 60);
-  assert.equal(diag.subscriptionStrategy, 'fresh_priority_queue_with_minimum_dwell');
+  assert.equal(diag.subscriptionStrategy, 'stable_slots_no_churn');
   assert.equal(diag.budgetMode, 'postgres_daily_and_rolling_14d_with_time_aware_pacing');
   assert.equal(diag.pacingStrategy, 'proportional_to_day_remaining');
   assert.ok(diag.persistentBudget.dailyEventLimit <= 4_000);

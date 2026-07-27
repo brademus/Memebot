@@ -7,46 +7,31 @@ import {
   pumpPortalPersistentBudgetDiag,
 } from './pumpportal-persistent-budget';
 
-// Paid token subscriptions remain deliberately narrow. The message budget is persisted in
-// PostgreSQL, while this guard keeps the ten paid slots useful: fresh one-token requests are
-// prioritized, each active token receives a minimum dwell window, and provider rejections are
-// retried automatically instead of latching forever after the wallet is funded.
+// PumpPortal recommends one websocket with subscriptions added to that connection. Paid
+// subscriptions therefore stay stable instead of being continuously unsubscribed/re-added.
+// The persistent PostgreSQL event budget remains the authoritative spending ceiling.
 const MAX_ACTIVE_TOKENS = Math.max(1, Math.min(10, Number(process.env.PUMPPORTAL_MAX_ACTIVE_TOKENS || 10)));
 const MAX_PENDING_TOKENS = Math.max(20, Math.min(250, Number(process.env.PUMPPORTAL_MAX_PENDING_TOKENS || 100)));
-const MIN_ACTIVE_DWELL_MS = Math.max(
-  30_000,
-  Math.min(5 * 60_000, Number(process.env.PUMPPORTAL_MIN_ACTIVE_DWELL_MS || 60_000)),
-);
-const ROTATION_INTERVAL_MS = Math.max(
-  2_000,
-  Math.min(30_000, Number(process.env.PUMPPORTAL_ROTATION_INTERVAL_MS || 5_000)),
-);
-const MAX_ROTATIONS_PER_TICK = Math.max(
-  1,
-  Math.min(3, Number(process.env.PUMPPORTAL_MAX_ROTATIONS_PER_TICK || 2)),
-);
-const PROVIDER_RETRY_MS = Math.max(
-  60_000,
-  Math.min(30 * 60_000, Number(process.env.PUMPPORTAL_PROVIDER_RETRY_MS || 5 * 60_000)),
-);
+const PROVIDER_RETRY_MS = Math.max(60_000, Math.min(30 * 60_000, Number(process.env.PUMPPORTAL_PROVIDER_RETRY_MS || 5 * 60_000)));
+const QUIET_SLOT_LEASE_MS = Math.max(5 * 60_000, Math.min(60 * 60_000, Number(process.env.PUMPPORTAL_QUIET_SLOT_LEASE_MS || 10 * 60_000)));
+const MAINTENANCE_INTERVAL_MS = 30_000;
 
-type PendingPriority = 'fresh' | 'bulk';
-interface PendingKey {
-  requestedAt: number;
-  priority: PendingPriority;
+interface ActiveSubscription {
+  subscribedAt: number;
+  lastEventAt: number | null;
 }
 
 interface PumpPortalGuardState {
-  active: Map<string, number>;
-  pendingKeys: Map<string, PendingKey>;
+  active: Map<string, ActiveSubscription>;
+  pendingKeys: Map<string, number>;
   paidEvents: number;
   suppressedDuplicateKeys: number;
   suppressedOverBudgetKeys: number;
-  suppressedRotationWaitKeys: number;
   evictedKeys: number;
   droppedPendingKeys: number;
   subscribeCommands: number;
   unsubscribeCommands: number;
+  rawSubscribedKeys: number;
   budgetTripped: boolean;
   providerRejected: boolean;
   providerRejections: number;
@@ -56,7 +41,8 @@ interface PumpPortalGuardState {
   lastBudgetTripAt: number | null;
   lastProviderRejection: string | null;
   providerRetryAt: number | null;
-  lastRotationAt: number | null;
+  lastSubscriptionAt: number | null;
+  lastMaintenanceAt: number | null;
   socketGenerations: number;
 }
 
@@ -66,11 +52,11 @@ const state: PumpPortalGuardState = {
   paidEvents: 0,
   suppressedDuplicateKeys: 0,
   suppressedOverBudgetKeys: 0,
-  suppressedRotationWaitKeys: 0,
   evictedKeys: 0,
   droppedPendingKeys: 0,
   subscribeCommands: 0,
   unsubscribeCommands: 0,
+  rawSubscribedKeys: 0,
   budgetTripped: false,
   providerRejected: false,
   providerRejections: 0,
@@ -80,7 +66,8 @@ const state: PumpPortalGuardState = {
   lastBudgetTripAt: null,
   lastProviderRejection: null,
   providerRetryAt: null,
-  lastRotationAt: null,
+  lastSubscriptionAt: null,
+  lastMaintenanceAt: null,
   socketGenerations: 0,
 };
 
@@ -89,20 +76,12 @@ const rawSend = WebSocket.prototype.send;
 const rawEmit = WebSocket.prototype.emit;
 let guardedSocket: WebSocket | null = null;
 
-function ensureSocket(socket: WebSocket) {
-  if (socket === guardedSocket) return;
-  guardedSocket = socket;
-  state.active.clear();
-  state.socketGenerations++;
-}
-
 function parsePayload(value: unknown): any | null {
   try {
     if (typeof value === 'string') return JSON.parse(value);
     if (Buffer.isBuffer(value)) return JSON.parse(value.toString('utf8'));
     if (value instanceof ArrayBuffer) return JSON.parse(Buffer.from(value).toString('utf8'));
-    if (ArrayBuffer.isView(value))
-      return JSON.parse(Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('utf8'));
+    if (ArrayBuffer.isView(value)) return JSON.parse(Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('utf8'));
   } catch {}
   return null;
 }
@@ -111,23 +90,27 @@ function sendRaw(socket: WebSocket, payload: unknown) {
   (rawSend as any).call(socket, JSON.stringify(payload));
 }
 
-function unsubscribe(socket: WebSocket, keys: string[]) {
-  if (!keys.length || socket.readyState !== WebSocket.OPEN) return;
-  sendRaw(socket, { method: 'unsubscribeTokenTrade', keys });
-  state.unsubscribeCommands++;
+function ensureSocket(socket: WebSocket) {
+  if (socket === guardedSocket) return;
+  guardedSocket = socket;
+  // A new websocket has no server-side subscriptions. Requeue the prior desired set so
+  // reconnection restores it on the same replacement socket.
+  const now = Date.now();
+  for (const key of state.active.keys()) state.pendingKeys.set(key, now);
+  state.active.clear();
+  state.socketGenerations++;
 }
 
-function trimPendingQueue() {
+function trimPending() {
   while (state.pendingKeys.size > MAX_PENDING_TOKENS) {
-    const bulk = [...state.pendingKeys.entries()].find(([, value]) => value.priority === 'bulk');
-    const oldest = bulk || state.pendingKeys.entries().next().value;
+    const oldest = state.pendingKeys.keys().next().value as string | undefined;
     if (!oldest) break;
-    state.pendingKeys.delete(oldest[0]);
+    state.pendingKeys.delete(oldest);
     state.droppedPendingKeys++;
   }
 }
 
-function queueKeys(keys: string[], priority: PendingPriority) {
+function queueKeys(keys: string[]) {
   const now = Date.now();
   for (const key of keys) {
     if (!key) continue;
@@ -135,27 +118,11 @@ function queueKeys(keys: string[], priority: PendingPriority) {
       state.suppressedDuplicateKeys++;
       continue;
     }
-    const existing = state.pendingKeys.get(key);
-    if (existing) state.pendingKeys.delete(key);
-    state.pendingKeys.set(key, {
-      requestedAt: now,
-      priority: existing?.priority === 'fresh' || priority === 'fresh' ? 'fresh' : 'bulk',
-    });
+    // Move repeated pending keys to the back so fresh launch requests receive priority.
+    state.pendingKeys.delete(key);
+    state.pendingKeys.set(key, now);
   }
-  trimPendingQueue();
-}
-
-function takePending(count: number): string[] {
-  if (count <= 0 || !state.pendingKeys.size) return [];
-  const selected = [...state.pendingKeys.entries()]
-    .sort((left, right) => {
-      const priority = Number(right[1].priority === 'fresh') - Number(left[1].priority === 'fresh');
-      return priority || right[1].requestedAt - left[1].requestedAt;
-    })
-    .slice(0, count)
-    .map(([key]) => key);
-  for (const key of selected) state.pendingKeys.delete(key);
-  return selected;
+  trimPending();
 }
 
 function providerReady(now = Date.now()): boolean {
@@ -164,50 +131,40 @@ function providerReady(now = Date.now()): boolean {
   state.providerRejected = false;
   state.providerRetryAt = null;
   state.providerRecoveryAttempts++;
-  console.warn('[pumpportal-guard] provider rejection cooldown elapsed; retrying paid subscriptions');
+  console.warn('[pumpportal-guard] provider cooldown elapsed; retrying stable paid subscriptions');
   return true;
 }
 
-function rotateSubscriptions(socket = guardedSocket) {
+function fillOpenSlots(socket = guardedSocket) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
-  const now = Date.now();
-  if (!providerReady(now) || !paidStreamBudgetAvailable()) return;
-  if (!state.pendingKeys.size) return;
-
+  if (!providerReady() || !paidStreamBudgetAvailable()) return;
   const openSlots = Math.max(0, MAX_ACTIVE_TOKENS - state.active.size);
-  let accepted = takePending(openSlots);
+  if (!openSlots || !state.pendingKeys.size) return;
 
-  if (state.pendingKeys.size && state.active.size >= MAX_ACTIVE_TOKENS) {
-    const evictable = [...state.active.entries()]
-      .filter(([, subscribedAt]) => now - subscribedAt >= MIN_ACTIVE_DWELL_MS)
-      .sort((left, right) => left[1] - right[1])
-      .slice(0, MAX_ROTATIONS_PER_TICK)
-      .map(([key]) => key);
-    if (evictable.length) {
-      unsubscribe(socket, evictable);
-      for (const key of evictable) state.active.delete(key);
-      state.evictedKeys += evictable.length;
-      accepted = accepted.concat(takePending(evictable.length));
-    } else {
-      state.suppressedRotationWaitKeys += state.pendingKeys.size;
-    }
+  const selected = [...state.pendingKeys.keys()].slice(-openSlots);
+  const now = Date.now();
+  for (const key of selected) {
+    state.pendingKeys.delete(key);
+    state.active.set(key, { subscribedAt: now, lastEventAt: null });
   }
-
-  accepted = [...new Set(accepted)].filter(key => !state.active.has(key));
-  if (!accepted.length) return;
-  for (const key of accepted) state.active.set(key, now);
-  sendRaw(socket, { method: 'subscribeTokenTrade', keys: accepted });
+  sendRaw(socket, { method: 'subscribeTokenTrade', keys: selected });
   state.subscribeCommands++;
-  state.lastRotationAt = now;
+  state.rawSubscribedKeys += selected.length;
+  state.lastSubscriptionAt = now;
+  console.log(`[pumpportal-guard] subscribed ${selected.length} stable paid token stream(s); active=${state.active.size}`);
 }
 
-function tripBudget(socket: WebSocket, reason: 'event_budget' | 'provider_rejection', detail?: string) {
-  const active = [...state.active.keys()];
-  queueKeys(active, 'bulk');
-  state.active.clear();
+function unsubscribe(socket: WebSocket, keys: string[]) {
+  if (!keys.length || socket.readyState !== WebSocket.OPEN) return;
+  sendRaw(socket, { method: 'unsubscribeTokenTrade', keys });
+  state.unsubscribeCommands++;
+}
 
+function pausePaidStream(socket: WebSocket, reason: 'event_budget' | 'provider_rejection', detail?: string) {
+  const active = [...state.active.keys()];
+  queueKeys(active);
+  state.active.clear();
   if (reason === 'event_budget') {
-    if (state.budgetTripped) return;
     state.budgetTripped = true;
     state.lastBudgetTripAt = Date.now();
   } else {
@@ -216,32 +173,30 @@ function tripBudget(socket: WebSocket, reason: 'event_budget' | 'provider_reject
     state.providerRetryAt = Date.now() + PROVIDER_RETRY_MS;
     state.lastProviderRejection = detail || 'PumpPortal rejected the paid stream';
   }
-
   unsubscribe(socket, active);
-  console.error(
-    `[pumpportal-guard] paid stream paused: ${reason}; events=${state.paidEvents}; active_unsubscribed=${active.length}`,
-  );
+  console.error(`[pumpportal-guard] paid stream paused: ${reason}; active_unsubscribed=${active.length}`);
 }
 
-function guardedSubscription(socket: WebSocket, payload: any): boolean {
-  const keys: string[] = Array.isArray(payload?.keys) ? payload.keys.map(String).filter(Boolean) : [];
-  if (!keys.length) return true;
-  const priority: PendingPriority = keys.length <= 2 ? 'fresh' : 'bulk';
-  queueKeys([...new Set(keys)], priority);
+function maintainStableSlots() {
+  const socket = guardedSocket;
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  const now = Date.now();
+  state.lastMaintenanceAt = now;
+  if (!providerReady(now) || !paidStreamBudgetAvailable()) return;
 
-  if (!providerReady()) {
-    state.suppressedOverBudgetKeys += keys.length;
-    return false;
+  // Only recycle one slot per maintenance tick, and only when it has stayed completely
+  // silent for a long lease. Active streams producing trades are never churned.
+  if (state.pendingKeys.size && state.active.size >= MAX_ACTIVE_TOKENS) {
+    const quiet = [...state.active.entries()]
+      .filter(([, value]) => value.lastEventAt === null && now - value.subscribedAt >= QUIET_SLOT_LEASE_MS)
+      .sort((left, right) => left[1].subscribedAt - right[1].subscribedAt)[0];
+    if (quiet) {
+      unsubscribe(socket, [quiet[0]]);
+      state.active.delete(quiet[0]);
+      state.evictedKeys++;
+    }
   }
-  if (!paidStreamBudgetAvailable()) {
-    state.suppressedOverBudgetKeys += keys.length;
-    ensurePumpPortalPersistentBudget();
-    return false;
-  }
-
-  state.budgetTripped = false;
-  rotateSubscriptions(socket);
-  return false;
+  fillOpenSlots(socket);
 }
 
 (WebSocket.prototype as any).send = function guardedSend(data: unknown, ...args: unknown[]) {
@@ -249,7 +204,13 @@ function guardedSubscription(socket: WebSocket, payload: any): boolean {
   ensureSocket(this);
   const payload = parsePayload(data);
   if (payload?.method === 'subscribeTokenTrade') {
-    guardedSubscription(this, payload);
+    const keys = Array.isArray(payload.keys) ? [...new Set<string>(payload.keys.map(String).filter(Boolean))] : [];
+    queueKeys(keys);
+    if (!paidStreamBudgetAvailable()) {
+      state.suppressedOverBudgetKeys += keys.length;
+      ensurePumpPortalPersistentBudget();
+    }
+    fillOpenSlots(this);
     return;
   }
   if (payload?.method === 'unsubscribeTokenTrade') {
@@ -258,6 +219,9 @@ function guardedSubscription(socket: WebSocket, payload: any): boolean {
       state.active.delete(key);
       state.pendingKeys.delete(key);
     }
+    const result = (rawSend as any).call(this, data, ...args);
+    fillOpenSlots(this);
+    return result;
   }
   return (rawSend as any).call(this, data, ...args);
 };
@@ -268,46 +232,48 @@ function guardedSubscription(socket: WebSocket, payload: any): boolean {
     const payload = parsePayload(args[0]);
     const txType = String(payload?.txType || '').toLowerCase();
     if (payload?.mint && (txType === 'buy' || txType === 'sell')) {
+      const now = Date.now();
       state.paidEvents++;
-      state.lastEventAt = Date.now();
-      if (!consumePersistentPaidEvent()) tripBudget(this, 'event_budget');
+      state.lastEventAt = now;
+      const active = state.active.get(String(payload.mint));
+      if (active) active.lastEventAt = now;
+      if (!consumePersistentPaidEvent()) pausePaidStream(this, 'event_budget');
     } else {
       const text = payload ? JSON.stringify(payload) : '';
       if (/minimum balance not met|funded with at least 0\.02 sol|insufficient (?:wallet )?balance|balance too low|payment required/i.test(text))
-        tripBudget(this, 'provider_rejection', text.slice(0, 500));
+        pausePaidStream(this, 'provider_rejection', text.slice(0, 500));
     }
   }
   return (rawEmit as any).call(this, event, ...args);
 };
 
-onPumpPortalBudgetAvailable(() => rotateSubscriptions());
+onPumpPortalBudgetAvailable(() => fillOpenSlots());
 ensurePumpPortalPersistentBudget();
-const rotationTimer = setInterval(() => rotateSubscriptions(), ROTATION_INTERVAL_MS);
-rotationTimer.unref();
+const maintenanceTimer = setInterval(maintainStableSlots, MAINTENANCE_INTERVAL_MS);
+maintenanceTimer.unref();
 
 export function pumpPortalGuardDiag() {
   const persistentBudget = pumpPortalPersistentBudgetDiag();
   return {
     maxActiveTokens: MAX_ACTIVE_TOKENS,
     maxPendingTokens: MAX_PENDING_TOKENS,
-    minActiveDwellSeconds: Math.round(MIN_ACTIVE_DWELL_MS / 1000),
-    rotationIntervalSeconds: Number((ROTATION_INTERVAL_MS / 1000).toFixed(1)),
-    maxRotationsPerTick: MAX_ROTATIONS_PER_TICK,
+    quietSlotLeaseSeconds: Math.round(QUIET_SLOT_LEASE_MS / 1000),
     providerRetrySeconds: Math.round(PROVIDER_RETRY_MS / 1000),
     budgetMode: 'postgres_daily_and_rolling_14d_with_time_aware_pacing',
     pacingStrategy: 'proportional_to_day_remaining',
-    subscriptionStrategy: 'fresh_priority_queue_with_minimum_dwell',
+    subscriptionStrategy: 'stable_slots_no_churn',
     activeTokens: state.active.size,
     pendingBudgetKeys: state.pendingKeys.size,
     paidEventsThisBoot: state.paidEvents,
     estimatedMeteredCostSol: Number((state.paidEvents / 10_000 * 0.01).toFixed(6)),
     suppressedDuplicateKeys: state.suppressedDuplicateKeys,
     suppressedOverBudgetKeys: state.suppressedOverBudgetKeys,
-    suppressedRotationWaitKeys: state.suppressedRotationWaitKeys,
+    suppressedRotationWaitKeys: 0,
     suppressedStaleDuringCooldownKeys: 0,
     evictedKeys: state.evictedKeys,
     droppedPendingKeys: state.droppedPendingKeys,
     subscribeCommands: state.subscribeCommands,
+    rawSubscribedKeys: state.rawSubscribedKeys,
     unsubscribeCommands: state.unsubscribeCommands,
     budgetTripped: state.budgetTripped,
     providerRejected: state.providerRejected,
@@ -319,13 +285,12 @@ export function pumpPortalGuardDiag() {
     startedAt: new Date(state.startedAt).toISOString(),
     lastEventAt: state.lastEventAt ? new Date(state.lastEventAt).toISOString() : null,
     lastBudgetTripAt: state.lastBudgetTripAt ? new Date(state.lastBudgetTripAt).toISOString() : null,
-    lastRotationAt: state.lastRotationAt ? new Date(state.lastRotationAt).toISOString() : null,
+    lastRotationAt: state.lastSubscriptionAt ? new Date(state.lastSubscriptionAt).toISOString() : null,
+    lastSubscriptionAt: state.lastSubscriptionAt ? new Date(state.lastSubscriptionAt).toISOString() : null,
+    lastMaintenanceAt: state.lastMaintenanceAt ? new Date(state.lastMaintenanceAt).toISOString() : null,
     persistentBudget,
   };
 }
 
 (globalThis as any).__pumpPortalGuardDiag = pumpPortalGuardDiag;
-const budget = pumpPortalPersistentBudgetDiag();
-console.log(
-  `[pumpportal-guard] enabled: max ${MAX_ACTIVE_TOKENS} paid token streams; ${Math.round(MIN_ACTIVE_DWELL_MS / 1000)}s minimum dwell; persistent daily cap ${budget.dailyEventLimit} events; rolling 14-day cap ${budget.rolling14dEventLimit} events (${budget.maxRolling14dCostSol} SOL maximum)`,
-);
+console.log(`[pumpportal-guard] enabled: ${MAX_ACTIVE_TOKENS} stable paid slots; ${QUIET_SLOT_LEASE_MS / 60_000}m quiet lease`);
