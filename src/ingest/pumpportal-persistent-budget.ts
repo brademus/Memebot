@@ -24,6 +24,10 @@ const LEASE_TTL_MS = Math.max(
   2 * 60_000,
   Math.min(15 * 60_000, Number(process.env.PUMPPORTAL_RESERVATION_LEASE_MS || 5 * 60_000)),
 );
+const LEGACY_RESERVATION_GRACE_MS = Math.max(
+  5 * 60_000,
+  Math.min(30 * 60_000, Number(process.env.PUMPPORTAL_LEGACY_RESERVATION_GRACE_MS || 10 * 60_000)),
+);
 const PROCESS_ID = randomUUID();
 
 type Listener = () => void;
@@ -104,9 +108,15 @@ function computeTargetPace(): number {
   return secondsRemaining > 0 ? PUMPPORTAL_DAILY_PAID_EVENT_LIMIT / secondsRemaining : 0;
 }
 
-function rollLeaseDayIfNeeded() {
+// Never move a buffered event into a different UTC day. At midnight the stream pauses
+// briefly, flushes the old-day batch, then acquires a fresh lease for the new day.
+function rollLeaseDayIfNeeded(): boolean {
   const day = utcDay();
-  if (day === state.leaseDay) return;
+  if (day === state.leaseDay) return true;
+  if (state.pendingActualWrites > 0 || actualWriteInFlight) {
+    void flushActualEvents();
+    return false;
+  }
   state.leaseDay = day;
   state.leaseId = leaseIdForDay(day);
   state.leaseExpiresAt = null;
@@ -114,6 +124,7 @@ function rollLeaseDayIfNeeded() {
   state.reservedToday = 0;
   state.actualToday = 0;
   state.exhausted = false;
+  return true;
 }
 
 async function ensureTables(): Promise<void> {
@@ -134,15 +145,6 @@ async function ensureTables(): Promise<void> {
   )`);
   await pool.query(`CREATE INDEX IF NOT EXISTS pumpportal_paid_leases_day_expiry_idx
     ON pumpportal_paid_leases (usage_day, expires_at)`);
-
-  // Old builds permanently accumulated reservation blocks in the daily usage row.
-  // They could exhaust the entire day after enough deploys even when zero paid events
-  // were received. Actual events remain authoritative; live reservations now reside in
-  // expiring process leases.
-  const cleared = await pool.query(`UPDATE pumpportal_paid_usage
-    SET reserved_events=actual_events,updated_at=now()
-    WHERE reserved_events IS DISTINCT FROM actual_events`);
-  state.legacyReservationsCleared += Number(cleared.rowCount || 0);
 }
 
 async function cleanupExpiredLeases(client: any = pool): Promise<number> {
@@ -154,23 +156,48 @@ async function cleanupExpiredLeases(client: any = pool): Promise<number> {
   return count;
 }
 
+// V1 stored process-local allowance permanently in pumpportal_paid_usage.reserved_events.
+// Preserve a recently updated row during a mixed-version rolling deploy, but reclaim it
+// after the old process has had ample time to stop. The shared v1 advisory lock prevents
+// old and new writers from allocating the same capacity during this transition.
+async function cleanupStaleLegacyReservations(client: any): Promise<number> {
+  const result = await client.query(`UPDATE pumpportal_paid_usage SET
+      reserved_events=actual_events,updated_at=now()
+    WHERE reserved_events>actual_events
+      AND updated_at<now()-($1::text||' milliseconds')::interval
+    RETURNING usage_day`, [LEGACY_RESERVATION_GRACE_MS]);
+  const count = Number(result.rowCount || 0);
+  state.legacyReservationsCleared += count;
+  return count;
+}
+
+const totalsSql = `SELECT
+  COALESCE((SELECT SUM(actual_events) FROM pumpportal_paid_usage
+    WHERE usage_day=CURRENT_DATE),0)::int AS actual_today,
+  COALESCE((SELECT SUM(actual_events) FROM pumpportal_paid_usage
+    WHERE usage_day>=CURRENT_DATE-13),0)::int AS actual_14d,
+  COALESCE((SELECT SUM(GREATEST(reserved_events-actual_events,0))
+    FROM pumpportal_paid_usage
+    WHERE usage_day=CURRENT_DATE
+      AND updated_at>=now()-($1::text||' milliseconds')::interval),0)::int AS legacy_today,
+  COALESCE((SELECT SUM(GREATEST(reserved_events-actual_events,0))
+    FROM pumpportal_paid_usage
+    WHERE usage_day>=CURRENT_DATE-13
+      AND updated_at>=now()-($1::text||' milliseconds')::interval),0)::int AS legacy_14d,
+  COALESCE((SELECT SUM(GREATEST(reserved_events-consumed_events,0))
+    FROM pumpportal_paid_leases WHERE usage_day=CURRENT_DATE AND expires_at>now()),0)::int AS outstanding_today,
+  COALESCE((SELECT SUM(GREATEST(reserved_events-consumed_events,0))
+    FROM pumpportal_paid_leases WHERE usage_day>=CURRENT_DATE-13 AND expires_at>now()),0)::int AS outstanding_14d`;
+
 async function refreshTotals(): Promise<void> {
   if (!pool) return;
   await cleanupExpiredLeases();
-  const result = await pool.query(`SELECT
-    COALESCE((SELECT SUM(actual_events) FROM pumpportal_paid_usage
-      WHERE usage_day=CURRENT_DATE),0)::int AS actual_today,
-    COALESCE((SELECT SUM(actual_events) FROM pumpportal_paid_usage
-      WHERE usage_day>=CURRENT_DATE-13),0)::int AS actual_14d,
-    COALESCE((SELECT SUM(GREATEST(reserved_events-consumed_events,0))
-      FROM pumpportal_paid_leases WHERE usage_day=CURRENT_DATE AND expires_at>now()),0)::int AS outstanding_today,
-    COALESCE((SELECT SUM(GREATEST(reserved_events-consumed_events,0))
-      FROM pumpportal_paid_leases WHERE usage_day>=CURRENT_DATE-13 AND expires_at>now()),0)::int AS outstanding_14d`);
+  const result = await pool.query(totalsSql, [LEGACY_RESERVATION_GRACE_MS]);
   const row = result.rows[0] || {};
   state.actualToday = Number(row.actual_today || 0);
   state.actualRolling14d = Number(row.actual_14d || 0);
-  state.reservedToday = state.actualToday + Number(row.outstanding_today || 0);
-  state.reservedRolling14d = state.actualRolling14d + Number(row.outstanding_14d || 0);
+  state.reservedToday = state.actualToday + Number(row.legacy_today || 0) + Number(row.outstanding_today || 0);
+  state.reservedRolling14d = state.actualRolling14d + Number(row.legacy_14d || 0) + Number(row.outstanding_14d || 0);
   state.lastRefreshAt = Date.now();
   state.targetDailyPace = computeTargetPace();
 }
@@ -199,38 +226,33 @@ function initialize(): Promise<void> {
 
 async function reserveBlock(): Promise<boolean> {
   await initialize();
-  rollLeaseDayIfNeeded();
+  if (!rollLeaseDayIfNeeded()) return false;
   if (!pool || !state.databaseAvailable) return false;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query(`SELECT pg_advisory_xact_lock(hashtext('memebot-pumpportal-paid-budget-v2'))`);
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext('memebot-pumpportal-paid-budget-v1'))`);
     await cleanupExpiredLeases(client);
-    const totals = await client.query(`SELECT
-      COALESCE((SELECT SUM(actual_events) FROM pumpportal_paid_usage
-        WHERE usage_day=CURRENT_DATE),0)::int AS actual_today,
-      COALESCE((SELECT SUM(actual_events) FROM pumpportal_paid_usage
-        WHERE usage_day>=CURRENT_DATE-13),0)::int AS actual_14d,
-      COALESCE((SELECT SUM(GREATEST(reserved_events-consumed_events,0))
-        FROM pumpportal_paid_leases WHERE usage_day=CURRENT_DATE AND expires_at>now()),0)::int AS outstanding_today,
-      COALESCE((SELECT SUM(GREATEST(reserved_events-consumed_events,0))
-        FROM pumpportal_paid_leases WHERE usage_day>=CURRENT_DATE-13 AND expires_at>now()),0)::int AS outstanding_14d`);
+    await cleanupStaleLegacyReservations(client);
+    const totals = await client.query(totalsSql, [LEGACY_RESERVATION_GRACE_MS]);
     const row = totals.rows[0] || {};
     const actualToday = Number(row.actual_today || 0);
     const actual14d = Number(row.actual_14d || 0);
+    const legacyToday = Number(row.legacy_today || 0);
+    const legacy14d = Number(row.legacy_14d || 0);
     const outstandingToday = Number(row.outstanding_today || 0);
     const outstanding14d = Number(row.outstanding_14d || 0);
     const grant = Math.min(
       PUMPPORTAL_RESERVATION_BLOCK_EVENTS,
-      Math.max(0, PUMPPORTAL_DAILY_PAID_EVENT_LIMIT - actualToday - outstandingToday),
-      Math.max(0, PUMPPORTAL_ROLLING_14D_EVENT_LIMIT - actual14d - outstanding14d),
+      Math.max(0, PUMPPORTAL_DAILY_PAID_EVENT_LIMIT - actualToday - legacyToday - outstandingToday),
+      Math.max(0, PUMPPORTAL_ROLLING_14D_EVENT_LIMIT - actual14d - legacy14d - outstanding14d),
     );
     if (grant <= 0) {
       await client.query('COMMIT');
       state.actualToday = actualToday;
       state.actualRolling14d = actual14d;
-      state.reservedToday = actualToday + outstandingToday;
-      state.reservedRolling14d = actual14d + outstanding14d;
+      state.reservedToday = actualToday + legacyToday + outstandingToday;
+      state.reservedRolling14d = actual14d + legacy14d + outstanding14d;
       state.exhausted = state.localReservedRemaining <= 0;
       state.lastRefreshAt = Date.now();
       return false;
@@ -238,25 +260,19 @@ async function reserveBlock(): Promise<boolean> {
 
     await client.query(`INSERT INTO pumpportal_paid_leases
       (lease_id,usage_day,reserved_events,consumed_events,expires_at,updated_at)
-      VALUES ($1,CURRENT_DATE,$2,0,now()+($3::text||' milliseconds')::interval,now())
+      VALUES ($1,$2::date,$3,0,now()+($4::text||' milliseconds')::interval,now())
       ON CONFLICT (lease_id) DO UPDATE SET
-        usage_day=CURRENT_DATE,
-        reserved_events=CASE
-          WHEN pumpportal_paid_leases.usage_day=CURRENT_DATE
-          THEN pumpportal_paid_leases.reserved_events+EXCLUDED.reserved_events
-          ELSE EXCLUDED.reserved_events END,
-        consumed_events=CASE
-          WHEN pumpportal_paid_leases.usage_day=CURRENT_DATE
-          THEN pumpportal_paid_leases.consumed_events ELSE 0 END,
+        usage_day=EXCLUDED.usage_day,
+        reserved_events=pumpportal_paid_leases.reserved_events+EXCLUDED.reserved_events,
         expires_at=EXCLUDED.expires_at,updated_at=now()`,
-    [state.leaseId, grant, LEASE_TTL_MS]);
+    [state.leaseId, state.leaseDay, grant, LEASE_TTL_MS]);
     await client.query('COMMIT');
 
     state.localReservedRemaining += grant;
     state.actualToday = actualToday;
     state.actualRolling14d = actual14d;
-    state.reservedToday = actualToday + outstandingToday + grant;
-    state.reservedRolling14d = actual14d + outstanding14d + grant;
+    state.reservedToday = actualToday + legacyToday + outstandingToday + grant;
+    state.reservedRolling14d = actual14d + legacy14d + outstanding14d + grant;
     state.reservationCount++;
     state.lastReservationAt = Date.now();
     state.lastRefreshAt = Date.now();
@@ -283,19 +299,22 @@ function requestReservation(): Promise<boolean> {
 async function flushActualEvents(): Promise<void> {
   if (!pool || state.pendingActualWrites <= 0 || actualWriteInFlight) return;
   const count = state.pendingActualWrites;
-  state.pendingActualWrites = 0;
+  const usageDay = state.leaseDay;
   const leaseId = state.leaseId;
+  state.pendingActualWrites = 0;
   actualWriteInFlight = (async () => {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
       await client.query(`INSERT INTO pumpportal_paid_usage
         (usage_day,reserved_events,actual_events,updated_at)
-        VALUES (CURRENT_DATE,$1,$1,now())
+        VALUES ($1::date,$2,$2,now())
         ON CONFLICT (usage_day) DO UPDATE SET
           actual_events=pumpportal_paid_usage.actual_events+EXCLUDED.actual_events,
-          reserved_events=pumpportal_paid_usage.actual_events+EXCLUDED.actual_events,
-          updated_at=now()`, [count]);
+          reserved_events=GREATEST(
+            pumpportal_paid_usage.actual_events+EXCLUDED.actual_events,
+            pumpportal_paid_usage.reserved_events
+          ),updated_at=now()`, [usageDay, count]);
       await client.query(`UPDATE pumpportal_paid_leases SET
         consumed_events=LEAST(reserved_events,consumed_events+$2),
         expires_at=now()+($3::text||' milliseconds')::interval,updated_at=now()
@@ -318,17 +337,27 @@ async function flushActualEvents(): Promise<void> {
 
 async function heartbeatLease(): Promise<void> {
   if (!pool || state.localReservedRemaining <= 0) return;
-  const result = await pool.query(`UPDATE pumpportal_paid_leases SET
-    expires_at=now()+($2::text||' milliseconds')::interval,updated_at=now()
-    WHERE lease_id=$1 AND expires_at>now()`, [state.leaseId, LEASE_TTL_MS]);
-  if (!result.rowCount) {
-    state.localReservedRemaining = 0;
-    state.leaseExpiresAt = null;
-    void requestReservation();
-    return;
+  try {
+    const result = await pool.query(`UPDATE pumpportal_paid_leases SET
+      expires_at=now()+($2::text||' milliseconds')::interval,updated_at=now()
+      WHERE lease_id=$1 AND expires_at>now()`, [state.leaseId, LEASE_TTL_MS]);
+    if (!result.rowCount) {
+      state.localReservedRemaining = 0;
+      state.leaseExpiresAt = null;
+      void requestReservation();
+      return;
+    }
+    state.leaseExpiresAt = Date.now() + LEASE_TTL_MS;
+    state.leaseHeartbeats++;
+    state.lastError = null;
+  } catch (error) {
+    state.lastError = (error as Error).message.slice(0, 300);
+    // The in-memory allowance cannot outlive its database lease.
+    if (!state.leaseExpiresAt || state.leaseExpiresAt <= Date.now()) {
+      state.localReservedRemaining = 0;
+      state.exhausted = true;
+    }
   }
-  state.leaseExpiresAt = Date.now() + LEASE_TTL_MS;
-  state.leaseHeartbeats++;
 }
 
 export function ensurePumpPortalPersistentBudget(): void {
@@ -338,18 +367,19 @@ export function ensurePumpPortalPersistentBudget(): void {
 }
 
 export function paidStreamBudgetAvailable(): boolean {
-  rollLeaseDayIfNeeded();
-  return state.databaseAvailable && state.localReservedRemaining > 0;
-}
-
-export function consumePersistentPaidEvent(): boolean {
-  rollLeaseDayIfNeeded();
-  state.lastEventAt = Date.now();
-  if (state.localReservedRemaining <= 0) {
+  if (!rollLeaseDayIfNeeded()) return false;
+  if (!state.leaseExpiresAt || state.leaseExpiresAt <= Date.now()) {
+    state.localReservedRemaining = 0;
     state.exhausted = true;
     void requestReservation();
     return false;
   }
+  return state.databaseAvailable && state.localReservedRemaining > 0;
+}
+
+export function consumePersistentPaidEvent(): boolean {
+  state.lastEventAt = Date.now();
+  if (!paidStreamBudgetAvailable()) return false;
   state.localReservedRemaining--;
   state.exhausted = state.localReservedRemaining <= 0;
   state.pendingActualWrites++;
@@ -382,6 +412,7 @@ export function pumpPortalPersistentBudgetDiag() {
     failClosedWithoutDatabase: true,
     reservationModel: 'expiring_process_lease',
     reservationLeaseSeconds: Math.round(LEASE_TTL_MS / 1000),
+    legacyReservationGraceSeconds: Math.round(LEGACY_RESERVATION_GRACE_MS / 1000),
     legacyReservationLeakProtected: true,
     dailyEventLimit: PUMPPORTAL_DAILY_PAID_EVENT_LIMIT,
     rolling14dEventLimit: PUMPPORTAL_ROLLING_14D_EVENT_LIMIT,
@@ -431,10 +462,10 @@ function beginShutdown() {
 
 ensurePumpPortalPersistentBudget();
 const retryTimer = setInterval(() => {
-  rollLeaseDayIfNeeded();
+  const dayReady = rollLeaseDayIfNeeded();
   if (state.pendingActualWrites > 0) void flushActualEvents();
-  if (state.localReservedRemaining > 0) void heartbeatLease();
-  if (state.localReservedRemaining <= TOP_UP_THRESHOLD) void requestReservation();
+  if (dayReady && state.localReservedRemaining > 0) void heartbeatLease();
+  if (dayReady && state.localReservedRemaining <= TOP_UP_THRESHOLD) void requestReservation();
   state.targetDailyPace = computeTargetPace();
 }, RETRY_MS);
 retryTimer.unref();
