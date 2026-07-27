@@ -22,6 +22,9 @@ async function startLeaderWorker() {
   const { startPaperEvidenceHealthMonitor } = await import('./paper/persistence-health');
   startPaperEvidenceHealthMonitor();
 
+  const { startHypotheticalExitPolicy } = await import('./paper/hypothetical-exit-policy');
+  startHypotheticalExitPolicy();
+
   const { startDatabaseMaintenance } = await import('./ops/db-maintenance');
   startDatabaseMaintenance();
 
