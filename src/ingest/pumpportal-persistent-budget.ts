@@ -3,18 +3,23 @@ import { pool } from '../db';
 // PumpPortal bills 0.01 SOL per 10,000 paid trade messages. These hard ceilings
 // are deliberately conservative for the current privately funded test wallet.
 // Railway variables may lower the limits, but cannot raise them.
-export const PUMPPORTAL_DAILY_PAID_EVENT_LIMIT = Math.max(250, Math.min(4_000,
-  Number(process.env.PUMPPORTAL_DAILY_PAID_EVENT_LIMIT || 4_000)));
+export const PUMPPORTAL_DAILY_PAID_EVENT_LIMIT = Math.max(
+  250,
+  Math.min(4_000, Number(process.env.PUMPPORTAL_DAILY_PAID_EVENT_LIMIT || 4_000)),
+);
 export const PUMPPORTAL_ROLLING_14D_EVENT_LIMIT = Math.max(
   PUMPPORTAL_DAILY_PAID_EVENT_LIMIT,
   Math.min(50_000, Number(process.env.PUMPPORTAL_ROLLING_14D_EVENT_LIMIT || 50_000)),
 );
-export const PUMPPORTAL_RESERVATION_BLOCK_EVENTS = Math.max(50, Math.min(250,
-  Number(process.env.PUMPPORTAL_RESERVATION_BLOCK_EVENTS || 250)));
+export const PUMPPORTAL_RESERVATION_BLOCK_EVENTS = Math.max(
+  50,
+  Math.min(250, Number(process.env.PUMPPORTAL_RESERVATION_BLOCK_EVENTS || 250)),
+);
 
 const COST_SOL_PER_EVENT = 0.01 / 10_000;
 const TOP_UP_THRESHOLD = Math.min(75, Math.max(10, Math.floor(PUMPPORTAL_RESERVATION_BLOCK_EVENTS / 3)));
 const RETRY_MS = 60_000;
+const HYSTERESIS_COOLDOWN_MS = 30_000; // Prevent subscribe/unsubscribe thrash
 
 type Listener = () => void;
 
@@ -34,6 +39,11 @@ interface PersistentBudgetState {
   lastEventAt: number | null;
   lastRefreshAt: number | null;
   lastError: string | null;
+  // Pacing state
+  targetDailyPace: number; // events per second
+  actualPaceEventsPerSec: number;
+  suppressedStaleDueToResubscribeCooldown: number;
+  lastSubscriptionChangeAt: number | null;
 }
 
 const state: PersistentBudgetState = {
@@ -52,6 +62,10 @@ const state: PersistentBudgetState = {
   lastEventAt: null,
   lastRefreshAt: null,
   lastError: null,
+  targetDailyPace: 0,
+  actualPaceEventsPerSec: 0,
+  suppressedStaleDueToResubscribeCooldown: 0,
+  lastSubscriptionChangeAt: null,
 };
 
 const listeners = new Set<Listener>();
@@ -59,8 +73,20 @@ let initializationPromise: Promise<void> | null = null;
 let reservationInFlight: Promise<boolean> | null = null;
 let actualWriteInFlight: Promise<void> | null = null;
 
-const iso = (value: number | null) => value ? new Date(value).toISOString() : null;
+const iso = (value: number | null) => (value ? new Date(value).toISOString() : null);
 const cost = (events: number) => Number((Math.max(0, events) * COST_SOL_PER_EVENT).toFixed(6));
+
+// Compute target pace based on time remaining in the day and daily budget
+function computeTargetPace(): number {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const midnight = new Date(today);
+  midnight.setDate(midnight.getDate() + 1); // Next day's midnight
+  const msRemaining = Math.max(0, midnight.getTime() - now.getTime());
+  const secondsRemaining = msRemaining / 1000;
+  if (secondsRemaining <= 0) return 0;
+  return PUMPPORTAL_DAILY_PAID_EVENT_LIMIT / secondsRemaining;
+}
 
 async function ensureTable(): Promise<void> {
   if (!pool) throw new Error('DATABASE_URL unavailable; paid PumpPortal stream is fail-closed');
@@ -86,6 +112,9 @@ async function refreshTotals(): Promise<void> {
   state.actualToday = Number(row.actual_today || 0);
   state.actualRolling14d = Number(row.actual_14d || 0);
   state.lastRefreshAt = Date.now();
+
+  // Compute target pace based on daily remaining time
+  state.targetDailyPace = computeTargetPace();
 }
 
 function initialize(): Promise<void> {
@@ -141,11 +170,14 @@ async function reserveBlock(): Promise<boolean> {
       state.lastRefreshAt = Date.now();
       return false;
     }
-    await client.query(`INSERT INTO pumpportal_paid_usage (usage_day,reserved_events,actual_events,updated_at)
+    await client.query(
+      `INSERT INTO pumpportal_paid_usage (usage_day,reserved_events,actual_events,updated_at)
       VALUES (CURRENT_DATE,$1,0,now())
       ON CONFLICT (usage_day) DO UPDATE SET
         reserved_events=pumpportal_paid_usage.reserved_events+EXCLUDED.reserved_events,
-        updated_at=now()`, [grant]);
+        updated_at=now()`,
+      [grant],
+    );
     await client.query('COMMIT');
     state.localReservedRemaining += grant;
     state.reservedToday = reservedToday + grant;
@@ -170,7 +202,9 @@ async function reserveBlock(): Promise<boolean> {
 
 function requestReservation(): Promise<boolean> {
   if (reservationInFlight) return reservationInFlight;
-  reservationInFlight = reserveBlock().finally(() => { reservationInFlight = null; });
+  reservationInFlight = reserveBlock().finally(() => {
+    reservationInFlight = null;
+  });
   return reservationInFlight;
 }
 
@@ -178,21 +212,27 @@ async function flushActualEvents(): Promise<void> {
   if (!pool || state.pendingActualWrites <= 0 || actualWriteInFlight) return;
   const count = state.pendingActualWrites;
   state.pendingActualWrites = 0;
-  actualWriteInFlight = pool.query(`INSERT INTO pumpportal_paid_usage (usage_day,reserved_events,actual_events,updated_at)
+  actualWriteInFlight = pool
+    .query(
+      `INSERT INTO pumpportal_paid_usage (usage_day,reserved_events,actual_events,updated_at)
     VALUES (CURRENT_DATE,0,$1,now())
     ON CONFLICT (usage_day) DO UPDATE SET
       actual_events=pumpportal_paid_usage.actual_events+EXCLUDED.actual_events,
-      updated_at=now()`, [count])
+      updated_at=now()`,
+      [count],
+    )
     .then(() => {
       state.actualToday += count;
       state.actualRolling14d += count;
       state.lastError = null;
     })
-    .catch(error => {
+    .catch((error) => {
       state.pendingActualWrites += count;
       state.lastError = (error as Error).message.slice(0, 300);
     })
-    .finally(() => { actualWriteInFlight = null; });
+    .finally(() => {
+      actualWriteInFlight = null;
+    });
   await actualWriteInFlight;
 }
 
@@ -226,6 +266,20 @@ export function onPumpPortalBudgetAvailable(listener: Listener): () => void {
   return () => listeners.delete(listener);
 }
 
+export function notifySubscriptionChange(): void {
+  state.lastSubscriptionChangeAt = Date.now();
+}
+
+export function canResubscribeAfterCooldown(): boolean {
+  if (!state.lastSubscriptionChangeAt) return true;
+  const elapsed = Date.now() - state.lastSubscriptionChangeAt;
+  return elapsed >= HYSTERESIS_COOLDOWN_MS;
+}
+
+export function suppressedStaleResubscriptionsIncrement(): void {
+  state.suppressedStaleDueToResubscribeCooldown++;
+}
+
 export function pumpPortalPersistentBudgetDiag() {
   return {
     persistent: true,
@@ -248,6 +302,9 @@ export function pumpPortalPersistentBudgetDiag() {
     estimatedActualCostTodaySol: cost(state.actualToday + state.pendingActualWrites),
     estimatedActualCostRolling14dSol: cost(state.actualRolling14d + state.pendingActualWrites),
     reservationCount: state.reservationCount,
+    targetDailyPaceEventsPerSecond: Number(state.targetDailyPace.toFixed(3)),
+    suppressedStaleDueToResubscribeCooldown: state.suppressedStaleDueToResubscribeCooldown,
+    lastSubscriptionChangeAt: iso(state.lastSubscriptionChangeAt),
     lastReservationAt: iso(state.lastReservationAt),
     lastEventAt: iso(state.lastEventAt),
     lastRefreshAt: iso(state.lastRefreshAt),
@@ -259,7 +316,11 @@ ensurePumpPortalPersistentBudget();
 const retryTimer = setInterval(() => {
   if (state.localReservedRemaining <= TOP_UP_THRESHOLD) void requestReservation();
   if (state.pendingActualWrites > 0) void flushActualEvents();
+  // Refresh pace calculation periodically
+  state.targetDailyPace = computeTargetPace();
 }, RETRY_MS);
 retryTimer.unref();
 
-process.once('beforeExit', () => { void flushActualEvents(); });
+process.once('beforeExit', () => {
+  void flushActualEvents();
+});

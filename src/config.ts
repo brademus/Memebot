@@ -230,6 +230,7 @@ export const env = {
   GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
   PUMPPORTAL_API_KEY: process.env.PUMPPORTAL_API_KEY || '',
   JUPITER_API_KEY: process.env.JUPITER_API_KEY || '',
+  SIMULATION_WALLET: process.env.SIMULATION_WALLET || '',
   ADMIN_KEY: process.env.ADMIN_KEY || '',
   PORT: parseInt(process.env.PORT || '3000', 10),
 };

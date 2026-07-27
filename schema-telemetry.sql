@@ -192,3 +192,11 @@ CREATE INDEX IF NOT EXISTS idx_paper_closed_entry ON paper_trades(closed, entry_
 CREATE INDEX IF NOT EXISTS idx_tokens_source_first_seen ON tokens(source, first_seen DESC);
 CREATE INDEX IF NOT EXISTS idx_wallet_hits_ca_buy_at ON wallet_hits(ca, buy_at DESC);
 CREATE INDEX IF NOT EXISTS idx_outcomes_taken_at ON outcomes(taken_at DESC);
+
+-- Jupiter unsigned simulation canary history: track successful unsigned build+simulation proofs
+CREATE TABLE IF NOT EXISTS jupiter_canary_history (
+  canary_day DATE PRIMARY KEY,
+  executed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  result_json JSONB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_jupiter_canary_executed_at ON jupiter_canary_history(executed_at DESC);
