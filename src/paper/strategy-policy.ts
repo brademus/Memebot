@@ -43,6 +43,7 @@ export const ADAPTIVE_EXIT_POLICY = {
   takeProfitMultiple: 3,
   hardStopMultiple: 0.5,
   maxHoldHours: 24,
+  timeExitOwner: 'paper_tracker_with_fresh_price_recovery',
   firstProfitArmMultiple: 1.5,
   firstProfitTrailPct: 0.30,
   firstProfitFloorMultiple: 1.05,
@@ -93,14 +94,9 @@ export function benchmarkExitDecision(entryPrice: number, markPrice: number, pea
     exitPrice: entry * ADAPTIVE_EXIT_POLICY.hardStopMultiple,
     multiple: ADAPTIVE_EXIT_POLICY.hardStopMultiple, ...common,
   };
-  if (ageHours >= ADAPTIVE_EXIT_POLICY.maxHoldHours) return {
-    action: 'sell', reasonCode: 'benchmark_time_24h',
-    reasons: ['The fixed research observation reached its 24-hour measurement horizon.'],
-    exitPrice: mark, multiple, ...common,
-  };
   return {
     action: 'hold', reasonCode: 'benchmark_collecting',
-    reasons: ['The quality observation is still collecting fixed-policy outcome evidence; it is not counted as a purchased position.'],
+    reasons: ['The quality observation is still collecting fixed-policy outcome evidence; it is not counted as a purchased position. Time-based closure is delegated to the paper tracker so stale prices cannot be treated as current.'],
     exitPrice: null, multiple, ...common,
   };
 }
@@ -182,14 +178,12 @@ export function adaptiveExitDecision(input: StrategyExitInput): StrategyExitEval
     || (deteriorationSignals.length >= 2 && (multiple >= 1.05 || multiple <= 0.85));
   if (deteriorationExit) return result('sell', 'strategy_multi_signal_deterioration_exit',
     [`${deteriorationSignals.length} independent post-entry conditions deteriorated.`, ...deteriorationSignals], mark);
-  if (input.ageHours >= ADAPTIVE_EXIT_POLICY.maxHoldHours)
-    return result('sell', 'strategy_time_exit_24h',
-      ['The timed entry reached the 24-hour maximum holding period without reaching the profit objective.'], mark);
 
   return result('hold', 'strategy_hold', [
     `Position remains above its active ${activeStopMultiple.toFixed(2)}x protection floor.`,
     deteriorationSignals.length
       ? `${deteriorationSignals.length} deterioration signal(s) are present, below the current exit threshold.`
       : 'No material post-entry deterioration is confirmed.',
+    'The 24-hour time exit is owned by the paper tracker, which first verifies a fresh or recovered market price.',
   ], null);
 }
