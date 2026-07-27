@@ -22,8 +22,11 @@ async function startLeaderWorker() {
   const { startPaperEvidenceHealthMonitor } = await import('./paper/persistence-health');
   startPaperEvidenceHealthMonitor();
 
-  const { startHypotheticalExitPolicy } = await import('./paper/hypothetical-exit-policy');
-  startHypotheticalExitPolicy();
+  // Quality selection is now a research observation, not a paper purchase. Only the
+  // later trigger opens a timed $100 paper position, and every wait/hold/sell decision
+  // is persisted with its evidence for strategy refinement.
+  const { startStrategyLifecycle } = await import('./paper/strategy-lifecycle');
+  startStrategyLifecycle();
 
   const { startDatabaseMaintenance } = await import('./ops/db-maintenance');
   startDatabaseMaintenance();
