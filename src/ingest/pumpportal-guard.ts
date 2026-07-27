@@ -7,14 +7,17 @@ import {
   pumpPortalPersistentBudgetDiag,
 } from './pumpportal-persistent-budget';
 
-// PumpPortal recommends one websocket with subscriptions added to that connection. Paid
-// subscriptions therefore stay stable instead of being continuously unsubscribed/re-added.
-// The persistent PostgreSQL event budget remains the authoritative spending ceiling.
-const MAX_ACTIVE_TOKENS = Math.max(1, Math.min(10, Number(process.env.PUMPPORTAL_MAX_ACTIVE_TOKENS || 10)));
-const MAX_PENDING_TOKENS = Math.max(20, Math.min(250, Number(process.env.PUMPPORTAL_MAX_PENDING_TOKENS || 100)));
+// PumpPortal recommends one websocket with additive subscriptions. This guard is the sole
+// owner of the provider-side paid subscription set. Scanner lifecycle removals are ignored:
+// a token leaving the dashboard must not silently tear down a paid stream that is still
+// collecting evidence. The persistent PostgreSQL budget remains the spending ceiling.
+const MAX_ACTIVE_TOKENS = Math.max(1, Math.min(100, Number(process.env.PUMPPORTAL_MAX_ACTIVE_TOKENS || 40)));
+const MAX_PENDING_TOKENS = Math.max(40, Math.min(250, Number(process.env.PUMPPORTAL_MAX_PENDING_TOKENS || 250)));
 const PROVIDER_RETRY_MS = Math.max(60_000, Math.min(30 * 60_000, Number(process.env.PUMPPORTAL_PROVIDER_RETRY_MS || 5 * 60_000)));
-const QUIET_SLOT_LEASE_MS = Math.max(5 * 60_000, Math.min(60 * 60_000, Number(process.env.PUMPPORTAL_QUIET_SLOT_LEASE_MS || 10 * 60_000)));
-const MAINTENANCE_INTERVAL_MS = 30_000;
+const QUIET_SLOT_LEASE_MS = Math.max(30_000, Math.min(60 * 60_000, Number(process.env.PUMPPORTAL_QUIET_SLOT_LEASE_MS || 2 * 60_000)));
+const ROTATION_INTERVAL_MS = Math.max(10_000, Math.min(5 * 60_000, Number(process.env.PUMPPORTAL_ROTATION_INTERVAL_MS || 30_000)));
+const ENTITLEMENT_WARNING_MS = Math.max(60_000, Math.min(15 * 60_000, Number(process.env.PUMPPORTAL_ENTITLEMENT_WARNING_MS || 2 * 60_000)));
+const MAINTENANCE_INTERVAL_MS = 15_000;
 
 interface ActiveSubscription {
   subscribedAt: number;
@@ -24,6 +27,7 @@ interface ActiveSubscription {
 interface PumpPortalGuardState {
   active: Map<string, ActiveSubscription>;
   pendingKeys: Map<string, number>;
+  urgentKeys: Map<string, number>;
   paidEvents: number;
   suppressedDuplicateKeys: number;
   suppressedOverBudgetKeys: number;
@@ -31,6 +35,8 @@ interface PumpPortalGuardState {
   droppedPendingKeys: number;
   subscribeCommands: number;
   unsubscribeCommands: number;
+  ignoredApplicationUnsubscribes: number;
+  urgentRotations: number;
   rawSubscribedKeys: number;
   budgetTripped: boolean;
   providerRejected: boolean;
@@ -38,17 +44,20 @@ interface PumpPortalGuardState {
   providerRecoveryAttempts: number;
   startedAt: number;
   lastEventAt: number | null;
+  firstPaidSubscriptionAt: number | null;
   lastBudgetTripAt: number | null;
   lastProviderRejection: string | null;
   providerRetryAt: number | null;
   lastSubscriptionAt: number | null;
   lastMaintenanceAt: number | null;
+  lastRotationAt: number | null;
   socketGenerations: number;
 }
 
 const state: PumpPortalGuardState = {
   active: new Map(),
   pendingKeys: new Map(),
+  urgentKeys: new Map(),
   paidEvents: 0,
   suppressedDuplicateKeys: 0,
   suppressedOverBudgetKeys: 0,
@@ -56,6 +65,8 @@ const state: PumpPortalGuardState = {
   droppedPendingKeys: 0,
   subscribeCommands: 0,
   unsubscribeCommands: 0,
+  ignoredApplicationUnsubscribes: 0,
+  urgentRotations: 0,
   rawSubscribedKeys: 0,
   budgetTripped: false,
   providerRejected: false,
@@ -63,11 +74,13 @@ const state: PumpPortalGuardState = {
   providerRecoveryAttempts: 0,
   startedAt: Date.now(),
   lastEventAt: null,
+  firstPaidSubscriptionAt: null,
   lastBudgetTripAt: null,
   lastProviderRejection: null,
   providerRetryAt: null,
   lastSubscriptionAt: null,
   lastMaintenanceAt: null,
+  lastRotationAt: null,
   socketGenerations: 0,
 };
 
@@ -93,8 +106,8 @@ function sendRaw(socket: WebSocket, payload: unknown) {
 function ensureSocket(socket: WebSocket) {
   if (socket === guardedSocket) return;
   guardedSocket = socket;
-  // A new websocket has no server-side subscriptions. Requeue the prior desired set so
-  // reconnection restores it on the same replacement socket.
+  // A replacement websocket has no server-side subscriptions. Requeue the prior set and
+  // restore it on this one socket after the application sends its free subscriptions.
   const now = Date.now();
   for (const key of state.active.keys()) state.pendingKeys.set(key, now);
   state.active.clear();
@@ -106,11 +119,12 @@ function trimPending() {
     const oldest = state.pendingKeys.keys().next().value as string | undefined;
     if (!oldest) break;
     state.pendingKeys.delete(oldest);
+    state.urgentKeys.delete(oldest);
     state.droppedPendingKeys++;
   }
 }
 
-function queueKeys(keys: string[]) {
+function queueKeys(keys: string[], urgent: boolean) {
   const now = Date.now();
   for (const key of keys) {
     if (!key) continue;
@@ -118,9 +132,14 @@ function queueKeys(keys: string[]) {
       state.suppressedDuplicateKeys++;
       continue;
     }
-    // Move repeated pending keys to the back so fresh launch requests receive priority.
+    // Repeated requests move to the back. Single-key requests come from a newly admitted
+    // or explicitly surfaced token and receive priority over bulk hydration/reconciliation.
     state.pendingKeys.delete(key);
     state.pendingKeys.set(key, now);
+    if (urgent) {
+      state.urgentKeys.delete(key);
+      state.urgentKeys.set(key, now);
+    }
   }
   trimPending();
 }
@@ -131,8 +150,22 @@ function providerReady(now = Date.now()): boolean {
   state.providerRejected = false;
   state.providerRetryAt = null;
   state.providerRecoveryAttempts++;
-  console.warn('[pumpportal-guard] provider cooldown elapsed; retrying stable paid subscriptions');
+  console.warn('[pumpportal-guard] provider cooldown elapsed; retrying paid subscriptions');
   return true;
+}
+
+function nextPending(openSlots: number): string[] {
+  if (openSlots <= 0) return [];
+  const urgent = [...state.urgentKeys.keys()].reverse().slice(0, openSlots);
+  const selected = [...urgent];
+  if (selected.length < openSlots) {
+    const urgentSet = new Set(urgent);
+    const regular = [...state.pendingKeys.keys()].reverse()
+      .filter(key => !urgentSet.has(key))
+      .slice(0, openSlots - selected.length);
+    selected.push(...regular);
+  }
+  return selected;
 }
 
 function fillOpenSlots(socket = guardedSocket) {
@@ -141,17 +174,20 @@ function fillOpenSlots(socket = guardedSocket) {
   const openSlots = Math.max(0, MAX_ACTIVE_TOKENS - state.active.size);
   if (!openSlots || !state.pendingKeys.size) return;
 
-  const selected = [...state.pendingKeys.keys()].slice(-openSlots);
+  const selected = nextPending(openSlots);
+  if (!selected.length) return;
   const now = Date.now();
   for (const key of selected) {
     state.pendingKeys.delete(key);
+    state.urgentKeys.delete(key);
     state.active.set(key, { subscribedAt: now, lastEventAt: null });
   }
   sendRaw(socket, { method: 'subscribeTokenTrade', keys: selected });
   state.subscribeCommands++;
   state.rawSubscribedKeys += selected.length;
   state.lastSubscriptionAt = now;
-  console.log(`[pumpportal-guard] subscribed ${selected.length} stable paid token stream(s); active=${state.active.size}`);
+  if (!state.firstPaidSubscriptionAt) state.firstPaidSubscriptionAt = now;
+  console.log(`[pumpportal-guard] subscribed ${selected.length} paid token stream(s); active=${state.active.size}`);
 }
 
 function unsubscribe(socket: WebSocket, keys: string[]) {
@@ -162,7 +198,7 @@ function unsubscribe(socket: WebSocket, keys: string[]) {
 
 function pausePaidStream(socket: WebSocket, reason: 'event_budget' | 'provider_rejection', detail?: string) {
   const active = [...state.active.keys()];
-  queueKeys(active);
+  queueKeys(active, false);
   state.active.clear();
   if (reason === 'event_budget') {
     state.budgetTripped = true;
@@ -177,6 +213,20 @@ function pausePaidStream(socket: WebSocket, reason: 'event_budget' | 'provider_r
   console.error(`[pumpportal-guard] paid stream paused: ${reason}; active_unsubscribed=${active.length}`);
 }
 
+function rotateOneQuietSlot(socket: WebSocket, now: number) {
+  if (!state.urgentKeys.size || state.active.size < MAX_ACTIVE_TOKENS) return;
+  if (state.lastRotationAt && now - state.lastRotationAt < ROTATION_INTERVAL_MS) return;
+  const quiet = [...state.active.entries()]
+    .filter(([, value]) => value.lastEventAt === null && now - value.subscribedAt >= QUIET_SLOT_LEASE_MS)
+    .sort((left, right) => left[1].subscribedAt - right[1].subscribedAt)[0];
+  if (!quiet) return;
+  unsubscribe(socket, [quiet[0]]);
+  state.active.delete(quiet[0]);
+  state.evictedKeys++;
+  state.urgentRotations++;
+  state.lastRotationAt = now;
+}
+
 function maintainStableSlots() {
   const socket = guardedSocket;
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
@@ -184,18 +234,9 @@ function maintainStableSlots() {
   state.lastMaintenanceAt = now;
   if (!providerReady(now) || !paidStreamBudgetAvailable()) return;
 
-  // Only recycle one slot per maintenance tick, and only when it has stayed completely
-  // silent for a long lease. Active streams producing trades are never churned.
-  if (state.pendingKeys.size && state.active.size >= MAX_ACTIVE_TOKENS) {
-    const quiet = [...state.active.entries()]
-      .filter(([, value]) => value.lastEventAt === null && now - value.subscribedAt >= QUIET_SLOT_LEASE_MS)
-      .sort((left, right) => left[1].subscribedAt - right[1].subscribedAt)[0];
-    if (quiet) {
-      unsubscribe(socket, [quiet[0]]);
-      state.active.delete(quiet[0]);
-      state.evictedKeys++;
-    }
-  }
+  // Only a fresh single-token request may replace a slot. Streams that have produced a
+  // paid event are never rotated. Bulk reconciler traffic cannot churn provider state.
+  rotateOneQuietSlot(socket, now);
   fillOpenSlots(socket);
 }
 
@@ -205,7 +246,7 @@ function maintainStableSlots() {
   const payload = parsePayload(data);
   if (payload?.method === 'subscribeTokenTrade') {
     const keys = Array.isArray(payload.keys) ? [...new Set<string>(payload.keys.map(String).filter(Boolean))] : [];
-    queueKeys(keys);
+    queueKeys(keys, keys.length === 1);
     if (!paidStreamBudgetAvailable()) {
       state.suppressedOverBudgetKeys += keys.length;
       ensurePumpPortalPersistentBudget();
@@ -214,14 +255,12 @@ function maintainStableSlots() {
     return;
   }
   if (payload?.method === 'unsubscribeTokenTrade') {
-    const keys: string[] = Array.isArray(payload.keys) ? payload.keys.map(String) : [];
-    for (const key of keys) {
-      state.active.delete(key);
-      state.pendingKeys.delete(key);
-    }
-    const result = (rawSend as any).call(this, data, ...args);
-    fillOpenSlots(this);
-    return result;
+    // The application removes tokens from its in-memory dashboard aggressively. That is
+    // not authority to destroy the evidence stream. Only this guard may unsubscribe for
+    // a budget stop, provider rejection, or a controlled silent-slot rotation.
+    const keys: string[] = Array.isArray(payload.keys) ? payload.keys.map(String).filter(Boolean) : [];
+    state.ignoredApplicationUnsubscribes += keys.length;
+    return;
   }
   return (rawSend as any).call(this, data, ...args);
 };
@@ -254,38 +293,53 @@ maintenanceTimer.unref();
 
 export function pumpPortalGuardDiag() {
   const persistentBudget = pumpPortalPersistentBudgetDiag();
+  const now = Date.now();
+  const entitlementWarning = state.paidEvents === 0
+    && state.active.size > 0
+    && state.firstPaidSubscriptionAt !== null
+    && now - state.firstPaidSubscriptionAt >= ENTITLEMENT_WARNING_MS
+    ? 'Paid subscriptions are active but no trades arrived. Verify the API key is linked to a PumpPortal wallet funded with at least 0.02 SOL.'
+    : null;
   return {
     maxActiveTokens: MAX_ACTIVE_TOKENS,
     maxPendingTokens: MAX_PENDING_TOKENS,
     quietSlotLeaseSeconds: Math.round(QUIET_SLOT_LEASE_MS / 1000),
+    rotationIntervalSeconds: Math.round(ROTATION_INTERVAL_MS / 1000),
     providerRetrySeconds: Math.round(PROVIDER_RETRY_MS / 1000),
+    entitlementWarningAfterSeconds: Math.round(ENTITLEMENT_WARNING_MS / 1000),
     budgetMode: 'postgres_daily_and_rolling_14d_with_time_aware_pacing',
     pacingStrategy: 'proportional_to_day_remaining',
-    subscriptionStrategy: 'stable_slots_no_churn',
+    subscriptionStrategy: 'single_owner_fresh_priority_no_scanner_unsubscribe',
     activeTokens: state.active.size,
+    activeTokenKeys: [...state.active.keys()],
     pendingBudgetKeys: state.pendingKeys.size,
+    urgentPendingKeys: state.urgentKeys.size,
     paidEventsThisBoot: state.paidEvents,
     estimatedMeteredCostSol: Number((state.paidEvents / 10_000 * 0.01).toFixed(6)),
     suppressedDuplicateKeys: state.suppressedDuplicateKeys,
     suppressedOverBudgetKeys: state.suppressedOverBudgetKeys,
-    suppressedRotationWaitKeys: 0,
+    suppressedRotationWaitKeys: state.urgentKeys.size,
     suppressedStaleDuringCooldownKeys: 0,
     evictedKeys: state.evictedKeys,
+    urgentRotations: state.urgentRotations,
     droppedPendingKeys: state.droppedPendingKeys,
     subscribeCommands: state.subscribeCommands,
     rawSubscribedKeys: state.rawSubscribedKeys,
     unsubscribeCommands: state.unsubscribeCommands,
+    ignoredApplicationUnsubscribes: state.ignoredApplicationUnsubscribes,
     budgetTripped: state.budgetTripped,
     providerRejected: state.providerRejected,
     providerRejections: state.providerRejections,
     providerRecoveryAttempts: state.providerRecoveryAttempts,
     lastProviderRejection: state.lastProviderRejection,
     providerRetryAt: state.providerRetryAt ? new Date(state.providerRetryAt).toISOString() : null,
+    entitlementWarning,
     socketGenerations: state.socketGenerations,
     startedAt: new Date(state.startedAt).toISOString(),
     lastEventAt: state.lastEventAt ? new Date(state.lastEventAt).toISOString() : null,
+    firstPaidSubscriptionAt: state.firstPaidSubscriptionAt ? new Date(state.firstPaidSubscriptionAt).toISOString() : null,
     lastBudgetTripAt: state.lastBudgetTripAt ? new Date(state.lastBudgetTripAt).toISOString() : null,
-    lastRotationAt: state.lastSubscriptionAt ? new Date(state.lastSubscriptionAt).toISOString() : null,
+    lastRotationAt: state.lastRotationAt ? new Date(state.lastRotationAt).toISOString() : null,
     lastSubscriptionAt: state.lastSubscriptionAt ? new Date(state.lastSubscriptionAt).toISOString() : null,
     lastMaintenanceAt: state.lastMaintenanceAt ? new Date(state.lastMaintenanceAt).toISOString() : null,
     persistentBudget,
@@ -293,4 +347,4 @@ export function pumpPortalGuardDiag() {
 }
 
 (globalThis as any).__pumpPortalGuardDiag = pumpPortalGuardDiag;
-console.log(`[pumpportal-guard] enabled: ${MAX_ACTIVE_TOKENS} stable paid slots; ${QUIET_SLOT_LEASE_MS / 60_000}m quiet lease`);
+console.log(`[pumpportal-guard] enabled: sole owner of ${MAX_ACTIVE_TOKENS} paid slots; fresh-priority rotation after ${QUIET_SLOT_LEASE_MS / 1000}s`);
