@@ -254,13 +254,18 @@ function renderCalls() {
   const summary = callsData.summary || {};
   $('nCalls').textContent = rows.length;
   $('callCount').textContent = rows.length;
-  $('callStats').innerHTML = stat('Open calls', rows.length)
+  // The open column is a live snapshot, not the day's activity: entries flow
+  // through it in ~30-60 minutes. Show the throughput so a thin column reads as
+  // motion, not silence.
+  const decided = (summary.wins || 0) + (summary.losses || 0) + (summary.breakeven || 0);
+  $('callStats').innerHTML = stat('Open now', rows.length)
+    + stat('Calls this epoch', summary.totalCalls || 0)
+    + stat('Already resolved', decided)
     + stat('Open hypothetical P&L', money(summary.openPnlUsd || 0), Number(summary.openPnlUsd) >= 0 ? 'positive' : 'negative')
-    + stat('Open return', percent(summary.openReturnPct), Number(summary.openReturnPct) >= 0 ? 'positive' : 'negative')
     + stat('Comparison size', `$${callsData.normalizedStakeUsd || 100} per call`);
   $('callList').innerHTML = rows.length
     ? rows.map(row => callCard(row)).join('')
-    : '<div class="empty">There are no open buy alerts right now. Convictions remain separate until an alert is actually sent.</div>';
+    : '<div class="empty">No open calls this minute — entries typically resolve within the hour, so the action shows in the resolved counts above.</div>';
 
   const current = new Set(rows.map(row => row.ca));
   for (const ca of current) if (!previousCalls.has(ca)) ding(true);
