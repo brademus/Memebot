@@ -7,14 +7,19 @@
   <title>MEMEWATCH</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600;700&family=Inter:wght@500;600;700;800&family=JetBrains+Mono:wght@500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css?v=20260712-final" />
   <link rel="stylesheet" href="/layout-fixes.css?v=20260712-final" />
   <link rel="stylesheet" href="/dashboard-v2.css?v=20260719-open-admin" />
+  <link rel="stylesheet" href="/market-mode.css?v=20260728-nasdaq-mode" />
 </head>
-<body>
+<body data-market="memecoins">
 <header>
   <button class="brand" data-go="home"><span>MEME</span>WATCH</button>
+  <div class="marketSwitch" role="group" aria-label="Choose dashboard market">
+    <button id="modeMemecoins" class="active" data-market-mode="memecoins" aria-pressed="true">Memecoins</button>
+    <button id="modeNasdaq" data-market-mode="nasdaq" aria-pressed="false">Nasdaq</button>
+  </div>
   <div class="live"><i id="connDot"></i><span id="connText">connecting</span></div>
   <button id="back" class="ghost hidden" data-go="home">← Dashboard</button>
   <button id="sound" class="ghost">Sound off</button>
@@ -51,6 +56,30 @@
       <button class="focusTile adminTile" data-go="admin">
         <span class="tag">OPERATIONS</span><strong>ADMIN</strong><h2>Admin</h2>
         <p>All-time master review, AI analysis, system health, wallet diagnostics, and discovery controls.</p><b>Open admin →</b>
+      </button>
+    </div>
+  </section>
+
+  <section id="nasdaqHome" class="view nasdaqView">
+    <div class="hero focusedHero">
+      <div><p>NASDAQ FUTURES INTELLIGENCE</p><h1>One clear<br><span>NQ decision flow.</span></h1></div>
+      <small>This is the foundation for the Nasdaq side of the bot. The layout stays familiar while the future NQ engine, calls, risk controls, and trade evidence are built behind it.</small>
+    </div>
+
+    <div class="decisionFlow" aria-label="Nasdaq bot decision flow">
+      <span>MARKET CONTEXT</span><i>→</i><span>SETUP</span><i>→</i><span>NQ CALL</span><i>→</i><span>RESULT</span>
+    </div>
+
+    <div class="focusTiles">
+      <button class="focusTile nasdaqPrimary" data-go="nasdaqCalls">
+        <span class="tag">NQ TRADE DESK</span><strong id="nNasdaqCalls">0</strong><h2>Current Calls</h2>
+        <p>Future Nasdaq trade calls will appear here with entry, stop, target, session context, execution state, and live outcome tracking.</p>
+        <span class="nasdaqStatus">Dashboard shell ready — strategy engine not connected</span>
+        <b>Open current calls →</b>
+      </button>
+      <button class="focusTile adminTile" data-go="nasdaqAdmin">
+        <span class="tag">NQ OPERATIONS</span><strong>ADMIN</strong><h2>Admin</h2>
+        <p>The control center for strategy settings, risk limits, session rules, data-feed health, execution simulation, and trade review.</p><b>Open Nasdaq admin →</b>
       </button>
     </div>
   </section>
@@ -97,9 +126,38 @@
     </div>
     <div class="toolPanel"><div class="toolPanelHead"><h2>Output</h2><button id="copyTool" class="ghost hidden">Copy</button></div><pre id="toolOutput">Choose an operations tool above.</pre></div>
   </section>
+
+  <section id="nasdaqCalls" class="view nasdaqView">
+    <div class="title"><div><p>NQ EXECUTION</p><h1>Current Calls <span>0</span></h1></div><small>The Nasdaq strategy engine is not connected yet. This section is ready for live NQ entries, stops, targets, contract sizing, session context, and outcome tracking.</small></div>
+    <div class="stats">
+      <div class="stat"><small>Open now</small><b>0</b></div>
+      <div class="stat"><small>Engine state</small><b>Build phase</b></div>
+      <div class="stat"><small>Primary session</small><b>New York</b></div>
+      <div class="stat"><small>Risk model</small><b>Not configured</b></div>
+    </div>
+    <div class="callGrid">
+      <div class="nasdaqEmpty"><div><strong>No NQ calls yet.</strong><p>When the Nasdaq bot is connected, each active call will use this same card layout for direction, entry zone, invalidation, target, risk, timestamps, and live P&amp;L.</p></div></div>
+    </div>
+  </section>
+
+  <section id="nasdaqAdmin" class="view nasdaqView">
+    <div class="title"><div><p>NQ OPERATIONS</p><h1>Admin</h1></div><small>The future control surface for Nasdaq strategy configuration and operational evidence. These controls are intentionally inactive until the NQ backend is added.</small></div>
+    <div class="adminTools nasdaqAdminTools">
+      <button disabled><b>Strategy model</b><small>Setup definitions, bias model, confirmations, and entry rules.</small><small>Coming next</small></button>
+      <button disabled><b>Risk controls</b><small>Maximum risk, daily loss limits, position sizing, and stop enforcement.</small><small>Not connected</small></button>
+      <button disabled><b>Session rules</b><small>New York windows, news restrictions, opening-range behavior, and no-trade periods.</small><small>Not connected</small></button>
+      <button disabled><b>Market data health</b><small>NQ price feed, volume, economic calendar, latency, and continuity checks.</small><small>Not connected</small></button>
+      <button disabled><b>Execution simulator</b><small>Paper fills, slippage, commissions, contract selection, and replay evidence.</small><small>Not connected</small></button>
+      <button disabled><b>Trade review</b><small>Current calls, resolved outcomes, screenshots, reasoning, and experiment comparisons.</small><small>Not connected</small></button>
+    </div>
+    <div class="toolPanel"><div class="toolPanelHead"><h2>NQ system output</h2></div><pre>Nasdaq dashboard initialized.
+
+No NQ strategy worker, market-data service, or execution simulator is connected yet.</pre></div>
+  </section>
 </main>
 
 <script src="/app.js?v=20260719-open-admin" defer></script>
+<script src="/market-mode.js?v=20260728-nasdaq-mode" defer></script>
 <script src="/no-admin.js?v=20260719-open-admin" defer></script>
 <script src="/daily-review.js?v=20260720-zip-download" defer></script>
 </body>
