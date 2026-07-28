@@ -3,10 +3,29 @@ import { pumpfunStreamDiag } from '../ingest/pumpfun';
 import { strategyExtremaReconcilerDiag } from '../paper/strategy-extrema-reconciler';
 import {
   ADAPTIVE_EXIT_POLICY,
+  DeteriorationFamily,
   deteriorationFamiliesFromSignals,
   STRATEGY_NOTIONAL_USD,
   STRATEGY_VERSION,
 } from '../paper/strategy-policy';
+
+interface PnlRow extends Record<string, any> {
+  pnl_usd: number;
+}
+
+interface ExitAuditRow {
+  tradeId: number;
+  ca: string;
+  symbol: string | null;
+  exitAt: string | null;
+  exitReason: string | null;
+  finalMultiple: number | null;
+  rawSignalCount: number;
+  rawSignals: string[];
+  independentFamilyCount: number;
+  independentFamilies: DeteriorationFamily[];
+  meetsCurrentIndependentFamilyRule: boolean;
+}
 
 const finite = (value: unknown): number | null => {
   const parsed = Number(value);
@@ -38,7 +57,7 @@ export async function buildStrategyIntegrityReport(days = 1) {
   if (!pool) return { available: false, reason: 'database_unavailable' };
   const windowStart = new Date(Date.now() - boundedDays * 86_400_000).toISOString();
   const errors: string[] = [];
-  const query = async (name: string, text: string, values: unknown[] = []) => {
+  const query = async (name: string, text: string, values: unknown[] = []): Promise<any[]> => {
     try {
       return (await pool!.query({ text, values, query_timeout: 12_000 } as any)).rows;
     } catch (error) {
@@ -82,7 +101,8 @@ export async function buildStrategyIntegrityReport(days = 1) {
       COUNT(*) FILTER (WHERE exact_trade_events_at_entry>0)::int AS with_exact_trade_events_at_entry,
       COUNT(*) FILTER (WHERE coverage_snapshot#>>'{walletIdentities}'='true')::int AS with_wallet_identities,
       COUNT(*) FILTER (WHERE coverage_snapshot#>>'{tradeAmounts}'='true')::int AS with_trade_amounts,
-      COUNT(*) FILTER (WHERE token_snapshot#>'{safety,bundle}' IS NOT NULL)::int AS with_bundle_measurement,
+      COUNT(*) FILTER (WHERE jsonb_typeof(token_snapshot#>'{safety,bundle}') IS DISTINCT FROM 'null'
+        AND token_snapshot#>'{safety,bundle}' IS NOT NULL)::int AS with_bundle_measurement,
       COUNT(*) FILTER (WHERE token_snapshot#>>'{safety,entityGraph,complete}'='true')::int AS with_complete_entity_graph,
       COUNT(*) FILTER (WHERE coverage_snapshot#>>'{aggregateFlow}'='true')::int AS with_aggregate_flow,
       COUNT(*) FILTER (WHERE trigger_snapshot#>>'{revalidationReady}'='true')::int AS with_final_entry_revalidation
@@ -103,33 +123,37 @@ export async function buildStrategyIntegrityReport(days = 1) {
 
   const accounting: any = accountingRows[0] || {};
   const coverage: any = coverageRows[0] || {};
-  const closedPnl = concentrationRows.map(row => ({ ...row, pnl_usd: finite(row.pnl_usd) || 0 }));
-  const totalMarkPnl = closedPnl.reduce((sum, row) => sum + Number(row.pnl_usd), 0);
+  const closedPnl: PnlRow[] = concentrationRows.map((row: any) => ({
+    ...row,
+    pnl_usd: finite(row.pnl_usd) || 0,
+  }));
+  const totalMarkPnl = closedPnl.reduce((sum: number, row: PnlRow) => sum + row.pnl_usd, 0);
   const largest = closedPnl[0] || null;
-  const topTwo = closedPnl.slice(0, 2).reduce((sum, row) => sum + Number(row.pnl_usd), 0);
+  const topTwo = closedPnl.slice(0, 2).reduce((sum: number, row: PnlRow) => sum + row.pnl_usd, 0);
   const marketMarkResolved = Number(accounting.market_mark_resolved || 0);
   const timedEntries = Number(accounting.timed_entries || 0);
 
-  const auditedExits = exitRows.map(row => {
+  const auditedExits: ExitAuditRow[] = exitRows.map((row: any) => {
     const signals = stringArray(row.deterioration_signals);
     const families = deteriorationFamiliesFromSignals(signals);
     const multiple = finite(row.final_multiple);
     const meetsFamilyRule = families.length >= ADAPTIVE_EXIT_POLICY.deteriorationFamiliesToExit
       || (families.length >= 2 && multiple !== null && (multiple >= 1.05 || multiple <= 0.85));
     return {
-      tradeId: Number(row.id), ca: row.ca, symbol: row.symbol, exitAt: row.exit_at,
-      exitReason: row.exit_reason, finalMultiple: multiple,
-      rawSignalCount: signals.length, rawSignals: signals,
+      tradeId: Number(row.id), ca: String(row.ca), symbol: row.symbol ? String(row.symbol) : null,
+      exitAt: row.exit_at ? String(row.exit_at) : null, exitReason: row.exit_reason ? String(row.exit_reason) : null,
+      finalMultiple: multiple, rawSignalCount: signals.length, rawSignals: signals,
       independentFamilyCount: families.length, independentFamilies: families,
       meetsCurrentIndependentFamilyRule: meetsFamilyRule,
     };
   });
-  const legacyMultiSignal = auditedExits.filter(row => row.exitReason === 'strategy_multi_signal_deterioration_exit');
+  const legacyMultiSignal = auditedExits.filter((row: ExitAuditRow) =>
+    row.exitReason === 'strategy_multi_signal_deterioration_exit');
 
   const warnings: string[] = [];
   if (Number(accounting.execution_proven_resolved || 0) === 0)
     warnings.push('No closed timed entry has entry eligibility, a built transaction, and a successful simulation; no P&L is execution-proven.');
-  if (largest && totalMarkPnl > 0 && Number(largest.pnl_usd) > totalMarkPnl)
+  if (largest && totalMarkPnl > 0 && largest.pnl_usd > totalMarkPnl)
     warnings.push('The largest winner exceeds total market-mark P&L, so the remaining closed sample is net negative.');
   if (timedEntries && Number(coverage.with_wallet_identities || 0) / timedEntries < 0.5)
     warnings.push('Wallet-identity coverage is below 50%; buyer-retention and smart-wallet evidence are incomplete.');
@@ -170,14 +194,16 @@ export async function buildStrategyIntegrityReport(days = 1) {
       marketMarkPnlExcludingLargestWinnerUsd: Number((totalMarkPnl - Number(largest?.pnl_usd || 0)).toFixed(2)),
       marketMarkPnlExcludingTopTwoUsd: Number((totalMarkPnl - topTwo).toFixed(2)),
       largestWinnerShareOfPositiveHeadlinePct: totalMarkPnl > 0 && largest
-        ? Number((100 * Number(largest.pnl_usd) / totalMarkPnl).toFixed(1)) : null,
+        ? Number((100 * largest.pnl_usd / totalMarkPnl).toFixed(1)) : null,
       closedRows: closedPnl,
     },
     exitIndependenceAudit: {
       policy: 'Correlated model outputs count as one model family. DYING/DEAD is not counted again when direct score, flow, or momentum evidence already explains the state.',
       legacyMultiSignalExits: legacyMultiSignal.length,
-      legacyExitsWithFewerThanThreeIndependentFamilies: legacyMultiSignal.filter(row => row.independentFamilyCount < 3).length,
-      legacyExitsMeetingCurrentIndependentFamilyRule: legacyMultiSignal.filter(row => row.meetsCurrentIndependentFamilyRule).length,
+      legacyExitsWithFewerThanThreeIndependentFamilies: legacyMultiSignal.filter((row: ExitAuditRow) =>
+        row.independentFamilyCount < 3).length,
+      legacyExitsMeetingCurrentIndependentFamilyRule: legacyMultiSignal.filter((row: ExitAuditRow) =>
+        row.meetsCurrentIndependentFamilyRule).length,
       rows: auditedExits,
     },
     runtime: {
