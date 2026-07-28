@@ -201,7 +201,7 @@ export const pumpfunStreamDiag = () => {
           : !connected
             ? 'socket_not_open'
             : lastTradeAt === null
-              ? (messageCounts.creates > 0
+              ? (createMessages > 0
                   // Free channels (creates/migrations) delivering while the PAID
                   // trade channel is mute, with an accepted key and clean sends, is
                   // the signature of a drained PumpPortal funding wallet: the
