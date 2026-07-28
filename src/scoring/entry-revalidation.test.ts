@@ -13,6 +13,7 @@ function token(overrides: Partial<TokenRecord> = {}): TokenRecord {
     dex: 'pumpswap',
     priceUsd: 1.2,
     liquidityUsd: 20_000,
+    mcapUsd: 100_000,
     curveSol: 0,
     firstScorePrice: 1.1,
     earlyBuyers: Array.from({ length: 10 }, (_, index) => `buyer-${index}`),
@@ -67,4 +68,36 @@ test('fails closed when no persisted quality-selection reference is available', 
   const result = assessEntryRevalidation(token(), 1_120_000, null);
   assert.equal(result.revalidationReady, false);
   assert.ok(result.revalidationBlockers.includes('quality selection reference unavailable or stale'));
+});
+
+test('aged entries retain their stricter USD liquidity floor', () => {
+  const result = assessEntryRevalidation(token({
+    source: 'aged',
+    liquidityUsd: 40_000,
+    mcapUsd: 1_000_000,
+  }), 1_120_000, reference());
+  assert.equal(result.revalidationReady, false);
+  assert.equal(result.liquidityReady, false);
+  assert.ok(result.revalidationBlockers.some(reason => reason.includes('below $50000')));
+});
+
+test('aged entries retain their liquidity-to-market-cap floor', () => {
+  const result = assessEntryRevalidation(token({
+    source: 'aged',
+    liquidityUsd: 60_000,
+    mcapUsd: 3_000_000,
+  }), 1_120_000, reference());
+  assert.equal(result.revalidationReady, false);
+  assert.equal(result.liquidityReady, false);
+  assert.ok(result.revalidationBlockers.some(reason => reason.includes('liquidity/mcap 2.00%')));
+});
+
+test('healthy aged liquidity passes both final checks', () => {
+  const result = assessEntryRevalidation(token({
+    source: 'aged',
+    liquidityUsd: 60_000,
+    mcapUsd: 1_000_000,
+  }), 1_120_000, reference());
+  assert.equal(result.revalidationReady, true);
+  assert.equal(result.liquidityReady, true);
 });
