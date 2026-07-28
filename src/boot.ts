@@ -43,6 +43,14 @@ async function startLeaderWorker() {
   const { startStrategyExtremaReconciler } = await import('./paper/strategy-extrema-reconciler');
   startStrategyExtremaReconciler();
 
+  // Evidence System v3 fingerprints every strategy-relevant configuration, journals
+  // execution mutations append-only, evaluates paired shadow policies on the same
+  // opportunities, gives every exit its own continuation shadow, and runs execution-
+  // quoted runner experiments. It is measurement-only and never signs or broadcasts.
+  const { initializeEvidenceSystemV3, startEvidenceSystemV3 } = await import('./evidence/system-v3');
+  await initializeEvidenceSystemV3();
+  startEvidenceSystemV3();
+
   const { startDatabaseMaintenance } = await import('./ops/db-maintenance');
   startDatabaseMaintenance();
 
