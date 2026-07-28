@@ -1,9 +1,9 @@
 import { cfg } from '../config';
 import {
-  assessEntryTiming,
   convictionQueueStatus,
   isConvictionCandidate,
 } from '../scoring/conviction-queue';
+import { assessTrigger } from '../scoring/states';
 import { rankToken } from '../scoring/rank';
 import { activeTokens } from '../store';
 import { weightedSmartHits } from '../wallets/tracker';
@@ -24,7 +24,7 @@ export function currentConvictions(now = Date.now()) {
       const rank = rankToken(token);
       const smart = weightedSmartHits(token.smartHits, config.smart_lane_window_min * 60_000);
       const model = token.modelDecision;
-      const entry = assessEntryTiming(token, now, conviction);
+      const entry = assessTrigger(token, now, conviction);
       return {
         ca: token.ca,
         symbol: token.symbol,
@@ -44,6 +44,14 @@ export function currentConvictions(now = Date.now()) {
         cautions: rank.cautions,
         waitingFor: entry.blockers,
         entryReady: entry.ready,
+        entryRevalidation: {
+          ready: entry.revalidationReady,
+          selectionPremiumPct: entry.selectionPremiumPct,
+          liquidityReady: entry.liquidityReady,
+          retentionReady: entry.retentionReady,
+          marketContinuityReady: entry.marketContinuityReady,
+          reasons: entry.revalidationReasons,
+        },
         liq: Math.round(token.liquidityUsd),
         buys: token.buys5m,
         sells: token.sells5m,
