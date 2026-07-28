@@ -427,54 +427,77 @@ export async function buildMasterReview(days = 3650) {
     rows: missedRows,
   };
 
-  // 3X AUTOPSY (goal: multiple 3x/day). Every coin the strategy layer WATCHED
-  // that reached 3x in the window, split by whether a timed entry ever existed,
-  // whether the entry captured the 3x, and the last recorded block reason for the
-  // misses. Plus the post-exit shadow verdict: how often our own exits left a 3x
-  // on the table. Measurement only — the prerequisite for any selection or exit
-  // change, never a tuning input by itself.
-  const autopsyRows = await query('three_x_autopsy', `
-    WITH threex AS (
-      SELECT p.ca, MAX(p.symbol) AS symbol,
-             ROUND(MAX(p.peak_price/NULLIF(p.entry_price,0))::numeric, 2) AS best_peak_multiple,
-             BOOL_OR(p.strategy_role='timed_entry') AS had_timed_entry,
-             BOOL_OR(p.strategy_role='timed_entry' AND p.exit_reason='strategy_take_profit_3x') AS timed_entry_captured_3x
+  // 3X AUTOPSY, rebuilt (review findings 5-9). Separate questions get separate
+  // baselines: quality observations reaching 3x from the QUALITY price, timed
+  // entries reaching 3x from their OWN entry price, and capture measured by the
+  // explicit target fields (verified = execution-proven target_hit_at, observed =
+  // mark-based). Block reasons are the last rejection BEFORE the quality peak, so
+  // a rejection that postdates the move can never masquerade as the cause.
+  // Aggregates are computed unlimited; only the display rows are capped.
+  const qualityThreeX = await query('three_x_quality', `
+    SELECT DISTINCT ON (p.ca) p.ca, p.symbol,
+           ROUND((p.peak_price/NULLIF(p.entry_price,0))::numeric,2) AS quality_peak_multiple,
+           p.peak_at AS quality_peak_at
+      FROM paper_trades p
+     WHERE p.entry_at > now()-($1||' days')::interval
+       AND p.strategy_role='quality_observation' AND p.signal IS DISTINCT FROM 'post_exit_watch'
+       AND p.entry_price>0 AND p.peak_price >= 3*p.entry_price
+     ORDER BY p.ca, (p.peak_price/NULLIF(p.entry_price,0)) DESC`, [windowParameter]);
+  const timedThreeX = await query('three_x_timed', `
+    SELECT p.ca,
+           ROUND(MAX(p.peak_price/NULLIF(p.entry_price,0))::numeric,2) AS timed_peak_multiple,
+           BOOL_OR(p.target_hit_at IS NOT NULL) AS captured_3x_verified,
+           BOOL_OR(p.observed_target_hit_at IS NOT NULL) AS captured_3x_observed
+      FROM paper_trades p
+     WHERE p.entry_at > now()-($1||' days')::interval AND p.strategy_role='timed_entry'
+       AND p.entry_price>0
+     GROUP BY p.ca`, [windowParameter]);
+  const blockedBeforePeak = await query('three_x_block_reasons', `
+    WITH q AS (
+      SELECT DISTINCT ON (p.ca) p.ca, p.peak_at
         FROM paper_trades p
        WHERE p.entry_at > now()-($1||' days')::interval
-         AND p.strategy_role IN ('quality_observation','timed_entry')
-         AND p.signal IS DISTINCT FROM 'post_exit_watch'
-         AND p.entry_price > 0
-       GROUP BY p.ca
-      HAVING MAX(p.peak_price/NULLIF(p.entry_price,0)) >= 3)
-    SELECT t.*, blocked.reason_code AS last_block_reason
-      FROM threex t
-      LEFT JOIN LATERAL (
+         AND p.strategy_role='quality_observation' AND p.signal IS DISTINCT FROM 'post_exit_watch'
+         AND p.entry_price>0 AND p.peak_price >= 3*p.entry_price
+       ORDER BY p.ca, (p.peak_price/NULLIF(p.entry_price,0)) DESC)
+    SELECT q.ca, blocked.reason_code
+      FROM q LEFT JOIN LATERAL (
         SELECT s.reason_code FROM signal_decisions s
-         WHERE s.ca=t.ca AND s.allow=false
-         ORDER BY s.evaluated_at DESC LIMIT 1) blocked ON true
-     ORDER BY best_peak_multiple DESC
-     LIMIT 200`, [windowParameter]);
-  const shadowRows = await query('post_exit_shadows', `
+         WHERE s.ca=q.ca AND s.allow=false AND s.evaluated_at <= q.peak_at
+         ORDER BY s.evaluated_at DESC LIMIT 1) blocked ON true`, [windowParameter]);
+  const shadowVerdict = await query('post_exit_shadow_verdict', `
     SELECT COUNT(*)::int AS shadows,
-           COUNT(*) FILTER (WHERE peak_price >= 3*entry_price)::int AS shadow_reached_3x,
-           COUNT(*) FILTER (WHERE peak_price >= 1.5*entry_price)::int AS shadow_reached_1_5x
-      FROM paper_trades
-     WHERE signal='post_exit_watch' AND entry_at > now()-($1||' days')::interval`, [windowParameter]);
+           COUNT(*) FILTER (WHERE s.peak_price >= 3*parent.entry_price)::int AS original_trade_reached_3x_after_exit,
+           COUNT(*) FILTER (WHERE s.peak_price >= 1.5*parent.entry_price)::int AS original_reached_1_5x_after_exit,
+           COUNT(*) FILTER (WHERE s.peak_price >= 3*s.entry_price)::int AS continued_3x_from_exit_price
+      FROM paper_trades s JOIN paper_trades parent ON parent.id=s.parent_id
+     WHERE s.signal='post_exit_watch' AND s.entry_at > now()-($1||' days')::interval`, [windowParameter]);
+
+  const timedByCa = new Map<string, any>(timedThreeX.map((row: any) => [String(row.ca), row]));
+  const reasonByCa = new Map<string, string | null>(blockedBeforePeak.map((row: any) => [String(row.ca), row.reason_code || null]));
   const missedByReason: Record<string, number> = {};
-  for (const row of autopsyRows) {
-    if (!row.had_timed_entry) {
-      const key = String(row.last_block_reason || 'no_block_recorded_never_reached_entry');
+  for (const row of qualityThreeX) {
+    if (!timedByCa.has(String(row.ca))) {
+      const key = String(reasonByCa.get(String(row.ca)) || 'no_block_recorded_before_peak');
       missedByReason[key] = (missedByReason[key] || 0) + 1;
     }
   }
   const threeXAutopsy = {
-    observed3x: autopsyRows.length,
-    enteredAmongThem: autopsyRows.filter((row: any) => row.had_timed_entry).length,
-    captured3xByTimedEntry: autopsyRows.filter((row: any) => row.timed_entry_captured_3x).length,
+    observed3xFromQualityPrice: qualityThreeX.length,
+    enteredAmongThem: qualityThreeX.filter((row: any) => timedByCa.has(String(row.ca))).length,
+    timedEntriesReaching3xFromOwnEntry: timedThreeX.filter((row: any) => Number(row.timed_peak_multiple) >= 3).length,
+    captured3xVerified: timedThreeX.filter((row: any) => row.captured_3x_verified).length,
+    captured3xObserved: timedThreeX.filter((row: any) => row.captured_3x_observed).length,
     missedByReason,
-    exitLadderVerdict: shadowRows[0] || { shadows: 0, shadow_reached_3x: 0, shadow_reached_1_5x: 0 },
-    rows: autopsyRows.slice(0, 60),
-    note: 'observed3x counts coins the strategy layer actively watched (research or entered) whose peak reached 3x entry inside the window; post-exit shadows measure what strategy exits left on the table.',
+    exitLadderVerdict: shadowVerdict[0] || { shadows: 0, original_trade_reached_3x_after_exit: 0, original_reached_1_5x_after_exit: 0, continued_3x_from_exit_price: 0 },
+    rows: qualityThreeX.slice(0, 60).map((row: any) => ({
+      ...row,
+      had_timed_entry: timedByCa.has(String(row.ca)),
+      timed_peak_multiple: timedByCa.get(String(row.ca))?.timed_peak_multiple ?? null,
+      captured_3x_verified: !!timedByCa.get(String(row.ca))?.captured_3x_verified,
+      last_block_reason_before_peak: reasonByCa.get(String(row.ca)) || null,
+    })),
+    note: 'Baselines are deliberately separate: observed3xFromQualityPrice measures 3x from the quality-observation price; timedEntriesReaching3xFromOwnEntry measures 3x from the actual timed-entry price; captured3xVerified means execution-proven. exitLadderVerdict compares shadow peaks against the PARENT entry (did the original trade later reach 3x) and the exit price (pure continuation). Known limitation: one shadow per token per model version, so a re-entered token second exit is not shadowed.',
   };
 
   return {
