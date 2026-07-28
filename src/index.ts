@@ -1,5 +1,7 @@
 import { initDb, upsertToken, markTrigger, freezeEarlySubs, saveRuntime, loadHydratable } from './db';
 import { openPaper, startPaperTrader } from './paper/paper';
+import { startOpenPositionsCache, openTimedEntryCas } from './paper/open-positions-cache';
+import { setPinnedKeysProvider } from './ingest/pumpportal-guard';
 import { startPumpfunMonitor, setSolPrice, unsubscribeToken, subscribeToken, resubscribeAll, startSubscriptionReconciler } from './ingest/pumpfun';
 import { startDexscreenerPoller } from './ingest/dexscreener';
 import { startMomentumScanner } from './ingest/momentum';
@@ -73,6 +75,8 @@ async function main() {
   }
   startSubscriptionReconciler();
   startPaperTrader();
+  startOpenPositionsCache();
+  setPinnedKeysProvider(openTimedEntryCas);
 
   setInterval(() => {
     saveRuntime(allTokens().filter(token => token.gated === true && token.state !== 'DEAD')).catch(() => {});

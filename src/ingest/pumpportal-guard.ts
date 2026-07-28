@@ -124,6 +124,15 @@ function trimPending() {
   }
 }
 
+let pinnedKeysProvider: () => string[] = () => [];
+/** Wired at boot to the open-positions cache: pinned keys are open timed-entry
+ *  positions. They are never rotated out of a paid slot and take first claim on
+ *  free slots, so a live position keeps exact-event coverage until it closes. */
+export function setPinnedKeysProvider(provider: () => string[]) { pinnedKeysProvider = provider; }
+function pinnedSet(): Set<string> {
+  try { return new Set(pinnedKeysProvider()); } catch { return new Set(); }
+}
+
 function queueKeys(keys: string[], urgent: boolean) {
   const now = Date.now();
   for (const key of keys) {
@@ -156,7 +165,10 @@ function providerReady(now = Date.now()): boolean {
 
 function nextPending(openSlots: number): string[] {
   if (openSlots <= 0) return [];
-  const urgent = [...state.urgentKeys.keys()].reverse().slice(0, openSlots);
+  const pinned = pinnedSet();
+  const pinnedPending = [...state.pendingKeys.keys()].filter(key => pinned.has(key)).slice(0, openSlots);
+  const urgent = [pinnedPending, [...state.urgentKeys.keys()].reverse()].flat()
+    .filter((key, index, all) => all.indexOf(key) === index).slice(0, openSlots);
   const selected = [...urgent];
   if (selected.length < openSlots) {
     const urgentSet = new Set(urgent);
@@ -216,8 +228,9 @@ function pausePaidStream(socket: WebSocket, reason: 'event_budget' | 'provider_r
 function rotateOneQuietSlot(socket: WebSocket, now: number) {
   if (!state.urgentKeys.size || state.active.size < MAX_ACTIVE_TOKENS) return;
   if (state.lastRotationAt && now - state.lastRotationAt < ROTATION_INTERVAL_MS) return;
+  const pinned = pinnedSet();
   const quiet = [...state.active.entries()]
-    .filter(([, value]) => value.lastEventAt === null && now - value.subscribedAt >= QUIET_SLOT_LEASE_MS)
+    .filter(([key, value]) => !pinned.has(key) && value.lastEventAt === null && now - value.subscribedAt >= QUIET_SLOT_LEASE_MS)
     .sort((left, right) => left[1].subscribedAt - right[1].subscribedAt)[0];
   if (!quiet) return;
   unsubscribe(socket, [quiet[0]]);
@@ -292,6 +305,9 @@ const maintenanceTimer = setInterval(maintainStableSlots, MAINTENANCE_INTERVAL_M
 maintenanceTimer.unref();
 
 export function pumpPortalGuardDiag() {
+  const pinned = pinnedSet();
+  const pinnedActive = [...state.active.keys()].filter(key => pinned.has(key)).length;
+
   const persistentBudget = pumpPortalPersistentBudgetDiag();
   const now = Date.now();
   const entitlementWarning = state.paidEvents === 0
@@ -301,6 +317,7 @@ export function pumpPortalGuardDiag() {
     ? 'Paid subscriptions are active but no trades arrived. Verify the API key is linked to a PumpPortal wallet funded with at least 0.02 SOL.'
     : null;
   return {
+    pinnedProvided: pinned.size, pinnedActive,
     maxActiveTokens: MAX_ACTIVE_TOKENS,
     maxPendingTokens: MAX_PENDING_TOKENS,
     quietSlotLeaseSeconds: Math.round(QUIET_SLOT_LEASE_MS / 1000),
@@ -348,3 +365,5 @@ export function pumpPortalGuardDiag() {
 
 (globalThis as any).__pumpPortalGuardDiag = pumpPortalGuardDiag;
 console.log(`[pumpportal-guard] enabled: sole owner of ${MAX_ACTIVE_TOKENS} paid slots; fresh-priority rotation after ${QUIET_SLOT_LEASE_MS / 1000}s`);
+
+export const __guardInternalsForTest = { state, queueKeys, rotateOneQuietSlot, nextPending };
