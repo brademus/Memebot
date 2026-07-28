@@ -23,7 +23,7 @@ async function cleansePoisonedCurveEligibility() {
   if (!pool) return;
   await pool.query(
     `UPDATE paper_trades SET execution_eligible=false
-      WHERE execution_eligible=true AND quote_status LIKE 'curve_%'`,
+      WHERE execution_eligible=true AND quote_status IN ('curve_executable_simulated','curve_executable_built')`,
   ).catch(() => {});
 }
 

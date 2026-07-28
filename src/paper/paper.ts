@@ -21,7 +21,7 @@ import {
   recordPaperSnapshot,
 } from './telemetry';
 
-export type PaperSignal = 'trigger' | 'conviction' | 'bb_smart' | 'bb_organic' | 'bb_pregrad' | 'bb_secondwave'
+export type PaperSignal = 'trigger' | 'conviction' | 'bb_smart' | 'bb_organic' | 'bb_pregrad' | 'bb_secondwave' | 'post_exit_watch'
   | 'model' | 'model_raw' | 'model_executable';
 
 export interface OpenPaperOptions {
@@ -121,10 +121,16 @@ const trackingRecoveryNoted = new Set<number>();
 // tolerates slow sources while still letting genuinely dead coins age out.
 const PRICE_OBSERVATION_FRESH_MS = 30 * 60_000;
 
+/** True only when the in-memory price was GENUINELY observed recently. Exported so
+ *  the regression test exercises the production function, not a lookalike. */
+export function isFreshPriceObservation(token: { priceUsd?: number; priceAt?: number } | null | undefined, now: number): boolean {
+  return !!token && Number(token.priceUsd) > 0 && !!token.priceAt && now - token.priceAt < PRICE_OBSERVATION_FRESH_MS;
+}
+
 async function mark() {
   if (!pool) return;
   const open = await pool.query(
-    `SELECT id,ca,signal,model_version,entry_price,entry_at,last_at,peak_price,trough_price,target_hit_at,observed_target_hit_at,
+    `SELECT id,ca,symbol,signal,model_version,strategy_role,entry_price,entry_at,last_at,peak_price,trough_price,target_hit_at,observed_target_hit_at,
             execution_eligible,position_usd,quoted_out_amount,exit_quote_status
        FROM paper_trades WHERE closed=false`,
   ).catch(() => ({ rows: [] as any[] }));
@@ -138,8 +144,7 @@ async function mark() {
     // 50 of 51 open calls older than 6h, median 21.5h, prices bit-identical to
     // entry). Stale in-memory prices now fall through to recovery and, failing
     // that, the honest grace clock.
-    const priceFresh = !!token && token.priceUsd > 0
-      && !!token.priceAt && Date.now() - token.priceAt < PRICE_OBSERVATION_FRESH_MS;
+    const priceFresh = isFreshPriceObservation(token, Date.now());
     let price = priceFresh ? token!.priceUsd : 0;
     let recovered = false;
 
@@ -152,7 +157,10 @@ async function mark() {
         // (the aged/revival scanners would re-enter such a coin as a NEW entry
         // anyway). Reap it immediately through the normal close path; the 6h
         // grace remains for anything that ever showed life.
-        const neverMoved = !(Number(row.peak_price) > Number(row.entry_price));
+        const entry = Number(row.entry_price);
+        const neverMoved = entry > 0
+          && Math.abs(Number(row.peak_price) / entry - 1) <= 0.001
+          && Math.abs(Number(row.trough_price || row.entry_price) / entry - 1) <= 0.001;
         const entryAgeMs = Date.now() - new Date(row.entry_at).getTime();
         if (neverMoved && entryAgeMs > 24 * 3_600_000) {
           noteTrackingLostAfterGrace();
@@ -211,6 +219,7 @@ async function mark() {
 
     let verified = false;
     let verifiedExitPrice: number | null = null;
+    let verifiedExitEvidence: Awaited<ReturnType<typeof quoteExecutableExit>> | undefined;
     if (observedTarget && !row.target_hit_at) {
       if (!row.execution_eligible && row.model_version === 'legacy') {
         verified = true;
@@ -218,6 +227,7 @@ async function mark() {
       } else if (row.execution_eligible && row.quoted_out_amount && Number(row.position_usd) > 0) {
         const exit = await quoteExecutableExit(row.ca, String(row.quoted_out_amount));
         const realized = exit.eligible && exit.proceedsUsd ? exit.proceedsUsd / Number(row.position_usd) : 0;
+        if (exit.eligible && realized >= executionSettings.targetMultiple) verifiedExitEvidence = exit;
         await pool.query(
           `UPDATE paper_trades SET exit_quote_status=$2,exit_quoted_usd=$3,exit_price_impact_pct=$4,
              exit_fee_lamports=$5,exit_router=$6,exit_quote_time_ms=$7,exit_transaction_built=$8,
@@ -246,7 +256,8 @@ async function mark() {
         row.execution_eligible ? 'target exit simulated' : 'legacy observed target',
         { targetMultiple: executionSettings.targetMultiple }, Date.now());
       await closeAt(row, token || null, verifiedExitPrice,
-        row.execution_eligible ? 'target_3x_exit_simulated' : 'target_3x_observed_legacy');
+        row.execution_eligible ? 'target_3x_exit_simulated' : 'target_3x_observed_legacy',
+        { executionExit: verifiedExitEvidence });
       continue;
     }
     if (observedTarget && row.signal === 'model_raw') {
@@ -261,20 +272,27 @@ async function mark() {
   }
 }
 
-async function closeAt(row: any, token: ReturnType<typeof getToken> | null, price: number | null, reason: string) {
+async function closeAt(row: any, token: ReturnType<typeof getToken> | null, price: number | null, reason: string,
+  options: { executionExit?: Awaited<ReturnType<typeof quoteExecutableExit>> } = {}) {
   // EXECUTION-HONEST EXITS (review finding, 2026-07-28): exit evidence used to be
   // captured only when the 3x target hit, so the executable cohort contained only
   // survivors. Every close of a measured eligible row now attempts a real exit
   // quote/build/simulation first, best-effort, so promotion can compute executable
   // proceeds for winners AND losers alike.
-  if (row?.execution_eligible && row?.quoted_out_amount && Number(row?.position_usd) > 0 && !row?.exit_quote_status && pool) {
+  // CLOSE-TIME EVIDENCE RULE (review 2026-07-28): the target-probe flow persists
+  // exit_* fields for sub-target quotes while the position stays OPEN; a later
+  // crash close must never inherit that stale 2.4x as its final proceeds. The
+  // final evidence is either the exact verified quote passed in by the target
+  // path (persisted as-is, no second quote to disagree with the verdict) or a
+  // FRESH quote taken now, overwriting any probe leftovers.
+  if (row?.execution_eligible && row?.quoted_out_amount && Number(row?.position_usd) > 0 && pool) {
     try {
-      const exit = await quoteExecutableExit(row.ca, String(row.quoted_out_amount));
+      const exit = options.executionExit ?? await quoteExecutableExit(row.ca, String(row.quoted_out_amount));
       await pool.query(
         `UPDATE paper_trades SET exit_quote_status=$2,exit_quoted_usd=$3,exit_price_impact_pct=$4,
            exit_fee_lamports=$5,exit_router=$6,exit_quote_time_ms=$7,exit_transaction_built=$8,
            exit_simulation_ok=$9,exit_simulation_error=$10
-         WHERE id=$1 AND exit_quote_status IS NULL`,
+         WHERE id=$1`,
         [row.id, exit.status, exit.proceedsUsd, exit.priceImpact, exit.feeLamports,
          exit.router, exit.quoteTimeMs, exit.transactionBuilt, exit.simulationOk, exit.simulationError],
       ).catch(() => {});
@@ -299,7 +317,7 @@ async function closeAt(row: any, token: ReturnType<typeof getToken> | null, pric
   if (row?.strategy_role === 'timed_entry' && price && price > 0
     && typeof reason === 'string' && reason.startsWith('strategy_')) {
     try {
-      await openPaper(row.ca, row.symbol || '?', 'post_exit_watch' as any, price, null, undefined,
+      await openPaper(row.ca, row.symbol || '?', 'post_exit_watch', price, null, undefined,
         { skipExecutionQuote: true, parentId: Number(row.id) || null });
     } catch { /* shadows are best-effort */ }
   }
@@ -316,7 +334,8 @@ export async function paperScoreboard(days = 30): Promise<any[]> {
        COUNT(*) FILTER (WHERE transaction_built) AS transaction_built,
        COUNT(*) FILTER (WHERE simulation_ok) AS simulation_ok,
        COUNT(*) FILTER (WHERE execution_eligible AND closed AND exit_reason IS DISTINCT FROM 'tracking_lost'
-         AND position_usd>0 AND quoted_out_amount IS NOT NULL AND exit_simulation_ok=true AND exit_quoted_usd>0) AS resolved_executable,
+         AND position_usd>0 AND quoted_out_amount IS NOT NULL AND exit_simulation_ok=true AND exit_quoted_usd>0
+         AND entry_at >= COALESCE((SELECT started_at FROM evidence_epochs WHERE name='execution_truth_v1'), now())) AS resolved_executable,
        COUNT(*) FILTER (WHERE NOT execution_eligible) AS quote_ineligible,
        COUNT(*) FILTER (WHERE exit_reason='tracking_lost') AS incomplete,
        COUNT(*) FILTER (WHERE observed_target_hit_at IS NOT NULL) AS observed_hits_3x,

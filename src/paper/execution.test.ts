@@ -1,5 +1,6 @@
 import test from 'node:test';
 import { executionSettings } from './execution';
+import { setSolUsd } from '../state/sol-price';
 import assert from 'node:assert/strict';
 import { TokenRecord } from '../types';
 import { executionVenue, quoteExecutableEntry, quoteExecutableExit } from './execution';
@@ -20,6 +21,7 @@ test.afterEach(() => {
 });
 
 function configure() {
+  setSolUsd(100);   // probes fail closed without a fresh SOL price
   process.env.JUPITER_API_KEY = 'test-key';
   process.env.SIMULATION_WALLET = '11111111111111111111111111111111';
   process.env.SOLANA_RPC_URL = 'https://rpc.test';
@@ -41,6 +43,7 @@ function simulatedFetch(overrides: Record<string, unknown> = {}) {
 }
 
 test('marks a signal ineligible when the Jupiter API key is absent', async () => {
+  setSolUsd(100);   // isolate the key check: sizing prerequisite satisfied
   delete process.env.JUPITER_API_KEY;
   const result = await quoteExecutableEntry(token, 0.00001);
   assert.equal(result.eligible, false);

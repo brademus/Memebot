@@ -7,7 +7,7 @@ import {
   ADAPTIVE_EXIT_POLICY,
   adaptiveExitDecision,
   benchmarkExitDecision,
-  STRATEGY_NOTIONAL_USD,
+  STRATEGY_NOTIONAL_USD, strategyNotionalUsd,
   STRATEGY_VERSION,
   strategyRoleForSignal,
   StrategyExitEvaluation,
@@ -91,7 +91,7 @@ export function ensureStrategyLifecycleSchema(): Promise<string> {
       purpose: 'separate coin-quality selection, timed entry, and explainable adaptive exits',
       strategyVersion: STRATEGY_VERSION,
       qualityObservationsArePositions: false,
-      timedEntryNotionalUsd: STRATEGY_NOTIONAL_USD,
+      timedEntryNotionalUsd: strategyNotionalUsd(),
     })]);
     await pool.query(`ALTER TABLE paper_trades
       ADD COLUMN IF NOT EXISTS strategy_role TEXT NOT NULL DEFAULT 'legacy',
@@ -152,7 +152,7 @@ async function stampStrategyRows(epochAt: string) {
       strategy_version=$2,
       notional_usd=CASE WHEN signal='trigger' THEN $3 ELSE 0 END
     WHERE entry_at>=$1::timestamptz AND strategy_version IS DISTINCT FROM $2`,
-  [epochAt, STRATEGY_VERSION, STRATEGY_NOTIONAL_USD]);
+  [epochAt, STRATEGY_VERSION, strategyNotionalUsd()]);
 }
 
 async function recordDecision(input: {
@@ -309,7 +309,7 @@ async function recordMissingEntryBuyDecisions(epochAt: string) {
     const updated = await pool.query(`UPDATE paper_trades SET parent_observation_id=$2,entry_decision=$3::jsonb,
         notional_usd=$4
       WHERE id=$1 AND entry_decision IS NULL RETURNING id`,
-    [row.id, row.parent_id || null, JSON.stringify(decision), STRATEGY_NOTIONAL_USD]);
+    [row.id, row.parent_id || null, JSON.stringify(decision), strategyNotionalUsd()]);
     if (!updated.rowCount) continue;
     const inserted = await recordDecision({
       paperTradeId: Number(row.id), ca: row.ca, symbol: row.symbol, modelVersion: row.model_version,
@@ -408,7 +408,7 @@ async function closeFromEvaluation(row: any, token: TokenRecord | null, evaluati
   if (!pool || evaluation.action !== 'sell' || !evaluation.exitPrice) return;
   const role = strategyRoleForSignal(row.signal);
   const realizedPnlUsd = role === 'timed_entry'
-    ? Number(((evaluation.multiple - 1) * STRATEGY_NOTIONAL_USD).toFixed(2)) : null;
+    ? Number(((evaluation.multiple - 1) * strategyNotionalUsd()).toFixed(2)) : null;
   const decision = {
     stage: 'exit', decision: 'sell', role, reasonCode: evaluation.reasonCode,
     reasons: evaluation.reasons, deteriorationSignals: evaluation.deteriorationSignals,

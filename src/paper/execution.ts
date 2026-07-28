@@ -2,7 +2,7 @@ import { cfg } from '../config';
 import { ExecutionEvidence, TokenRecord } from '../types';
 import { clamp01, round } from '../model/math';
 import { rpcUrl, simulateTransaction } from './rpc-sim';
-import { getSolUsd } from '../state/sol-price';
+import { getSolUsd, solPriceAgeMs } from '../state/sol-price';
 import { curveQuoteExecutableEntry } from './curve-execution';
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
@@ -24,7 +24,14 @@ export const executionSettings = {
   get positionSol() {
     const solUsd = getSolUsd();
     if (solUsd > 0) return round(Math.min(5, Math.max(0.02, this.intendedNotionalUsd / solUsd)), 4);
-    return cfg().paper.position_sol;
+    return cfg().paper.position_sol;   // display/estimation only; probes fail closed via notionalSizingStatus
+  },
+  /** Probes must never prove a size that is not the reported notional: without a
+   *  fresh SOL/USD (15 min) the probe fails closed with a typed status instead of
+   *  silently reverting to the configured SOL amount. */
+  get notionalSizingStatus(): 'ok' | 'execution_notional_price_missing' | 'execution_notional_price_stale' {
+    if (!(getSolUsd() > 0)) return 'execution_notional_price_missing';
+    return solPriceAgeMs() < 15 * 60_000 ? 'ok' : 'execution_notional_price_stale';
   },
   get maxLiquidityPct() { return cfg().paper.max_liquidity_pct; },
   get minPositionUsd() { return cfg().paper.min_position_usd; },
@@ -151,6 +158,8 @@ export function executionVenue(token: TokenRecord): 'pumpfun_curve' | 'jupiter' 
 }
 
 export async function quoteExecutableEntry(token: TokenRecord, markPrice: number): Promise<ExecutableQuote> {
+  const sizing = executionSettings.notionalSizingStatus;
+  if (sizing !== 'ok') return failedEntry(sizing, Date.now());
   const startedAt = Date.now();
   if (!token.ca || !markPrice || markPrice <= 0) return failedEntry('invalid_mark', startedAt);
   if (executionVenue(token) === 'pumpfun_curve') return curveQuoteExecutableEntry(token, markPrice, startedAt);

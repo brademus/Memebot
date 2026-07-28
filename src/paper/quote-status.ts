@@ -21,6 +21,7 @@ export function quoteCategory(status: string | null | undefined): string {
   if (value === 'curve_sim_blocked_shadow_unfunded') return 'sim_blocked_unfunded';
   if (value === 'curve_shadow_wallet_missing') return 'missing_simulation_wallet';
   if (value === 'curve_rpc_missing') return 'missing_rpc';
+  if (value === 'execution_notional_price_missing' || value === 'execution_notional_price_stale') return 'sizing_price_unavailable';
   if (value === 'curve_probe_disabled') return 'research_only';
   if (value === 'curve_probe_rate_limited' || /http_429/.test(value)) return 'rate_limited';
   if (value.startsWith('curve_build_') || value === 'curve_sell_build_failed') return 'curve_build_failed';

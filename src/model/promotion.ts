@@ -156,7 +156,13 @@ async function refreshPromotionGate() {
         WHERE paper.model_version=$1 AND paper.execution_eligible=true AND paper.closed=true
           AND paper.exit_reason IS DISTINCT FROM 'tracking_lost'
           AND paper.position_usd>0 AND paper.quoted_out_amount IS NOT NULL
-          AND paper.exit_simulation_ok=true AND paper.exit_quoted_usd>0
+          AND paper.transaction_built=true AND paper.simulation_ok=true
+          AND paper.exit_transaction_built=true AND paper.exit_simulation_ok=true
+          AND paper.exit_quoted_usd>0
+          -- the execution-truth epoch is a hard wall: pre-repair executions (wrong
+          -- probe size, mark-based exits) can never re-enter the cohort; a missing
+          -- epoch row fails CLOSED to an empty cohort via COALESCE(now()).
+          AND paper.entry_at >= COALESCE((SELECT started_at FROM evidence_epochs WHERE name='execution_truth_v1'), now())
           AND paper.entry_at>now()-interval '30 days'
         ORDER BY paper.entry_at`,
       [MODEL_VERSION],
