@@ -8,6 +8,7 @@ import {
   STRATEGY_NOTIONAL_USD,
   STRATEGY_VERSION,
 } from '../paper/strategy-policy';
+import { entryRevalidationDiag } from '../scoring/entry-revalidation';
 
 const number = (value: unknown): number | null => {
   const parsed = Number(value);
@@ -122,8 +123,8 @@ export async function buildStrategyLifecycleReport(days = 1) {
       ORDER BY at,id LIMIT 5000`, [windowStart, STRATEGY_VERSION]),
     query('open timed entries', `SELECT id,ca,symbol,entry_at,entry_price,entry_score,parent_observation_id,
       entry_decision,last_price,peak_price,max_runup_pct,max_drawdown_pct,last_exit_evaluated_at,last_exit_evaluation
-      FROM paper_trades WHERE strategy_version=$2 AND strategy_role='timed_entry' AND closed=false
-      ORDER BY entry_at`, [windowStart, STRATEGY_VERSION]),
+      FROM paper_trades WHERE strategy_version=$1 AND strategy_role='timed_entry' AND closed=false
+      ORDER BY entry_at`, [STRATEGY_VERSION]),
     query('quality candidates without timed entry', `SELECT q.id,q.ca,q.symbol,q.signal,q.entry_at,q.entry_price,q.entry_score,
       q.quality_decision,q.closed,q.exit_reason,q.final_multiple,q.max_runup_pct,q.max_drawdown_pct,
       (SELECT jsonb_agg(jsonb_build_object('at',d.at,'decision',d.decision,'reasonCode',d.reason_code,
@@ -157,7 +158,7 @@ export async function buildStrategyLifecycleReport(days = 1) {
     },
     strategyDefinition: {
       qualitySelection: 'First decide whether the coin is worth further consideration using safety gates, score, grade, setup lane, flow, ownership, social, and smart-wallet evidence.',
-      entryTiming: 'Only create a timed $100 paper position after conviction hold, trade evidence, buyer persistence, anti-chase cooling, late-entry protection, source eligibility, and model allowance are satisfied.',
+      entryTiming: 'Only create a timed $100 paper position after conviction hold, trade evidence, buyer persistence, anti-chase cooling, source eligibility, model allowance, and final revalidation against the quality-selection price, liquidity, retention, and price continuity.',
       exitTiming: 'Protect the position with 3x/−50% hard boundaries, profit-locking trailing floors, emergency insider/liquidity exits, multi-signal deterioration exits, and a 24-hour time exit.',
       adaptiveExitPolicy: ADAPTIVE_EXIT_POLICY,
     },
@@ -185,11 +186,14 @@ export async function buildStrategyLifecycleReport(days = 1) {
       note: 'Market-path snapshots remain in the main trade ledger. This ledger stores explicit quality, entry-wait, buy, hold, and sell decisions with reasons and metrics.',
     },
     dataCompleteness: completenessRows[0] || {},
-    runtime: strategyLifecycleDiag(),
+    runtime: {
+      strategyLifecycle: strategyLifecycleDiag(),
+      entryRevalidation: entryRevalidationDiag(),
+    },
     queryErrors: errors,
     interpretationRules: [
       'A quality observation means the bot selected a coin for study; it is not a buy.',
-      'A timed entry means every entry-timing gate passed and a hypothetical $100 position opened.',
+      'A timed entry means every entry-timing gate and final quality revalidation passed before a hypothetical $100 position opened.',
       'parent_observation_id links the actual timed entry to the earlier quality-selection observation.',
       'Every final strategy exit stores its reason code, human-readable reasons, deterioration signals, metrics, notional, and realized hypothetical P&L.',
       'Entry wait/skip decisions explain why a selected coin was not bought immediately.',
