@@ -35,6 +35,8 @@ async function startLeaderWorker() {
   startStrategyLifecycle();
   const { startStrategyLedgerReconciler } = await import('./paper/strategy-ledger-reconciler');
   startStrategyLedgerReconciler();
+  const { startStrategyExtremaReconciler } = await import('./paper/strategy-extrema-reconciler');
+  startStrategyExtremaReconciler();
 
   const { startDatabaseMaintenance } = await import('./ops/db-maintenance');
   startDatabaseMaintenance();
