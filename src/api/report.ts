@@ -3,6 +3,7 @@ import { buildHistoricalReview } from './historical-review';
 import { buildMasterReview } from './master-review';
 import { buildReport as buildForwardReport } from './report-v2';
 import { buildSignalReport } from './signal-report';
+import { buildStrategyIntegrityReport } from './strategy-integrity-report';
 import { buildStrategyLifecycleReport } from './strategy-lifecycle-report';
 
 interface SectionResult {
@@ -42,13 +43,14 @@ async function runSection(
 export async function buildReport(days = 1) {
   // The complete review remains one copyable object, but no optional section may hold
   // the HTTP request open indefinitely. Each section degrades to an explicit error field.
-  const [base, signalStack, master, historical, cleanEvidence, strategyLifecycle] = await Promise.all([
+  const [base, signalStack, master, historical, cleanEvidence, strategyLifecycle, strategyIntegrity] = await Promise.all([
     runSection('base calibration report', () => buildForwardReport(days)),
     runSection('Signal Stack report', () => buildSignalReport(days)),
     runSection('daily trade review', () => buildMasterReview(days)),
     runSection('historical trade review', () => buildHistoricalReview()),
     runSection('clean post-repair evidence', () => buildCleanEvidence(days)),
     runSection('quality-entry-exit strategy lifecycle', () => buildStrategyLifecycleReport(days)),
+    runSection('strategy integrity and execution honesty', () => buildStrategyIntegrityReport(days)),
   ]);
 
   const masterRecord = master.value;
@@ -64,6 +66,7 @@ export async function buildReport(days = 1) {
     signalStack: signalStack.value,
     cleanEvidence: cleanEvidence.value,
     strategyLifecycle: strategyLifecycle.value,
+    strategyIntegrity: strategyIntegrity.value,
     ...masterRecord,
     ...historicalRecord,
     ...(overall ? { overall } : {}),
@@ -76,6 +79,7 @@ export async function buildReport(days = 1) {
         historical: { durationMs: historical.durationMs, timedOut: historical.timedOut },
         cleanEvidence: { durationMs: cleanEvidence.durationMs, timedOut: cleanEvidence.timedOut },
         strategyLifecycle: { durationMs: strategyLifecycle.durationMs, timedOut: strategyLifecycle.timedOut },
+        strategyIntegrity: { durationMs: strategyIntegrity.durationMs, timedOut: strategyIntegrity.timedOut },
       },
     },
   };
