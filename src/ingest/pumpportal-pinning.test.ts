@@ -85,3 +85,12 @@ test('a pinned pending key forces quiet-slot rotation even with no urgent keys',
   setPinnedKeysProvider(() => []);
   state.active.clear(); state.pendingKeys.clear();
 });
+
+test('only lively positions deserve pins: fresh price or young entry', async () => {
+  const { pinWorthy } = await import('../paper/open-positions-cache');
+  const now = Date.now();
+  assert.equal(pinWorthy(now - 5 * 60_000, null, now), true, 'young entry earns its chance');
+  assert.equal(pinWorthy(now - 60 * 60_000, now - 2 * 60_000, now), true, 'fresh price keeps the pin');
+  assert.equal(pinWorthy(now - 60 * 60_000, now - 45 * 60_000, now), false, 'stale price loses the pin');
+  assert.equal(pinWorthy(now - 60 * 60_000, null, now), false, 'no observation, no pin');
+});

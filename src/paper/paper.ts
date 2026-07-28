@@ -144,6 +144,19 @@ async function mark() {
     if (!(price > 0)) {
       const fallback = await recoverPaperMark(row.ca);
       if (!fallback) {
+        // BACKLOG RULE: a position that NEVER moved off its entry price and whose
+        // coin has been unobservable for a full day is not pending evidence — no
+        // revival we would want to record starts from 24h of silence at 1.00x
+        // (the aged/revival scanners would re-enter such a coin as a NEW entry
+        // anyway). Reap it immediately through the normal close path; the 6h
+        // grace remains for anything that ever showed life.
+        const neverMoved = !(Number(row.peak_price) > Number(row.entry_price));
+        const entryAgeMs = Date.now() - new Date(row.entry_at).getTime();
+        if (neverMoved && entryAgeMs > 24 * 3_600_000) {
+          noteTrackingLostAfterGrace();
+          await closeAt(row, token || null, null, 'tracking_lost');
+          continue;
+        }
         if (shouldDeclareTrackingLost(row.last_at || row.entry_at)) {
           noteTrackingLostAfterGrace();
           await closeAt(row, token || null, null, 'tracking_lost');
