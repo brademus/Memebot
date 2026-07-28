@@ -2,6 +2,7 @@ name: CI
 
 on:
   pull_request:
+    branches: [main]
   push:
     branches: [main]
 
@@ -9,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -52,6 +53,12 @@ jobs:
 
       - name: Jupiter built and simulated entry and exit tests
         run: node --test dist/paper/execution.test.js
+
+      - name: Pump.fun measured-fill parser tests
+        run: node --test dist/paper/curve-execution-measurement.test.js
+
+      - name: Evidence policy and paired-shadow tests
+        run: node --test dist/evidence/system-v3.test.js
 
       - name: Jupiter quote classification tests
         run: node --test dist/paper/quote-status.test.js
@@ -132,6 +139,8 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/memebot_test
+      NODE_ENV: test
+      SIMULATION_WALLET: 11111111111111111111111111111111
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -153,3 +162,6 @@ jobs:
 
       - name: Real Postgres paper persistence contract
         run: node --test dist/paper/persistence.integration.test.js
+
+      - name: Evidence policy and append-only journal contract
+        run: node --test dist/evidence/system-v3.integration.test.js
