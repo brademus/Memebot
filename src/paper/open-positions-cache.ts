@@ -11,7 +11,10 @@ import { getToken } from '../store';
  */
 const REFRESH_MS = 20_000;
 const PIN_PRICE_FRESH_MS = 30 * 60_000;
-const PIN_YOUNG_ENTRY_MS = 15 * 60_000;
+// Every entry gets its full decisive first hour of guaranteed coverage before the
+// lively test applies — dissolves the quiet-position circularity for the window
+// where exits are actually decided (review finding, amended not adopted wholesale).
+const PIN_YOUNG_ENTRY_MS = 60 * 60_000;
 const cache = new Map<string, number>();   // ca -> entry_at ms
 
 /**

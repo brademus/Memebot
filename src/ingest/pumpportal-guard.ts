@@ -16,6 +16,9 @@ const MAX_ACTIVE_TOKENS = Math.max(1, Math.min(100, Number(process.env.PUMPPORTA
 const MAX_PENDING_TOKENS = Math.max(40, Math.min(250, Number(process.env.PUMPPORTAL_MAX_PENDING_TOKENS || 250)));
 const PROVIDER_RETRY_MS = Math.max(60_000, Math.min(30 * 60_000, Number(process.env.PUMPPORTAL_PROVIDER_RETRY_MS || 5 * 60_000)));
 const QUIET_SLOT_LEASE_MS = Math.max(30_000, Math.min(60 * 60_000, Number(process.env.PUMPPORTAL_QUIET_SLOT_LEASE_MS || 2 * 60_000)));
+// A stream that produced events but has been silent this long is rotatable when
+// unpinned: one early event must not grant a paid slot for life (review finding).
+const ACTIVE_IDLE_LEASE_MS = Math.max(60_000, Math.min(60 * 60_000, Number(process.env.PUMPPORTAL_ACTIVE_IDLE_LEASE_MS || 10 * 60_000)));
 const ROTATION_INTERVAL_MS = Math.max(10_000, Math.min(5 * 60_000, Number(process.env.PUMPPORTAL_ROTATION_INTERVAL_MS || 30_000)));
 const ENTITLEMENT_WARNING_MS = Math.max(60_000, Math.min(15 * 60_000, Number(process.env.PUMPPORTAL_ENTITLEMENT_WARNING_MS || 2 * 60_000)));
 const MAINTENANCE_INTERVAL_MS = 15_000;
@@ -245,8 +248,10 @@ function rotateOneQuietSlot(socket: WebSocket, now: number) {
   if ((!state.urgentKeys.size && !pinnedPendingExists) || state.active.size < MAX_ACTIVE_TOKENS) return;
   if (state.lastRotationAt && now - state.lastRotationAt < ROTATION_INTERVAL_MS) return;
   const quiet = [...state.active.entries()]
-    .filter(([key, value]) => !pinned.has(key) && value.lastEventAt === null && now - value.subscribedAt >= QUIET_SLOT_LEASE_MS)
-    .sort((left, right) => left[1].subscribedAt - right[1].subscribedAt)[0];
+    .filter(([key, value]) => !pinned.has(key) && (value.lastEventAt === null
+      ? now - value.subscribedAt >= QUIET_SLOT_LEASE_MS
+      : now - value.lastEventAt >= ACTIVE_IDLE_LEASE_MS))
+    .sort((left, right) => (left[1].lastEventAt ?? left[1].subscribedAt) - (right[1].lastEventAt ?? right[1].subscribedAt))[0];
   if (!quiet) return;
   unsubscribe(socket, [quiet[0]]);
   state.active.delete(quiet[0]);

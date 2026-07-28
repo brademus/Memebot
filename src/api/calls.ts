@@ -132,14 +132,26 @@ export async function buildCallsDashboard() {
   // from the same evidence_epochs row the lifecycle report keys on, so this
   // board and the report can never disagree.
   let epochAt: string | null = null;
-  try { epochAt = await ensureStrategyPolicyEpoch(); } catch { /* epoch table unavailable: fall back to all-time below */ }
+  try { epochAt = await ensureStrategyPolicyEpoch(); } catch { /* fail closed below */ }
+  if (!epochAt) {
+    // FAIL CLOSED (review finding): an unverifiable epoch must never silently
+    // widen the board to contaminated all-time history.
+    return {
+      normalizedStakeUsd: NORMALIZED_STAKE_USD,
+      summary: emptySummary(),
+      cohort: 'unavailable_evidence_epoch_unverified',
+      epochAt: null,
+      current: [], winners: [], breakevens: [], losers: [], unresolved: [],
+      note: 'Cohort unavailable: the evidence epoch could not be verified. Showing nothing rather than mixed-era history.',
+    };
+  }
   const result = await pool.query<PaperCallRow>(`
     SELECT ca,symbol,signal,entry_at,entry_score,entry_price,peak_price,last_price,last_at,
            exit_price,exit_at,exit_reason,closed,execution_eligible,quote_status,target_hit_at,
            observed_target_hit_at,position_usd
       FROM paper_trades
      WHERE signal=$1 AND strategy_role='timed_entry'
-       AND entry_at >= COALESCE($2::timestamptz, to_timestamp(0))
+       AND entry_at >= $2::timestamptz
      ORDER BY entry_at DESC
      LIMIT 1000`, [BUY_ALERT_SIGNAL, epochAt]);
 

@@ -94,3 +94,19 @@ test('only lively positions deserve pins: fresh price or young entry', async () 
   assert.equal(pinWorthy(now - 60 * 60_000, now - 45 * 60_000, now), false, 'stale price loses the pin');
   assert.equal(pinWorthy(now - 60 * 60_000, null, now), false, 'no observation, no pin');
 });
+
+test('an unpinned stream idle past the active lease is rotatable; one event is not a life lease', () => {
+  const { state } = guard;
+  state.active.clear(); state.pendingKeys.clear(); state.urgentKeys.clear();
+  const now = Date.now();
+  setPinnedKeysProvider(() => []);
+  state.urgentKeys.set('NEWCOMER_2', now);
+  state.active.set('HAD_ONE_EVENT_LONG_AGO', { subscribedAt: now - 60 * 60_000, lastEventAt: now - 20 * 60_000 });
+  for (let index = 0; state.active.size < 40; index++) {
+    state.active.set(`FILL3_${index}`, { subscribedAt: now, lastEventAt: now });
+  }
+  state.lastRotationAt = 0;
+  guard.rotateOneQuietSlot(fakeSocket, now);
+  assert.equal(state.active.has('HAD_ONE_EVENT_LONG_AGO'), false, 'idle-active stream must rotate out');
+  state.active.clear(); state.urgentKeys.clear();
+});

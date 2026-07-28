@@ -281,8 +281,8 @@ function renderResults() {
   const closedPnl = Number(summary.closedPnlUsd || 0);
   $('resultStats').innerHTML = stat('Overall hypothetical P&L', money(closedPnl), closedPnl >= 0 ? 'positive' : 'negative')
     + stat('Overall return', percent(summary.closedReturnPct), Number(summary.closedReturnPct) >= 0 ? 'positive' : 'negative')
-    + stat('Win rate', summary.winRatePct == null ? '—' : `${Number(summary.winRatePct).toFixed(1)}%`)
-    + stat('Wins / flat / losses', `${winners.length} / ${breakevens.length} / ${losers.length}`)
+    + stat('Win rate (ex-flats)', summary.winRatePct == null ? '—' : `${Number(summary.winRatePct).toFixed(1)}%`)
+    + stat('Wins / mark-flat / losses', `${winners.length} / ${breakevens.length} / ${losers.length}`)
     + stat('Resolved calls', summary.resolvedCalls || 0)
     + stat('Capital modeled', `$${fmt(summary.normalizedCapitalDeployedUsd || 0)}`);
 
