@@ -3,13 +3,18 @@ import { pool } from '../db';
 
 // PumpPortal bills 0.01 SOL per 10,000 paid trade messages. Railway variables may
 // lower these ceilings, but cannot raise them above the conservative hard limits.
+// BUDGET TARGET (user-set 2026-07-28): ~$10/week of paid data. At 0.01 SOL per
+// 10,000 messages and SOL ~$75: $10/week = 0.133 SOL/week = 19,000 events/day.
+// Events are the true unit — the dollar figure drifts with SOL's price. The clamp
+// ceilings below allow env-var headroom to ~1.5x the target but make runaway
+// spend impossible regardless of configuration mistakes.
 export const PUMPPORTAL_DAILY_PAID_EVENT_LIMIT = Math.max(
   250,
-  Math.min(4_000, Number(process.env.PUMPPORTAL_DAILY_PAID_EVENT_LIMIT || 4_000)),
+  Math.min(30_000, Number(process.env.PUMPPORTAL_DAILY_PAID_EVENT_LIMIT || 19_000)),
 );
 export const PUMPPORTAL_ROLLING_14D_EVENT_LIMIT = Math.max(
   PUMPPORTAL_DAILY_PAID_EVENT_LIMIT,
-  Math.min(50_000, Number(process.env.PUMPPORTAL_ROLLING_14D_EVENT_LIMIT || 50_000)),
+  Math.min(420_000, Number(process.env.PUMPPORTAL_ROLLING_14D_EVENT_LIMIT || 266_000)),
 );
 export const PUMPPORTAL_RESERVATION_BLOCK_EVENTS = Math.max(
   50,

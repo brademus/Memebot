@@ -28,6 +28,8 @@ let backoff = 1000;
 let connectionAttempts = 0;
 let successfulConnections = 0;
 let reconnects = 0;
+let lastEntitlementCycleAt = 0;
+let entitlementCycles = 0;
 let lastSocketOpenAt: number | null = null;
 let lastMessageAt: number | null = null;
 let lastTradeAt: number | null = null;
@@ -144,6 +146,7 @@ export const pumpfunStreamDiag = () => {
       attempts: connectionAttempts,
       successfulConnections,
       reconnects,
+      entitlementCycles,
       lastSocketOpenAt: iso(lastSocketOpenAt),
       lastMessageAt: iso(lastMessageAt),
       lastSocketErrorAt: iso(lastSocketErrorAt),
@@ -323,7 +326,32 @@ function sendSubscription(method: string, keys?: string[]): boolean {
   }
 }
 
-export function startPumpfunMonitor(onNew: (ca: string) => void) { connect(onNew); }
+export function startPumpfunMonitor(onNew: (ca: string) => void) {
+  connect(onNew);
+  // SELF-HEALING RECONNECT: PumpPortal evaluates paid-data entitlement when the
+  // websocket CONNECTS. A session opened while the funding wallet was empty stays
+  // restricted even after a top-up — free channels (creates/migrations) keep
+  // flowing while the paid trade channel is silent, and nothing recovers until
+  // the socket cycles. Observed live 2026-07-28: user funded the wallet, session
+  // stayed trade-silent for hours. If the paid-silent signature persists on a
+  // connection older than 20 minutes, cycle the socket (at most once per 30
+  // minutes) so a fresh entitlement check runs against the current balance.
+  const cycler = setInterval(() => {
+    try {
+      if (!ws || ws.readyState !== 1 || !tradeStreamConfigured) return;
+      const now = Date.now();
+      const socketAgeMs = lastSocketOpenAt ? now - lastSocketOpenAt : 0;
+      const paidSilent = createMessages > 0 && lastTradeAt === null;
+      if (!paidSilent || socketAgeMs < 20 * 60_000) return;
+      if (now - lastEntitlementCycleAt < 30 * 60_000) return;
+      lastEntitlementCycleAt = now;
+      entitlementCycles++;
+      console.warn('[pumpfun] paid trade channel silent while free channels deliver — cycling socket to re-check entitlement against the current PumpPortal wallet balance');
+      ws.close();
+    } catch { /* never let the cycler crash the monitor */ }
+  }, 60_000);
+  cycler.unref();
+}
 
 function connect(onNew: (ca: string) => void) {
   connectionAttempts++;
