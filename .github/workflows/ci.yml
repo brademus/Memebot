@@ -117,7 +117,7 @@ jobs:
           retention-days: 7
 
       - name: Dashboard JavaScript syntax
-        run: node --check public/app.js && node --check public/no-admin.js && node --check public/daily-review.js && node --check public/observed-wins.js
+        run: node --check public/app.js && node --check public/market-mode.js && node --check public/no-admin.js && node --check public/daily-review.js && node --check public/observed-wins.js
 
   postgres-persistence:
     needs: build-and-test
