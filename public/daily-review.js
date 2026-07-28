@@ -57,7 +57,7 @@ function dailyReviewShowDownload(blob, filename) {
   dailyReviewCopyButton.onclick = () => {
     const link = document.createElement('a');
     link.href = dailyReviewArchiveUrl;
-    link.download = filename || 'memebot-daily-master-review.zip';
+    link.download = filename || 'memebot-master-review-all-time.zip';
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -122,7 +122,7 @@ async function runDailyMasterReview() {
       `Download size: ${dailyReviewBytes(job.archiveBytes)}`,
       '',
       'Tap “Download ZIP” above, then upload that ZIP file directly into this ChatGPT conversation.',
-      'The archive contains daily-master-review.json with the complete review.',
+      'The archive contains master-review-all-time.json with the complete review.',
     ].join('\n');
   } catch (error) {
     lastToolText = '';

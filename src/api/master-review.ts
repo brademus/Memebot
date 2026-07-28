@@ -224,7 +224,11 @@ export async function buildMasterReview(days = 3650) {
   // all-time ledger lists every trade ever) so the archive stays buildable as
   // history grows instead of becoming a half-gigabyte file within weeks.
   const boundedDays = Math.max(1, Math.min(3650, days));
-  const telemetryDays = Math.min(boundedDays, 7);
+  // measured 2026-07-28: ONE day of full telemetry = 48.9 MB of JSON; seven days
+  // would push the archive toward half a gigabyte and risk the builder's memory.
+  // Two days keeps deep forensics for the freshest 48h at a buildable size; the
+  // compact allTimeTradeLedger still lists every trade ever.
+  const telemetryDays = Math.min(boundedDays, 2);
   if (!pool) return {
     reportType: 'all_time_master_review', generated, reportWindow: 'all time',
     note: 'No database attached; complete trade and outcome evidence is unavailable.',
@@ -427,7 +431,7 @@ export async function buildMasterReview(days = 3650) {
     reportType: 'all_time_master_review',
     generated,
     currentModelVersion: MODEL_VERSION,
-    reportWindow: { days: boundedDays, description: 'Complete history: every trade, outcome, suggestion, and evidence aggregate the bot has ever recorded. Full per-trade telemetry covers the most recent 7 days; allTimeTradeLedger lists every trade ever in compact form.' },
+    reportWindow: { days: boundedDays, description: 'Complete history: every trade, outcome, suggestion, and evidence aggregate the bot has ever recorded. Full per-trade telemetry covers the most recent 2 days; allTimeTradeLedger lists every trade ever in compact form.' },
     copyInstructions: 'Copy this entire JSON. It contains daily operating evidence, cumulative results, every trade, entry/exit rationale, execution evidence, and a compact decision-relevant market path.',
     windowTradeSummary: dailySummaryRows[0] || {},   // all-time window (mirrors overall.tradeSummary)
     overall: {
@@ -455,7 +459,7 @@ export async function buildMasterReview(days = 3650) {
       externalNetworkCallsDuringReport: false,
     },
     interpretationRules: [
-      'recentTradeLedgerFullDetail carries complete telemetry for trades touching the last 7 days; allTimeTradeLedger lists every trade the bot has ever made in compact form; all aggregates span full history.',
+      'recentTradeLedgerFullDetail carries complete telemetry for trades touching the last 2 days; allTimeTradeLedger lists every trade the bot has ever made in compact form; all aggregates span full history.',
       'Every historical trade is included in allTimeTradeLedger from the historical section.',
       'recordedReasons are extracted only from persisted signal, conviction, trigger, rank, and model evidence.',
       'tracking_lost rows are excluded from profitability calculations rather than silently counted as wins or losses.',

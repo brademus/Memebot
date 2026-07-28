@@ -55,7 +55,7 @@ test('report jobs return immediately and reconstruct an exact downloadable ZIP f
   assert.ok(ready.totalChunks > 1);
   assert.ok(ready.resultBytes > 0);
   assert.ok(ready.archiveBytes > 0);
-  assert.match(ready.downloadFilename || '', /^memebot-daily-master-review-\d{4}-\d{2}-\d{2}\.zip$/);
+  assert.match(ready.downloadFilename || '', /^memebot-master-review-all-time-\d{4}-\d{2}-\d{2}\.zip$/);
 
   const chunks: Buffer[] = [];
   for (let index = 0; index < ready.totalChunks; index++) {
@@ -69,7 +69,7 @@ test('report jobs return immediately and reconstruct an exact downloadable ZIP f
   const archive = Buffer.concat(chunks);
   assert.equal(archive.length, ready.archiveBytes);
   const extracted = extractSingleZipFile(archive);
-  assert.equal(extracted.filename, 'daily-master-review.json');
+  assert.equal(extracted.filename, 'master-review-all-time.json');
   assert.deepEqual(JSON.parse(extracted.content.toString('utf8')), { ...payload, days: 1 });
   assert.equal(manager.getChunk(started.id, ready.totalChunks), null);
 });

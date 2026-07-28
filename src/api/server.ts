@@ -145,7 +145,8 @@ export function startServer() {
   });
 
   app.post('/api/daily-review-jobs', expensiveApiLimit, adminOnly, (req, res) => {
-    const days = Math.min(7, Math.max(1, parseInt(String(req.query.days || '1'), 10) || 1));
+    // all-time by default (the master review covers full history); explicit ?days=N still honored
+    const days = Math.min(3650, Math.max(1, parseInt(String(req.query.days || '3650'), 10) || 3650));
     res.status(202).json(reportJobs.start(days));
   });
 
