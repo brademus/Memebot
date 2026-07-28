@@ -75,3 +75,18 @@ test('tracking gaps are unresolved rather than forced into wins or losses', () =
   assert.equal(call.status, 'unresolved');
   assert.equal(call.pnlPct, 30);
 });
+
+test('closes within ±0.1% of entry are breakeven scratches, not losses', () => {
+  const scratch = normalizeDashboardCall({
+    ...row(), closed: true, exit_price: 0.0009995, entry_price: 0.001, peak_price: null, last_price: null, exit_reason: 'strategy_multi_signal_deterioration_exit',
+  } as any);
+  assert.equal(scratch.status, 'breakeven');
+  const realLoss = normalizeDashboardCall({
+    ...row(), closed: true, exit_price: 0.0005, entry_price: 0.001, peak_price: null, last_price: null, exit_reason: 'strategy_multi_signal_deterioration_exit',
+  } as any);
+  assert.equal(realLoss.status, 'loss');
+  const realWin = normalizeDashboardCall({
+    ...row(), closed: true, exit_price: 0.0015, entry_price: 0.001, peak_price: null, last_price: null, exit_reason: 'strategy_profit_lock_exit_1_5x',
+  } as any);
+  assert.equal(realWin.status, 'win');
+});

@@ -1,9 +1,13 @@
 import { pool } from '../db';
+import { ensureStrategyPolicyEpoch } from '../paper/strategy-policy-epoch';
 
 const NORMALIZED_STAKE_USD = 100;
 export const BUY_ALERT_SIGNAL = 'trigger' as const;
 
-export type CallStatus = 'open' | 'win' | 'loss' | 'unresolved';
+export type CallStatus = 'open' | 'win' | 'breakeven' | 'loss' | 'unresolved';
+// A close within ±0.1% of entry is a controlled scratch (the deterioration exit's
+// job), not a loss — counting scratches as losses buried the real hit rate.
+const BREAKEVEN_BAND = 0.001;
 
 export interface PaperCallRow {
   ca: string;
@@ -75,9 +79,11 @@ export function normalizeDashboardCall(row: PaperCallRow): DashboardCall {
     ? 'open'
     : unresolved
       ? 'unresolved'
-      : multiple > 1
+      : multiple > 1 + BREAKEVEN_BAND
         ? 'win'
-        : 'loss';
+        : multiple < 1 - BREAKEVEN_BAND
+          ? 'loss'
+          : 'breakeven';
 
   return {
     ca: row.ca,
@@ -119,24 +125,31 @@ export async function buildCallsDashboard() {
     };
   }
 
-  // A Current Call begins only when the entry gate emits the one BUY ALERT. Old
-  // post-alert `conviction` observations and pre-alert `bb_*` research lanes are
-  // deliberately excluded, even if those historical rows still exist in Postgres.
+  // REAL WINS AND LOSSES ONLY (user-directed 2026-07-28): the board shows the
+  // same honest cohort as the strategy reports — actual timed entries since the
+  // clean-slate epoch. Research observations, model shadows, and every earlier
+  // era (including the coverage-week wreckage) are excluded. The epoch comes
+  // from the same evidence_epochs row the lifecycle report keys on, so this
+  // board and the report can never disagree.
+  let epochAt: string | null = null;
+  try { epochAt = await ensureStrategyPolicyEpoch(); } catch { /* epoch table unavailable: fall back to all-time below */ }
   const result = await pool.query<PaperCallRow>(`
     SELECT ca,symbol,signal,entry_at,entry_score,entry_price,peak_price,last_price,last_at,
            exit_price,exit_at,exit_reason,closed,execution_eligible,quote_status,target_hit_at,
            observed_target_hit_at,position_usd
       FROM paper_trades
-     WHERE signal=$1
+     WHERE signal=$1 AND strategy_role='timed_entry'
+       AND entry_at >= COALESCE($2::timestamptz, to_timestamp(0))
      ORDER BY entry_at DESC
-     LIMIT 1000`, [BUY_ALERT_SIGNAL]);
+     LIMIT 1000`, [BUY_ALERT_SIGNAL, epochAt]);
 
   const calls = result.rows.map(normalizeDashboardCall);
   const current = calls.filter(call => call.status === 'open');
   const winners = calls.filter(call => call.status === 'win');
+  const breakevens = calls.filter(call => call.status === 'breakeven');
   const losers = calls.filter(call => call.status === 'loss');
   const unresolved = calls.filter(call => call.status === 'unresolved');
-  const resolved = [...winners, ...losers];
+  const resolved = [...winners, ...breakevens, ...losers];
 
   const closedPnlUsd = resolved.reduce((sum, call) => sum + call.normalizedPnlUsd, 0);
   const openPnlUsd = current.reduce((sum, call) => sum + call.normalizedPnlUsd, 0);
@@ -150,17 +163,22 @@ export async function buildCallsDashboard() {
       currentCalls: current.length,
       resolvedCalls: resolved.length,
       wins: winners.length,
+      breakeven: breakevens.length,
       losses: losers.length,
       unresolved: unresolved.length,
-      winRatePct: resolved.length ? round((winners.length / resolved.length) * 100, 1) : null,
+      // decided outcomes only: scratches are neither wins nor losses
+      winRatePct: (winners.length + losers.length) ? round((winners.length / (winners.length + losers.length)) * 100, 1) : null,
       closedPnlUsd: round(closedPnlUsd, 2),
       closedReturnPct: closedCapitalUsd ? round((closedPnlUsd / closedCapitalUsd) * 100, 1) : null,
       openPnlUsd: round(openPnlUsd, 2),
       openReturnPct: openCapitalUsd ? round((openPnlUsd / openCapitalUsd) * 100, 1) : null,
       normalizedCapitalDeployedUsd: closedCapitalUsd,
     },
+    cohort: 'timed_entries_since_clean_epoch',
+    epochAt,
     current,
     winners,
+    breakevens,
     losers,
     unresolved,
   };
@@ -172,6 +190,7 @@ function emptySummary() {
     currentCalls: 0,
     resolvedCalls: 0,
     wins: 0,
+    breakeven: 0,
     losses: 0,
     unresolved: 0,
     winRatePct: null,
