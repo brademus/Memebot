@@ -70,7 +70,7 @@ async function runDailyMasterReview() {
   dailyReviewButton.disabled = true;
   dailyReviewRestoreCopyButton();
   lastToolText = '';
-  dailyReviewOutput.textContent = 'Starting the Daily Master Review ZIP job…';
+  dailyReviewOutput.textContent = 'Starting the all-time Master Review ZIP job…';
   dailyReviewOutput.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
   try {
@@ -79,7 +79,7 @@ async function runDailyMasterReview() {
 
     while (job.status === 'queued' || job.status === 'building') {
       dailyReviewOutput.textContent = [
-        'Building and compressing the complete Daily Master Review on the server.',
+        'Building and compressing the complete all-time Master Review on the server.',
         job.message || 'Collecting evidence…',
         `Elapsed: ${job.elapsedSeconds || 0}s`,
         'The phone will receive a ZIP file instead of rendering the large JSON.',
@@ -96,7 +96,7 @@ async function runDailyMasterReview() {
     let archiveBytesReceived = 0;
     for (let index = 0; index < job.totalChunks; index++) {
       dailyReviewOutput.textContent = [
-        `Daily Master Review compressed: ${dailyReviewBytes(job.resultBytes)} → ${dailyReviewBytes(job.archiveBytes)} ZIP.`,
+        `Master Review (all time) compressed: ${dailyReviewBytes(job.resultBytes)} → ${dailyReviewBytes(job.archiveBytes)} ZIP.`,
         `Receiving ZIP part ${index + 1} of ${job.totalChunks}…`,
       ].join('\n');
       const result = await dailyReviewJson(

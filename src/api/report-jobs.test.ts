@@ -33,7 +33,7 @@ function extractSingleZipFile(archive: Buffer) {
 
 test('report jobs return immediately and reconstruct an exact downloadable ZIP from chunks', async () => {
   const payload = {
-    reportType: 'daily_master_review',
+    reportType: 'all_time_master_review',
     text: 'trade-evidence-🚀',
     incompressibleEvidence: randomBytes(220_000).toString('base64'),
     trades: Array.from({ length: 25 }, (_, index) => ({ index, reason: `reason-${index}` })),

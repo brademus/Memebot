@@ -136,8 +136,8 @@ test('fresh database leadership, paper, report and forward evidence SQL contract
 
     const dailyReview = await buildMasterReview(1);
     const dailyErrors = dailyReview.queryErrors || [];
-    assert.ok(Array.isArray(dailyReview.tradeLedger));
-    assert.ok(dailyReview.tradeLedger.some((trade: any) => trade.contractAddress === ca));
+    assert.ok(Array.isArray(dailyReview.recentTradeLedgerFullDetail));
+    assert.ok(dailyReview.recentTradeLedgerFullDetail.some((trade: any) => trade.contractAddress === ca));
     assert.equal(
       dailyErrors.some((error: string) => error.startsWith('daily trade ledger:')),
       false,

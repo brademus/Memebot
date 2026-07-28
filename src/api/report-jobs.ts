@@ -78,9 +78,9 @@ export class ReportJobManager {
     this.maxRetainedJobs = Math.max(1, options.maxRetainedJobs || DEFAULT_MAX_RETAINED_JOBS);
   }
 
-  start(days = 1): ReportJobSummary {
+  start(days = 3650): ReportJobSummary {
     this.cleanup();
-    const boundedDays = Math.max(1, Math.min(7, Math.floor(days) || 1));
+    const boundedDays = Math.max(1, Math.min(3650, Math.floor(days) || 3650));
     const active = this.activeJobId ? this.jobs.get(this.activeJobId) : null;
     if (active && (active.status === 'queued' || active.status === 'building')) {
       return { ...this.summary(active), reused: true };

@@ -216,11 +216,17 @@ function normalizeTrade(row: any, snapshots: any[], events: any[], wallets: any[
   };
 }
 
-export async function buildMasterReview(days = 1) {
+export async function buildMasterReview(days = 3650) {
   const generated = new Date().toISOString();
-  const boundedDays = Math.max(1, Math.min(7, days));
+  // ALL-TIME by default (user-directed 2026-07-28): the report covers everything the
+  // bot has ever done. Aggregates, ledgers, and evidence sections span full history;
+  // FULL per-trade telemetry is carried only for the most recent 7 days (the compact
+  // all-time ledger lists every trade ever) so the archive stays buildable as
+  // history grows instead of becoming a half-gigabyte file within weeks.
+  const boundedDays = Math.max(1, Math.min(3650, days));
+  const telemetryDays = Math.min(boundedDays, 7);
   if (!pool) return {
-    reportType: 'daily_master_review', generated, dailyWindow: `last ${boundedDays} day(s)`,
+    reportType: 'all_time_master_review', generated, reportWindow: 'all time',
     note: 'No database attached; complete trade and outcome evidence is unavailable.',
   };
 
@@ -267,7 +273,7 @@ export async function buildMasterReview(days = 1) {
     LEFT JOIN signal_decisions d ON d.id=p.signal_decision_id
     WHERE p.entry_at>now()-($1||' days')::interval
        OR p.exit_at>now()-($1||' days')::interval OR p.closed=false
-    ORDER BY p.entry_at`, [windowParameter]);
+    ORDER BY p.entry_at`, [String(telemetryDays)]);   // full telemetry: recent slice only
 
   const tradeIds = trades.map(row => Number(row.id)).filter(Number.isFinite);
   const contracts = [...new Set(trades.map(row => String(row.ca)).filter(Boolean))];
@@ -398,10 +404,10 @@ export async function buildMasterReview(days = 1) {
       COUNT(*) FILTER (WHERE execution_eligible)::int AS execution_eligible,
       COUNT(*) FILTER (WHERE closed AND exit_reason='tracking_lost')::int AS tracking_lost
       FROM paper_trades`),
-    query('filter tuning log', `SELECT * FROM filter_tuning_log WHERE at>now()-($1||' days')::interval ORDER BY at DESC`, [windowParameter]),
-    query('weight tuning log', `SELECT * FROM weight_tuning_log WHERE at>now()-($1||' days')::interval ORDER BY at DESC`, [windowParameter]),
-    query('model suggestions', `SELECT * FROM model_suggestions WHERE created_at>now()-($1||' days')::interval ORDER BY created_at DESC`, [windowParameter]),
-    query('AI review history', `SELECT at,review FROM ai_reviews WHERE at>now()-($1||' days')::interval ORDER BY at DESC`, [windowParameter]),
+    query('filter tuning log', `SELECT * FROM filter_tuning_log WHERE at>now()-($1||' days')::interval ORDER BY at DESC LIMIT 300`, [windowParameter]),
+    query('weight tuning log', `SELECT * FROM weight_tuning_log WHERE at>now()-($1||' days')::interval ORDER BY at DESC LIMIT 300`, [windowParameter]),
+    query('model suggestions', `SELECT * FROM model_suggestions WHERE created_at>now()-($1||' days')::interval ORDER BY created_at DESC LIMIT 300`, [windowParameter]),
+    query('AI review history', `SELECT at,review FROM ai_reviews WHERE at>now()-($1||' days')::interval ORDER BY at DESC LIMIT 100`, [windowParameter]),
     query('database-only missed opportunities', `SELECT t.ca,t.symbol,t.source,t.first_seen,t.gate_result,t.gate_fail_reason,
       t.last_score,ROUND(MAX(o.multiple_from_first)::numeric,2) AS best_multiple
       FROM tokens t JOIN outcomes o ON o.ca=t.ca
@@ -418,19 +424,19 @@ export async function buildMasterReview(days = 1) {
   };
 
   return {
-    reportType: 'daily_master_review',
+    reportType: 'all_time_master_review',
     generated,
     currentModelVersion: MODEL_VERSION,
-    dailyWindow: { days: boundedDays, description: `Entries, exits, and all still-open calls relevant to the last ${boundedDays} day(s).` },
+    reportWindow: { days: boundedDays, description: 'Complete history: every trade, outcome, suggestion, and evidence aggregate the bot has ever recorded. Full per-trade telemetry covers the most recent 7 days; allTimeTradeLedger lists every trade ever in compact form.' },
     copyInstructions: 'Copy this entire JSON. It contains daily operating evidence, cumulative results, every trade, entry/exit rationale, execution evidence, and a compact decision-relevant market path.',
-    dailyTradeSummary: dailySummaryRows[0] || {},
+    windowTradeSummary: dailySummaryRows[0] || {},   // all-time window (mirrors overall.tradeSummary)
     overall: {
       tradeSummary: overallRows[0] || {},
       performanceBySetup,
       performanceBySource,
       performanceBySignal,
     },
-    tradeLedger,
+    recentTradeLedgerFullDetail: tradeLedger,
     dailyConfigSnapshotsById,
     missedOpportunities,
     evidenceCompleteness: dataQualityRows[0] || {},
@@ -439,7 +445,7 @@ export async function buildMasterReview(days = 1) {
       helius: heliusHealth(), walletDiscovery: discoveryDiag(), walletWebhook: webhookDiag(),
       winnerMiner: winnerMinerDiag(), paper: await paperDiag(), callTelemetry: await paperTelemetryDiag(),
     },
-    changesDuringDailyWindow: { filterTuning, weightTuning, modelSuggestions, aiReviews },
+    changesDuringWindow: { filterTuning, weightTuning, modelSuggestions, aiReviews },
     configInForce: cfg(),
     queryErrors: errors,
     payloadPolicy: {
@@ -449,7 +455,7 @@ export async function buildMasterReview(days = 1) {
       externalNetworkCallsDuringReport: false,
     },
     interpretationRules: [
-      'Every paper trade opened in the daily window, closed in the daily window, or still open is included in tradeLedger.',
+      'recentTradeLedgerFullDetail carries complete telemetry for trades touching the last 7 days; allTimeTradeLedger lists every trade the bot has ever made in compact form; all aggregates span full history.',
       'Every historical trade is included in allTimeTradeLedger from the historical section.',
       'recordedReasons are extracted only from persisted signal, conviction, trigger, rank, and model evidence.',
       'tracking_lost rows are excluded from profitability calculations rather than silently counted as wins or losses.',
