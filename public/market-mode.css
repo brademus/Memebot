@@ -1,0 +1,211 @@
+/* Market-mode switch and Nasdaq visual system. Layout stays shared with the memecoin dashboard. */
+.marketSwitch {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: min(270px, 32vw);
+  min-width: 226px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(10, 14, 20, .86);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .03);
+}
+
+.marketSwitch button {
+  position: relative;
+  z-index: 1;
+  min-height: 34px;
+  padding: 7px 13px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dim);
+  font: 700 10px/1 "JetBrains Mono", monospace;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color 180ms ease, background 180ms ease, box-shadow 180ms ease;
+}
+
+.marketSwitch button:hover { color: var(--text); }
+.marketSwitch button.active {
+  background: var(--amber-wash);
+  color: var(--amber-2);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--amber) 48%, transparent);
+}
+
+body,
+header,
+.focusTile,
+.callCard,
+.adminTools button,
+.toolPanel,
+.decisionFlow,
+.stat,
+.empty {
+  transition: background-color 220ms ease, border-color 220ms ease, color 220ms ease, box-shadow 220ms ease;
+}
+
+body[data-market="nasdaq"] {
+  --bg: #020713;
+  --bg-soft: #050c19;
+  --panel: #071221;
+  --panel-2: #0a1a2d;
+  --panel-3: #0e233a;
+  --line: #18344f;
+  --line-bright: #2e658f;
+  --text: #f3f8ff;
+  --muted: #8da5bd;
+  --dim: #5d7893;
+  --amber: #35d8ff;
+  --amber-2: #8aecff;
+  --amber-wash: rgba(53, 216, 255, .11);
+  --green: #2be6a6;
+  --green-wash: rgba(43, 230, 166, .09);
+  --red: #ff6682;
+  --red-wash: rgba(255, 102, 130, .09);
+  font-family: "Space Grotesk", Inter, system-ui, sans-serif;
+  background:
+    radial-gradient(circle at 78% -12%, rgba(53, 216, 255, .18), transparent 32rem),
+    radial-gradient(circle at 4% 26%, rgba(43, 230, 166, .08), transparent 28rem),
+    linear-gradient(180deg, #020713 0%, #030914 48%, #020610 100%);
+}
+
+body[data-market="nasdaq"] header {
+  border-bottom-color: rgba(35, 91, 130, .72);
+  background: rgba(2, 7, 19, .9);
+}
+
+body[data-market="nasdaq"] .brand {
+  font-family: "Space Grotesk", sans-serif;
+  letter-spacing: -.045em;
+}
+
+body[data-market="nasdaq"] .brand span { color: var(--amber); }
+body[data-market="nasdaq"] .marketSwitch { background: rgba(4, 13, 27, .9); }
+
+body[data-market="nasdaq"] .live,
+body[data-market="nasdaq"] .hero p,
+body[data-market="nasdaq"] .title p,
+body[data-market="nasdaq"] .tag,
+body[data-market="nasdaq"] .decisionFlow,
+body[data-market="nasdaq"] .focusTile strong,
+body[data-market="nasdaq"] .title h1 span,
+body[data-market="nasdaq"] .stat b,
+body[data-market="nasdaq"] .metric b,
+body[data-market="nasdaq"] .toolPanel pre,
+body[data-market="nasdaq"] .marketSwitch button {
+  font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+}
+
+body[data-market="nasdaq"] .hero h1,
+body[data-market="nasdaq"] .title h1,
+body[data-market="nasdaq"] .focusTile h2,
+body[data-market="nasdaq"] .sectionHeading h2,
+body[data-market="nasdaq"] .adminTools b {
+  font-family: "Space Grotesk", sans-serif;
+}
+
+body[data-market="nasdaq"] .decisionFlow {
+  border-color: #164360;
+  background: rgba(5, 20, 36, .76);
+}
+
+body[data-market="nasdaq"] .focusTile {
+  background:
+    linear-gradient(145deg, rgba(10, 29, 49, .97), rgba(4, 13, 26, .99));
+}
+
+body[data-market="nasdaq"] .focusTile.nasdaqPrimary {
+  grid-column: 1 / -1;
+  min-height: 275px;
+  border-color: #19688c;
+  background:
+    radial-gradient(circle at 88% 10%, rgba(53, 216, 255, .22), transparent 19rem),
+    linear-gradient(145deg, #08243a, #061522 62%, #040d18);
+}
+
+body[data-market="nasdaq"] .focusTile.adminTile {
+  border-color: #163a58;
+  background:
+    radial-gradient(circle at 92% 0%, rgba(43, 230, 166, .09), transparent 17rem),
+    linear-gradient(145deg, rgba(7, 27, 44, .99), rgba(4, 13, 25, .99));
+}
+
+body[data-market="nasdaq"] .callCard.open { border-color: #17678c; }
+body[data-market="nasdaq"] .toolPanel { background: #030a13; }
+body[data-market="nasdaq"] .adminTools button:hover { border-color: var(--amber); }
+
+.nasdaqStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 17px;
+  color: var(--amber-2);
+  font: 600 12px/1.4 "IBM Plex Mono", monospace;
+}
+
+.nasdaqStatus::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--amber);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--amber) 75%, transparent);
+}
+
+.nasdaqEmpty {
+  grid-column: 1 / -1;
+  min-height: 250px;
+  display: grid;
+  place-items: center;
+  padding: 34px;
+  border: 1px dashed var(--line-bright);
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(53, 216, 255, .08), transparent 20rem),
+    rgba(5, 15, 28, .7);
+  text-align: center;
+}
+
+.nasdaqEmpty div { max-width: 590px; }
+.nasdaqEmpty strong {
+  display: block;
+  margin-bottom: 10px;
+  color: var(--text);
+  font-size: clamp(24px, 3vw, 34px);
+  letter-spacing: -.04em;
+}
+.nasdaqEmpty p { margin: 0; color: var(--muted); line-height: 1.7; }
+
+.nasdaqAdminTools button[disabled] {
+  cursor: default;
+  opacity: .78;
+}
+.nasdaqAdminTools button[disabled]:hover {
+  transform: none;
+  background: var(--panel);
+}
+.nasdaqAdminTools small:last-child {
+  margin-top: auto;
+  padding-top: 14px;
+  color: var(--amber-2);
+  font: 600 10px/1.3 "IBM Plex Mono", monospace;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 820px) {
+  header { flex-wrap: wrap; }
+  .marketSwitch {
+    order: 5;
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 700px) {
+  body[data-market="nasdaq"] .focusTile.nasdaqPrimary { grid-column: auto; }
+  .nasdaqEmpty { min-height: 210px; padding: 25px 18px; }
+}
