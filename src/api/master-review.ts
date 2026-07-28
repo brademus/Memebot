@@ -321,13 +321,19 @@ export async function buildMasterReview(days = 1) {
     dataQualityRows, filterTuning, weightTuning, modelSuggestions, aiReviews, missedRows] = await Promise.all([
     query('daily trade summary', `SELECT
       COUNT(*) FILTER (WHERE entry_at>now()-($1||' days')::interval)::int AS opened,
+      COUNT(*) FILTER (WHERE entry_at>now()-($1||' days')::interval AND strategy_role='timed_entry')::int AS timed_entries_opened,
+      COUNT(*) FILTER (WHERE entry_at>now()-($1||' days')::interval AND strategy_role IS DISTINCT FROM 'timed_entry')::int AS research_observations_opened,
       COUNT(*) FILTER (WHERE exit_at>now()-($1||' days')::interval)::int AS closed,
       COUNT(*) FILTER (WHERE NOT closed)::int AS currently_open,
       COUNT(*) FILTER (WHERE exit_at>now()-($1||' days')::interval AND exit_reason='tracking_lost')::int AS tracking_lost,
       COUNT(*) FILTER (WHERE entry_at>now()-($1||' days')::interval AND execution_eligible)::int AS executable_opened,
       COUNT(*) FILTER (WHERE exit_at>now()-($1||' days')::interval AND final_multiple>=3)::int AS closed_at_or_above_3x,
-      ROUND((AVG(final_multiple) FILTER (WHERE exit_at>now()-($1||' days')::interval AND exit_reason IS DISTINCT FROM 'tracking_lost'))::numeric,3) AS avg_final_multiple,
-      ROUND((SUM(pnl_pct) FILTER (WHERE exit_at>now()-($1||' days')::interval AND exit_reason IS DISTINCT FROM 'tracking_lost'))::numeric,2) AS normalized_pnl_usd_on_100_each
+      -- HONEST ACCOUNTING: money-shaped fields cover strategy_role='timed_entry' ONLY.
+      -- Research observations carry $0 notional; summing their unbounded mark-to-final
+      -- marks produced fantasy headline P&L (+$51k/day from unexited 1000x observation
+      -- marks) that the strategyLifecycle section itself disclaimed.
+      ROUND((AVG(final_multiple) FILTER (WHERE strategy_role='timed_entry' AND exit_at>now()-($1||' days')::interval AND exit_reason IS DISTINCT FROM 'tracking_lost'))::numeric,3) AS avg_final_multiple,
+      ROUND((SUM(pnl_pct) FILTER (WHERE strategy_role='timed_entry' AND exit_at>now()-($1||' days')::interval AND exit_reason IS DISTINCT FROM 'tracking_lost'))::numeric,2) AS normalized_pnl_usd_on_100_each
       FROM paper_trades`, [windowParameter]),
     query('overall trade summary', `SELECT COUNT(*)::int AS total_calls,
       COUNT(*) FILTER (WHERE execution_eligible)::int AS executable_calls,
@@ -340,11 +346,16 @@ export async function buildMasterReview(days = 1) {
       COUNT(*) FILTER (WHERE closed AND exit_reason IS DISTINCT FROM 'tracking_lost' AND final_multiple<=0.5)::int AS severe_losses,
       ROUND(100.0*COUNT(*) FILTER (WHERE closed AND exit_reason IS DISTINCT FROM 'tracking_lost' AND final_multiple>=3)
         /NULLIF(COUNT(*) FILTER (WHERE closed AND exit_reason IS DISTINCT FROM 'tracking_lost'),0),2) AS pct_3x,
-      ROUND((AVG(final_multiple) FILTER (WHERE closed AND exit_reason IS DISTINCT FROM 'tracking_lost'))::numeric,3) AS avg_final_multiple,
+      ROUND((AVG(final_multiple) FILTER (WHERE closed AND exit_reason IS DISTINCT FROM 'tracking_lost'))::numeric,3) AS research_avg_final_multiple,
       ROUND((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY final_multiple)
-        FILTER (WHERE closed AND exit_reason IS DISTINCT FROM 'tracking_lost'))::numeric,3) AS median_final_multiple,
-      ROUND((AVG(pnl_pct) FILTER (WHERE closed AND exit_reason IS DISTINCT FROM 'tracking_lost'))::numeric,2) AS avg_pnl_pct,
-      ROUND((SUM(pnl_pct) FILTER (WHERE closed AND exit_reason IS DISTINCT FROM 'tracking_lost'))::numeric,2) AS normalized_pnl_usd_on_100_each
+        FILTER (WHERE closed AND exit_reason IS DISTINCT FROM 'tracking_lost'))::numeric,3) AS research_median_final_multiple,
+      COUNT(*) FILTER (WHERE strategy_role='timed_entry')::int AS timed_entry_calls,
+      -- HONEST ACCOUNTING: only timed entries have notional; see daily summary note.
+      ROUND((AVG(final_multiple) FILTER (WHERE strategy_role='timed_entry' AND closed AND exit_reason IS DISTINCT FROM 'tracking_lost'))::numeric,3) AS avg_final_multiple,
+      ROUND((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY final_multiple)
+        FILTER (WHERE strategy_role='timed_entry' AND closed AND exit_reason IS DISTINCT FROM 'tracking_lost'))::numeric,3) AS median_final_multiple,
+      ROUND((AVG(pnl_pct) FILTER (WHERE strategy_role='timed_entry' AND closed AND exit_reason IS DISTINCT FROM 'tracking_lost'))::numeric,2) AS avg_pnl_pct,
+      ROUND((SUM(pnl_pct) FILTER (WHERE strategy_role='timed_entry' AND closed AND exit_reason IS DISTINCT FROM 'tracking_lost'))::numeric,2) AS normalized_pnl_usd_on_100_each
       FROM paper_trades`),
     query('performance by setup', `WITH calls AS (
       SELECT p.*,COALESCE(t.source,'unknown') AS source,
