@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { executionSettings } from './execution';
 import assert from 'node:assert/strict';
 import { TokenRecord } from '../types';
 import { executionVenue, quoteExecutableEntry, quoteExecutableExit } from './execution';
@@ -125,3 +126,12 @@ test('builds and simulates liquidation of the exact entry token amount', async (
 function restore(key: string, value: string | undefined) {
   if (value === undefined) delete process.env[key]; else process.env[key] = value;
 }
+
+test('probe size derives from the intended $100 notional at the live SOL price', async () => {
+  const { setSolUsd } = await import('../state/sol-price');
+  setSolUsd(80);
+  assert.equal(executionSettings.intendedNotionalUsd, 100);
+  assert.equal(executionSettings.positionSol, 1.25);   // $100 / $80
+  setSolUsd(20_000);                                   // absurd price → clamped floor
+  assert.equal(executionSettings.positionSol, 0.02);
+});

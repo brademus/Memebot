@@ -8,8 +8,9 @@ import { fetchSocials } from './metadata';
 import { recordTradeEvent } from '../market/trade-events';
 import { TradeEvent } from '../types';
 
+import { setSolUsd } from '../state/sol-price';
 let SOL_USD = 150;
-export function setSolPrice(price: number) { if (price > 0) SOL_USD = price; }
+export function setSolPrice(price: number) { if (price > 0) { SOL_USD = price; setSolUsd(price); } }
 export const getSolPrice = () => SOL_USD;
 
 const TRADE_STREAM_STALE_MS = 4 * 60_000;

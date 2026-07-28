@@ -1,4 +1,6 @@
 export const STRATEGY_VERSION = 'quality-entry-exit-v1';
+// Kept in lockstep with executionSettings.intendedNotionalUsd (default 100): the
+// strategy reports P&L on the same notional the execution probe proves.
 export const STRATEGY_NOTIONAL_USD = 100;
 
 export type StrategyRole = 'quality_observation' | 'timed_entry' | 'model_observation' | 'legacy';

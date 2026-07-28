@@ -2,6 +2,7 @@ import { cfg } from '../config';
 import { ExecutionEvidence, TokenRecord } from '../types';
 import { clamp01, round } from '../model/math';
 import { rpcUrl, simulateTransaction } from './rpc-sim';
+import { getSolUsd } from '../state/sol-price';
 import { curveQuoteExecutableEntry } from './curve-execution';
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
@@ -11,7 +12,20 @@ export const executionSettings = {
   get targetMultiple() { return cfg().paper.target_multiple; },
   get stopMultiple() { return cfg().paper.stop_multiple; },
   get maxHoldHours() { return cfg().paper.max_hold_hours; },
-  get positionSol() { return cfg().paper.position_sol; },
+  /**
+   * PROBE SIZE = STRATEGY SIZE (review finding, 2026-07-28). The strategy reports
+   * hypothetical P&L on intended_notional_usd (default $100), so execution must be
+   * proven at that same size — 0.1 SOL was ~$7.50 at current prices, a 13x
+   * mismatch between what was proven and what was reported. With a live SOL price
+   * the probe converts the intended notional to SOL (clamped 0.02..5 SOL); without
+   * one it falls back to the configured position_sol rather than guessing.
+   */
+  get intendedNotionalUsd() { return Number((cfg().paper as any).intended_notional_usd) > 0 ? Number((cfg().paper as any).intended_notional_usd) : 100; },
+  get positionSol() {
+    const solUsd = getSolUsd();
+    if (solUsd > 0) return round(Math.min(5, Math.max(0.02, this.intendedNotionalUsd / solUsd)), 4);
+    return cfg().paper.position_sol;
+  },
   get maxLiquidityPct() { return cfg().paper.max_liquidity_pct; },
   get minPositionUsd() { return cfg().paper.min_position_usd; },
   get slippageBps() { return Math.round(cfg().paper.slippage_bps); },
