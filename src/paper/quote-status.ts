@@ -4,6 +4,7 @@ export function quotePhase(status: string | null | undefined, keyPresent: boolea
   const value = String(status || 'unknown');
   if (value === 'legacy_mark') return 'legacy';
   if (value === 'shadow_raw_no_execution' || value === 'pregrad_observation_only') return 'shadow';
+  if (value.startsWith('curve_')) return 'post_key';   // curve venue needs no Jupiter key
   if (value === 'jupiter_api_key_missing' || keyPresent === false) return 'pre_key';
   return 'post_key';
 }
@@ -12,7 +13,14 @@ export function quoteCategory(status: string | null | undefined): string {
   const value = String(status || 'unknown');
   if (value === 'legacy_mark') return 'legacy';
   if (value === 'shadow_raw_no_execution' || value === 'pregrad_observation_only') return 'research_only';
-  if (value === 'executable_quote' || value === 'executable_simulated' || value === 'executable_exit_simulated') return 'simulated_executable';
+  if (value === 'executable_quote' || value === 'executable_simulated' || value === 'executable_exit_simulated' || value === 'curve_executable_simulated') return 'simulated_executable';
+  if (value === 'curve_executable_built') return 'built_executable';
+  if (value === 'curve_sim_blocked_shadow_unfunded') return 'sim_blocked_unfunded';
+  if (value === 'curve_shadow_wallet_missing') return 'missing_simulation_wallet';
+  if (value === 'curve_rpc_missing') return 'missing_rpc';
+  if (value === 'curve_probe_disabled') return 'research_only';
+  if (value === 'curve_probe_rate_limited' || /http_429/.test(value)) return 'rate_limited';
+  if (value.startsWith('curve_build_') || value === 'curve_sell_build_failed') return 'curve_build_failed';
   if (value === 'quote_pending') return 'pending';
   if (value === 'jupiter_api_key_missing') return 'missing_key';
   if (value === 'simulation_wallet_missing') return 'missing_simulation_wallet';

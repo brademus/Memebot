@@ -1,6 +1,8 @@
 import { cfg } from '../config';
 import { ExecutionEvidence, TokenRecord } from '../types';
 import { clamp01, round } from '../model/math';
+import { rpcUrl, simulateTransaction } from './rpc-sim';
+import { curveQuoteExecutableEntry } from './curve-execution';
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
@@ -65,11 +67,6 @@ export interface ExecutableExitQuote {
   mode: string | null;
 }
 
-function rpcUrl(): string {
-  if (process.env.SOLANA_RPC_URL) return process.env.SOLANA_RPC_URL;
-  return process.env.HELIUS_API_KEY ? `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}` : '';
-}
-
 async function requestOrder(inputMint: string, outputMint: string, amount: string, signal: AbortSignal) {
   const apiKey = process.env.JUPITER_API_KEY || '';
   const taker = process.env.SIMULATION_WALLET || '';
@@ -83,28 +80,6 @@ async function requestOrder(inputMint: string, outputMint: string, amount: strin
   });
   const data: any = await response.json().catch(() => ({}));
   return { response, data };
-}
-
-async function simulateTransaction(transaction: string, signal: AbortSignal): Promise<{ ok: boolean; error: string | null; units: number | null }> {
-  const url = rpcUrl();
-  if (!url) return { ok: false, error: 'solana_rpc_missing', units: null };
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      jsonrpc: '2.0', id: 1, method: 'simulateTransaction',
-      params: [transaction, { encoding: 'base64', sigVerify: false, replaceRecentBlockhash: true, commitment: 'processed' }],
-    }),
-    signal,
-  });
-  const data: any = await response.json().catch(() => ({}));
-  if (!response.ok || data.error) return { ok: false, error: `simulation_rpc_${response.status || 'error'}`, units: null };
-  const error = data.result?.value?.err;
-  return {
-    ok: error == null,
-    error: error == null ? null : `simulation_failed:${JSON.stringify(error).slice(0, 240)}`,
-    units: Number.isFinite(Number(data.result?.value?.unitsConsumed)) ? Number(data.result.value.unitsConsumed) : null,
-  };
 }
 
 function feeLamports(data: any): number {
@@ -151,18 +126,20 @@ async function probeSize(tokenMint: string, sol: number, controller: AbortContro
 }
 
 /**
- * Jupiter can only prove routed DEX execution. A Pump.fun mint that is still on its
- * bonding curve is deliberately retained as a forward research observation instead of
- * being mislabeled as an execution failure. This path requires no paid PumpPortal feed.
+ * Venue selection per the execution-truth workstream: Jupiter proves routed DEX
+ * execution for graduated/AMM tokens; a Pump.fun mint still on its bonding curve
+ * is probed through the PumpPortal Local Transaction adapter (curve-execution.ts),
+ * which builds real unsigned curve transactions instead of mislabeling the venue
+ * mismatch as a route failure. Nothing is ever signed or broadcast.
  */
-export function executionVenue(token: TokenRecord): 'pumpfun_curve_research' | 'jupiter' {
-  return token.dex === 'pumpfun' && !token.gradAt ? 'pumpfun_curve_research' : 'jupiter';
+export function executionVenue(token: TokenRecord): 'pumpfun_curve' | 'jupiter' {
+  return token.dex === 'pumpfun' && !token.gradAt ? 'pumpfun_curve' : 'jupiter';
 }
 
 export async function quoteExecutableEntry(token: TokenRecord, markPrice: number): Promise<ExecutableQuote> {
   const startedAt = Date.now();
   if (!token.ca || !markPrice || markPrice <= 0) return failedEntry('invalid_mark', startedAt);
-  if (executionVenue(token) === 'pumpfun_curve_research') return failedEntry('pregrad_observation_only', startedAt);
+  if (executionVenue(token) === 'pumpfun_curve') return curveQuoteExecutableEntry(token, markPrice, startedAt);
   if (!process.env.JUPITER_API_KEY) return failedEntry('jupiter_api_key_missing', startedAt);
   if (!process.env.SIMULATION_WALLET && cfg().signal_model.require_transaction_simulation)
     return failedEntry('simulation_wallet_missing', startedAt);

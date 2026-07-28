@@ -46,16 +46,27 @@ test('marks a signal ineligible when the Jupiter API key is absent', async () =>
   assert.equal(result.status, 'jupiter_api_key_missing');
 });
 
-test('keeps pre-graduation Pump.fun entries as research without calling Jupiter', async () => {
+test('routes pre-graduation Pump.fun entries to the curve adapter, never Jupiter', async () => {
   configure();
-  let calls = 0;
-  globalThis.fetch = async () => { calls++; throw new Error('network should not be called'); };
-  const pregrad = { ...token, dex: 'pumpfun', gradAt: null } as TokenRecord;
-  assert.equal(executionVenue(pregrad), 'pumpfun_curve_research');
-  const result = await quoteExecutableEntry(pregrad, 0.00001);
-  assert.equal(result.eligible, false);
-  assert.equal(result.status, 'pregrad_observation_only');
-  assert.equal(calls, 0);
+  let jupiterCalls = 0;
+  globalThis.fetch = async (url: any) => {
+    if (String(url).includes('jup.ag')) { jupiterCalls++; throw new Error('jupiter must not be asked to route curve tokens'); }
+    throw new Error('curve build unavailable in this test');
+  };
+  const previousWallet = process.env.SIMULATION_WALLET;
+  delete process.env.SIMULATION_WALLET;
+  delete process.env.EXECUTION_SHADOW_PUBKEY;
+  try {
+    const pregrad = { ...token, dex: 'pumpfun', gradAt: null } as TokenRecord;
+    assert.equal(executionVenue(pregrad), 'pumpfun_curve');
+    const result = await quoteExecutableEntry(pregrad, 0.00001);
+    assert.equal(result.eligible, false);
+    // typed prerequisite from the curve adapter, not a Jupiter status
+    assert.equal(result.status, 'curve_shadow_wallet_missing');
+    assert.equal(jupiterCalls, 0);
+  } finally {
+    if (previousWallet === undefined) delete process.env.SIMULATION_WALLET; else process.env.SIMULATION_WALLET = previousWallet;
+  }
 });
 
 test('requires a simulation wallet for executable evidence', async () => {
