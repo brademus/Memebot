@@ -6,7 +6,7 @@ import { STRATEGY_VERSION } from '../paper/strategy-policy';
 const REFRESH_MS = 2_000;
 const MAX_REFERENCE_AGE_MS = 48 * 60 * 60_000;
 
-interface QualityReference {
+export interface QualityReference {
   paperTradeId: number;
   ca: string;
   signal: string;
@@ -45,11 +45,6 @@ export const entryRevalidationDiag = () => ({
   references: references.size,
   ...diag,
 });
-
-const finite = (value: unknown): number | null => {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-};
 
 async function refreshQualityReferences() {
   if (!pool || refreshing) return;
@@ -99,8 +94,12 @@ export function startEntryRevalidation() {
   timer.unref();
 }
 
-export function assessEntryRevalidation(token: TokenRecord, now = Date.now()): EntryRevalidationAssessment {
-  const reference = references.get(token.ca) || null;
+export function assessEntryRevalidation(
+  token: TokenRecord,
+  now = Date.now(),
+  referenceOverride?: QualityReference | null,
+): EntryRevalidationAssessment {
+  const reference = referenceOverride === undefined ? references.get(token.ca) || null : referenceOverride;
   const blockers: string[] = [];
   const reasons: string[] = [];
   const selectedPrice = reference?.selectedPrice || null;
