@@ -237,3 +237,5 @@ CREATE TABLE IF NOT EXISTS leadership_claims (
   claimed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE leadership_claims ADD COLUMN IF NOT EXISTS value TEXT;
+-- post-exit shadows: link a derived observation to the trade it watches (2026-07-28)
+ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS parent_id BIGINT;

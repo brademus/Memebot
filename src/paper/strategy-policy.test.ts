@@ -151,3 +151,8 @@ test('quality observations use a fixed benchmark and are not adaptive purchases'
   assert.equal(target.action, 'sell');
   assert.equal(target.reasonCode, 'benchmark_take_profit_3x');
 });
+
+test('post-exit shadows are quality observations, never trades', async () => {
+  const { strategyRoleForSignal } = await import('./strategy-policy');
+  assert.equal(strategyRoleForSignal('post_exit_watch'), 'quality_observation');
+});

@@ -82,6 +82,7 @@ const positive = (value: number): number => Number.isFinite(value) && value > 0 
 
 export function strategyRoleForSignal(signal: string): StrategyRole {
   if (signal === 'trigger') return 'timed_entry';
+  if (signal === 'post_exit_watch') return 'quality_observation';   // $0 shadow after a strategy exit
   if (signal.startsWith('bb_') || signal === 'conviction') return 'quality_observation';
   if (signal.startsWith('model')) return 'model_observation';
   return 'legacy';

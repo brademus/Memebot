@@ -427,6 +427,56 @@ export async function buildMasterReview(days = 3650) {
     rows: missedRows,
   };
 
+  // 3X AUTOPSY (goal: multiple 3x/day). Every coin the strategy layer WATCHED
+  // that reached 3x in the window, split by whether a timed entry ever existed,
+  // whether the entry captured the 3x, and the last recorded block reason for the
+  // misses. Plus the post-exit shadow verdict: how often our own exits left a 3x
+  // on the table. Measurement only — the prerequisite for any selection or exit
+  // change, never a tuning input by itself.
+  const autopsyRows = await query('three_x_autopsy', `
+    WITH threex AS (
+      SELECT p.ca, MAX(p.symbol) AS symbol,
+             ROUND(MAX(p.peak_price/NULLIF(p.entry_price,0))::numeric, 2) AS best_peak_multiple,
+             BOOL_OR(p.strategy_role='timed_entry') AS had_timed_entry,
+             BOOL_OR(p.strategy_role='timed_entry' AND p.exit_reason='strategy_take_profit_3x') AS timed_entry_captured_3x
+        FROM paper_trades p
+       WHERE p.entry_at > now()-($1||' days')::interval
+         AND p.strategy_role IN ('quality_observation','timed_entry')
+         AND p.signal IS DISTINCT FROM 'post_exit_watch'
+         AND p.entry_price > 0
+       GROUP BY p.ca
+      HAVING MAX(p.peak_price/NULLIF(p.entry_price,0)) >= 3)
+    SELECT t.*, blocked.reason_code AS last_block_reason
+      FROM threex t
+      LEFT JOIN LATERAL (
+        SELECT s.reason_code FROM signal_decisions s
+         WHERE s.ca=t.ca AND s.allow=false
+         ORDER BY s.evaluated_at DESC LIMIT 1) blocked ON true
+     ORDER BY best_peak_multiple DESC
+     LIMIT 200`, [windowParameter]);
+  const shadowRows = await query('post_exit_shadows', `
+    SELECT COUNT(*)::int AS shadows,
+           COUNT(*) FILTER (WHERE peak_price >= 3*entry_price)::int AS shadow_reached_3x,
+           COUNT(*) FILTER (WHERE peak_price >= 1.5*entry_price)::int AS shadow_reached_1_5x
+      FROM paper_trades
+     WHERE signal='post_exit_watch' AND entry_at > now()-($1||' days')::interval`, [windowParameter]);
+  const missedByReason: Record<string, number> = {};
+  for (const row of autopsyRows) {
+    if (!row.had_timed_entry) {
+      const key = String(row.last_block_reason || 'no_block_recorded_never_reached_entry');
+      missedByReason[key] = (missedByReason[key] || 0) + 1;
+    }
+  }
+  const threeXAutopsy = {
+    observed3x: autopsyRows.length,
+    enteredAmongThem: autopsyRows.filter((row: any) => row.had_timed_entry).length,
+    captured3xByTimedEntry: autopsyRows.filter((row: any) => row.timed_entry_captured_3x).length,
+    missedByReason,
+    exitLadderVerdict: shadowRows[0] || { shadows: 0, shadow_reached_3x: 0, shadow_reached_1_5x: 0 },
+    rows: autopsyRows.slice(0, 60),
+    note: 'observed3x counts coins the strategy layer actively watched (research or entered) whose peak reached 3x entry inside the window; post-exit shadows measure what strategy exits left on the table.',
+  };
+
   return {
     reportType: 'all_time_master_review',
     generated,
@@ -451,6 +501,7 @@ export async function buildMasterReview(days = 3650) {
     },
     changesDuringWindow: { filterTuning, weightTuning, modelSuggestions, aiReviews },
     configInForce: cfg(),
+    threeXAutopsy,
     queryErrors: errors,
     payloadPolicy: {
       everyTradeIncluded: true,

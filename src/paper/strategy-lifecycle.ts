@@ -146,7 +146,7 @@ async function stampStrategyRows(epochAt: string) {
   await pool.query(`UPDATE paper_trades SET
       strategy_role=CASE
         WHEN signal='trigger' THEN 'timed_entry'
-        WHEN signal LIKE 'bb_%' OR signal='conviction' THEN 'quality_observation'
+        WHEN signal LIKE 'bb_%' OR signal='conviction' OR signal='post_exit_watch' THEN 'quality_observation'
         WHEN signal LIKE 'model%' THEN 'model_observation'
         ELSE strategy_role END,
       strategy_version=$2,

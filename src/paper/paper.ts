@@ -27,6 +27,8 @@ export type PaperSignal = 'trigger' | 'conviction' | 'bb_smart' | 'bb_organic' |
 export interface OpenPaperOptions {
   skipExecutionQuote?: boolean;
   telemetry?: PaperTelemetryContext;
+  /** Links a derived observation (e.g. a post-exit shadow) to the trade it watches. */
+  parentId?: number | null;
 }
 
 export async function openPaper(
@@ -49,14 +51,14 @@ export async function openPaper(
        (ca,symbol,signal,entry_price,mark_entry_price,entry_score,peak_price,peak_at,last_price,last_at,
         target_multiple,quote_status,model_version,quote_key_present,signal_decision_id,
         transaction_built,simulation_ok,simulation_error,route_stability_bps,execution_score,execution_probe,
-        trough_price,trough_at,max_runup_pct,max_drawdown_pct)
-     VALUES ($1,$2,$3,$4,$4,$5,$4,now(),$4,now(),$6,$16,$7,$8,$9,$10,$11,$12,$13,$14,$15,$4,now(),0,0)
+        trough_price,trough_at,max_runup_pct,max_drawdown_pct,parent_id)
+     VALUES ($1,$2,$3,$4,$4,$5,$4,now(),$4,now(),$6,$16,$7,$8,$9,$10,$11,$12,$13,$14,$15,$4,now(),0,0,$17)
      ON CONFLICT (ca,signal,model_version) DO NOTHING RETURNING id`,
     [ca, symbol, signal, markPrice, score, executionSettings.targetMultiple, MODEL_VERSION, keyPresent,
      decisionId, screenedExecution?.transactionBuilt || false, screenedExecution?.simulationOk || false,
      screenedExecution?.simulationError || null, screenedExecution?.routeStabilityBps || null,
      screenedExecution?.executionScore || null, screenedExecution ? JSON.stringify(screenedExecution) : null,
-     initialQuoteStatus],
+     initialQuoteStatus, options.parentId ?? null],
   ).catch((error: Error) => { console.error('[paper] insert failed:', error.message); return null; });
   if (!inserted?.rowCount) return;
 
@@ -288,6 +290,19 @@ async function closeAt(row: any, token: ReturnType<typeof getToken> | null, pric
   if (!closed?.rowCount) return;
   trackingRecoveryNoted.delete(Number(row.id));
   await finalizePaperTelemetry(Number(row.id), token || null, price, reason);
+
+  // POST-EXIT SHADOW (goal: multiple 3x/day, 2026-07-28): after a strategy-decided
+  // exit of a real timed entry, a $0 quality observation keeps watching from the
+  // exit price. This measures — never guesses — how often our own exits leave a
+  // 3x on the table, which is the prerequisite evidence for ever touching the
+  // exit ladder. Dead/unobservable coins are skipped: nothing left to watch.
+  if (row?.strategy_role === 'timed_entry' && price && price > 0
+    && typeof reason === 'string' && reason.startsWith('strategy_')) {
+    try {
+      await openPaper(row.ca, row.symbol || '?', 'post_exit_watch' as any, price, null, undefined,
+        { skipExecutionQuote: true, parentId: Number(row.id) || null });
+    } catch { /* shadows are best-effort */ }
+  }
 }
 
 const numberValue = (value: unknown) => Number.isFinite(Number(value)) ? Number(value) : 0;
