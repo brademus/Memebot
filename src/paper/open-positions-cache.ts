@@ -12,7 +12,9 @@ const REFRESH_MS = 20_000;
 const cache = new Set<string>();
 let timer: NodeJS.Timeout | null = null;
 let lastRefreshAt: string | null = null;
+let lastRefreshMs = 0;
 let refreshErrors = 0;
+let initialRefreshComplete = false;
 
 async function refresh() {
   if (!pool) return;
@@ -23,16 +25,19 @@ async function refresh() {
     cache.clear();
     for (const row of result.rows) if (row.ca) cache.add(String(row.ca));
     lastRefreshAt = new Date().toISOString();
+    lastRefreshMs = Date.now();
+    initialRefreshComplete = true;
   } catch { refreshErrors++; }
 }
 
-export function startOpenPositionsCache() {
-  if (timer) return;
-  void refresh();
+export function startOpenPositionsCache(): Promise<void> {
+  if (timer) return Promise.resolve();
+  const first = refresh();   // awaited by boot so the guard never starts pin-blind
   timer = setInterval(() => void refresh(), REFRESH_MS);
   timer.unref();
+  return first;
 }
 
 export const openTimedEntryCas = (): string[] => [...cache];
-export const openPositionsCacheDiag = () => ({ pinned: cache.size, lastRefreshAt, refreshErrors });
+export const openPositionsCacheDiag = () => ({ pinned: cache.size, lastRefreshAt, refreshErrors, initialRefreshComplete, cacheAgeSeconds: lastRefreshMs ? Math.round((Date.now() - lastRefreshMs) / 1000) : null });
 export function __seedOpenPositionsForTest(cas: string[]) { cache.clear(); for (const ca of cas) cache.add(ca); }

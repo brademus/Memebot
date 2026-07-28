@@ -40,3 +40,48 @@ test('pinned open positions are never rotated out and take first claim on free s
   setPinnedKeysProvider(() => []);
   state.active.clear(); state.pendingKeys.clear(); state.urgentKeys.clear();
 });
+
+test('pin reconciliation enqueues a missing open position at highest priority', () => {
+  const { state } = guard;
+  state.active.clear(); state.pendingKeys.clear(); state.urgentKeys.clear();
+  setPinnedKeysProvider(() => ['MISSING_OPEN_POSITION']);
+  guard.reconcilePins();
+  assert.equal(state.pendingKeys.has('MISSING_OPEN_POSITION'), true);
+  assert.equal(state.urgentKeys.has('MISSING_OPEN_POSITION'), true);
+  setPinnedKeysProvider(() => []);
+  state.pendingKeys.clear(); state.urgentKeys.clear();
+});
+
+test('pending-queue trimming never evicts pinned keys', () => {
+  const { state } = guard;
+  state.active.clear(); state.pendingKeys.clear(); state.urgentKeys.clear();
+  setPinnedKeysProvider(() => ['PINNED_KEEP']);
+  const now = Date.now();
+  state.pendingKeys.set('PINNED_KEEP', now - 1_000_000);   // oldest of all
+  for (let index = 0; index < guard.MAX_PENDING_TOKENS + 5; index++) {
+    state.pendingKeys.set(`BULK_${index}`, now + index);
+  }
+  guard.trimPending();
+  assert.equal(state.pendingKeys.has('PINNED_KEEP'), true, 'oldest pinned key must survive trimming');
+  assert.ok(state.pendingKeys.size <= guard.MAX_PENDING_TOKENS);
+  setPinnedKeysProvider(() => []);
+  state.pendingKeys.clear();
+});
+
+test('a pinned pending key forces quiet-slot rotation even with no urgent keys', () => {
+  const { state } = guard;
+  state.active.clear(); state.pendingKeys.clear(); state.urgentKeys.clear();
+  const now = Date.now();
+  const stale = now - 10 * 60_000;
+  setPinnedKeysProvider(() => ['PINNED_NEEDS_SLOT']);
+  state.pendingKeys.set('PINNED_NEEDS_SLOT', now);
+  state.active.set('UNPINNED_QUIET_2', { subscribedAt: stale, lastEventAt: null });
+  for (let index = 0; state.active.size < 40; index++) {
+    state.active.set(`FILL2_${index}`, { subscribedAt: now, lastEventAt: now });
+  }
+  state.lastRotationAt = 0;
+  guard.rotateOneQuietSlot(fakeSocket, now);
+  assert.equal(state.active.has('UNPINNED_QUIET_2'), false, 'quiet slot must rotate out for the pinned pending position');
+  setPinnedKeysProvider(() => []);
+  state.active.clear(); state.pendingKeys.clear();
+});

@@ -75,7 +75,7 @@ async function main() {
   }
   startSubscriptionReconciler();
   startPaperTrader();
-  startOpenPositionsCache();
+  await startOpenPositionsCache();
   setPinnedKeysProvider(openTimedEntryCas);
 
   setInterval(() => {

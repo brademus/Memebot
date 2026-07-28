@@ -1,4 +1,5 @@
 import WebSocket from 'ws';
+import { openPositionsCacheDiag } from '../paper/open-positions-cache';
 import {
   consumePersistentPaidEvent,
   ensurePumpPortalPersistentBudget,
@@ -115,8 +116,11 @@ function ensureSocket(socket: WebSocket) {
 }
 
 function trimPending() {
+  const pinned = pinnedSet();
+  let scanned = 0;
   while (state.pendingKeys.size > MAX_PENDING_TOKENS) {
-    const oldest = state.pendingKeys.keys().next().value as string | undefined;
+    if (scanned++ > MAX_PENDING_TOKENS + 64) break;   // everything pinned: never evict pins
+    const oldest = [...state.pendingKeys.keys()].find(key => !pinned.has(key));
     if (!oldest) break;
     state.pendingKeys.delete(oldest);
     state.urgentKeys.delete(oldest);
@@ -131,6 +135,16 @@ let pinnedKeysProvider: () => string[] = () => [];
 export function setPinnedKeysProvider(provider: () => string[]) { pinnedKeysProvider = provider; }
 function pinnedSet(): Set<string> {
   try { return new Set(pinnedKeysProvider()); } catch { return new Set(); }
+}
+
+/** A pinned mint known to the cache but absent from both active and pending would
+ *  otherwise wait for luck. Reconciliation enqueues it at highest priority — runs
+ *  even while the paid stream is paused so positions resubscribe FIRST on resume. */
+function reconcilePins() {
+  const pinned = pinnedSet();
+  for (const key of pinned) {
+    if (!state.active.has(key) && !state.pendingKeys.has(key)) queueKeys([key], true);
+  }
 }
 
 function queueKeys(keys: string[], urgent: boolean) {
@@ -226,9 +240,10 @@ function pausePaidStream(socket: WebSocket, reason: 'event_budget' | 'provider_r
 }
 
 function rotateOneQuietSlot(socket: WebSocket, now: number) {
-  if (!state.urgentKeys.size || state.active.size < MAX_ACTIVE_TOKENS) return;
-  if (state.lastRotationAt && now - state.lastRotationAt < ROTATION_INTERVAL_MS) return;
   const pinned = pinnedSet();
+  const pinnedPendingExists = [...state.pendingKeys.keys()].some(key => pinned.has(key));
+  if ((!state.urgentKeys.size && !pinnedPendingExists) || state.active.size < MAX_ACTIVE_TOKENS) return;
+  if (state.lastRotationAt && now - state.lastRotationAt < ROTATION_INTERVAL_MS) return;
   const quiet = [...state.active.entries()]
     .filter(([key, value]) => !pinned.has(key) && value.lastEventAt === null && now - value.subscribedAt >= QUIET_SLOT_LEASE_MS)
     .sort((left, right) => left[1].subscribedAt - right[1].subscribedAt)[0];
@@ -245,6 +260,7 @@ function maintainStableSlots() {
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
   const now = Date.now();
   state.lastMaintenanceAt = now;
+  reconcilePins();
   if (!providerReady(now) || !paidStreamBudgetAvailable()) return;
 
   // Only a fresh single-token request may replace a slot. Streams that have produced a
@@ -307,6 +323,8 @@ maintenanceTimer.unref();
 export function pumpPortalGuardDiag() {
   const pinned = pinnedSet();
   const pinnedActive = [...state.active.keys()].filter(key => pinned.has(key)).length;
+  const pinnedPending = [...state.pendingKeys.keys()].filter(key => pinned.has(key)).length;
+  const pinnedMissing = [...pinned].filter(key => !state.active.has(key) && !state.pendingKeys.has(key)).length;
 
   const persistentBudget = pumpPortalPersistentBudgetDiag();
   const now = Date.now();
@@ -317,7 +335,8 @@ export function pumpPortalGuardDiag() {
     ? 'Paid subscriptions are active but no trades arrived. Verify the API key is linked to a PumpPortal wallet funded with at least 0.02 SOL.'
     : null;
   return {
-    pinnedProvided: pinned.size, pinnedActive,
+    pinnedProvided: pinned.size, pinnedActive, pinnedPending, pinnedMissing,
+    pinnedCache: openPositionsCacheDiag(),
     maxActiveTokens: MAX_ACTIVE_TOKENS,
     maxPendingTokens: MAX_PENDING_TOKENS,
     quietSlotLeaseSeconds: Math.round(QUIET_SLOT_LEASE_MS / 1000),
@@ -366,4 +385,4 @@ export function pumpPortalGuardDiag() {
 (globalThis as any).__pumpPortalGuardDiag = pumpPortalGuardDiag;
 console.log(`[pumpportal-guard] enabled: sole owner of ${MAX_ACTIVE_TOKENS} paid slots; fresh-priority rotation after ${QUIET_SLOT_LEASE_MS / 1000}s`);
 
-export const __guardInternalsForTest = { state, queueKeys, rotateOneQuietSlot, nextPending };
+export const __guardInternalsForTest = { state, queueKeys, rotateOneQuietSlot, nextPending, trimPending, reconcilePins, MAX_PENDING_TOKENS };
