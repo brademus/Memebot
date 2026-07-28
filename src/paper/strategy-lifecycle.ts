@@ -423,8 +423,9 @@ async function closeFromEvaluation(row: any, token: TokenRecord | null, evaluati
       exit_decision=$4::jsonb,exit_policy_version=$5,
       notional_usd=CASE WHEN strategy_role='timed_entry' THEN $6 ELSE 0 END,
       realized_pnl_usd=$7,
-      target_hit_at=CASE WHEN $2='strategy_take_profit_3x' OR $2='benchmark_take_profit_3x'
-        THEN COALESCE(target_hit_at,now()) ELSE target_hit_at END,
+      -- target_hit_at is reserved for EXECUTION-VERIFIED targets (simulated exit
+      -- proceeds >= target). Mark-based strategy/benchmark 3x closures record only
+      -- observed_target_hit_at below (review finding, 2026-07-28).
       observed_target_hit_at=CASE WHEN $2='strategy_take_profit_3x' OR $2='benchmark_take_profit_3x'
         THEN COALESCE(observed_target_hit_at,now()) ELSE observed_target_hit_at END,
       seconds_to_target=CASE WHEN $2='strategy_take_profit_3x' OR $2='benchmark_take_profit_3x'

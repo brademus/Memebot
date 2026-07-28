@@ -16,6 +16,17 @@ export const pool = env.DATABASE_URL
   : null;
 pool?.on('error', (error) => console.error('[db] pool error (recovered):', error.message));
 
+async function cleansePoisonedCurveEligibility() {
+  // 2026-07-28: for a few hours, curve rows with unmeasured fills carried
+  // execution_eligible=true (statuses curve_executable_*). Idempotent cleanse so
+  // no such row can sit in the executable cohort.
+  if (!pool) return;
+  await pool.query(
+    `UPDATE paper_trades SET execution_eligible=false
+      WHERE execution_eligible=true AND quote_status LIKE 'curve_%'`,
+  ).catch(() => {});
+}
+
 export async function initDb() {
   if (!pool) { console.warn('[db] no DATABASE_URL — running memory-only (outcomes will NOT be logged)'); return; }
   const base = fs.readFileSync(path.join(process.cwd(), 'schema.sql'), 'utf8');
@@ -24,6 +35,7 @@ export async function initDb() {
   if (fs.existsSync(v3Path)) await pool.query(fs.readFileSync(v3Path, 'utf8'));
   const telemetryPath = path.join(process.cwd(), 'schema-telemetry.sql');
   if (fs.existsSync(telemetryPath)) await pool.query(fs.readFileSync(telemetryPath, 'utf8'));
+  await cleansePoisonedCurveEligibility();
   console.log('[db] schema ready');
 }
 

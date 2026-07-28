@@ -53,11 +53,12 @@ function withEnv(run: () => Promise<void>) {
   };
 }
 
-test('curve adapter: full ladder yields curve_executable_simulated and is eligible', withEnv(async () => {
+test('curve adapter: full ladder yields simulated UNPRICED evidence and is never eligible', withEnv(async () => {
   const calls = scriptFetch({ tradeLocal: [{ ok: true }, { ok: true }, { ok: true }], rpc: { err: null } });
   const quote = await curveQuoteExecutableEntry(token, 0.00005, Date.now(), { requireSimulation: true });
-  assert.equal(quote.status, 'curve_executable_simulated');
-  assert.equal(quote.eligible, true);
+  assert.equal(quote.status, 'curve_entry_simulated_unpriced');
+  assert.equal(quote.eligible, false);   // fill unmeasured: evidence, not eligibility
+  assert.equal(quote.effectiveEntryPrice, null);
   assert.equal(quote.transactionBuilt, true);
   assert.equal(quote.simulationOk, true);
   assert.equal(quote.router, 'pumpportal_curve');
@@ -75,11 +76,11 @@ test('curve adapter: unfunded shadow wallet blocks simulation honestly, never cl
   assert.equal(curveExecutionDiag().simulationsBlockedUnfunded, 1);
 }));
 
-test('curve adapter: when simulation is not required, built ladder is eligible as curve_executable_built', withEnv(async () => {
+test('curve adapter: when simulation is not required, built ladder is unpriced evidence, still not eligible', withEnv(async () => {
   scriptFetch({ tradeLocal: [{ ok: true }, { ok: true }, { ok: true }], rpc: { err: { InsufficientFundsForFee: {} } } });
   const quote = await curveQuoteExecutableEntry(token, 0.00005, Date.now(), { requireSimulation: false });
-  assert.equal(quote.eligible, true);
-  assert.equal(quote.status, 'curve_executable_built');
+  assert.equal(quote.eligible, false);
+  assert.equal(quote.status, 'curve_entry_built_unpriced');
   assert.equal(quote.simulationOk, false);
 }));
 

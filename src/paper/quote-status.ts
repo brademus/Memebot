@@ -13,8 +13,11 @@ export function quoteCategory(status: string | null | undefined): string {
   const value = String(status || 'unknown');
   if (value === 'legacy_mark') return 'legacy';
   if (value === 'shadow_raw_no_execution' || value === 'pregrad_observation_only') return 'research_only';
-  if (value === 'executable_quote' || value === 'executable_simulated' || value === 'executable_exit_simulated' || value === 'curve_executable_simulated') return 'simulated_executable';
-  if (value === 'curve_executable_built') return 'built_executable';
+  if (value === 'executable_quote' || value === 'executable_simulated' || value === 'executable_exit_simulated') return 'simulated_executable';
+  // Curve evidence is unpriced: route/build/sim proof without a measured fill. It is
+  // deliberately NOT an executable bucket. Old names retained for rows written 2026-07-28.
+  if (value === 'curve_entry_simulated_unpriced' || value === 'curve_entry_built_unpriced'
+    || value === 'curve_executable_simulated' || value === 'curve_executable_built') return 'curve_evidence_unpriced';
   if (value === 'curve_sim_blocked_shadow_unfunded') return 'sim_blocked_unfunded';
   if (value === 'curve_shadow_wallet_missing') return 'missing_simulation_wallet';
   if (value === 'curve_rpc_missing') return 'missing_rpc';

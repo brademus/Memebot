@@ -139,15 +139,24 @@ async function refreshPromotionGate() {
     return;
   }
   try {
+    // STRICT ROUND-TRIP PREDICATE (review finding, 2026-07-28). Promotion samples
+    // must carry complete execution evidence on BOTH legs: a measured entry
+    // (position_usd, quoted_out_amount) and a simulated exit with executable
+    // proceeds. The multiple is executable proceeds over entry cost — never a
+    // market mark. verified_target means the 3x was PROVEN by a simulated exit
+    // (exit_reason target_3x_exit_simulated), not merely observed on a mark.
+    // Unpriced curve evidence can never appear here (its rows are ineligible).
     const result = await pool.query(
       `SELECT paper.signal,EXTRACT(EPOCH FROM paper.entry_at)*1000 AS entry_at,
-              COALESCE(paper.exit_price,paper.last_price)/NULLIF(paper.entry_price,0) AS multiple,
-              paper.target_hit_at IS NOT NULL AS verified_target,
+              paper.exit_quoted_usd/NULLIF(paper.position_usd,0) AS multiple,
+              paper.exit_reason='target_3x_exit_simulated' AS verified_target,
               NULLIF(split_part(decision.regime_id,':',2),'') AS regime
          FROM paper_trades paper
          LEFT JOIN signal_decisions decision ON decision.id=paper.signal_decision_id
         WHERE paper.model_version=$1 AND paper.execution_eligible=true AND paper.closed=true
           AND paper.exit_reason IS DISTINCT FROM 'tracking_lost'
+          AND paper.position_usd>0 AND paper.quoted_out_amount IS NOT NULL
+          AND paper.exit_simulation_ok=true AND paper.exit_quoted_usd>0
           AND paper.entry_at>now()-interval '30 days'
         ORDER BY paper.entry_at`,
       [MODEL_VERSION],

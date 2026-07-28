@@ -28,11 +28,14 @@ import { executionSettings, ExecutableQuote } from './execution';
  *                                    shadow wallet as payer. A simulation blocked
  *                                    purely by an unfunded shadow wallet is
  *                                    recorded as blocked, never as success.
- * 'curve_executable_simulated' requires rungs 1-4. If configuration does not
- * require simulation, 'curve_executable_built' (rungs 1-3) is the eligible
- * status, mirroring the Jupiter branch's semantics. Price impact on the curve is
- * UNKNOWN to this adapter and is reported as null rather than guessed; entry
- * pricing continues to use the market mark until a curve quoter exists.
+ * EVIDENCE, NOT ELIGIBILITY (review finding, 2026-07-28): a successful simulation
+ * proves the transaction EXECUTES — it does not measure what it FILLS at. This
+ * adapter cannot yet report expected token output, effective entry price, position
+ * value, or curve slippage, so its results are recorded as unpriced evidence
+ * ('curve_entry_simulated_unpriced' / 'curve_entry_built_unpriced') with
+ * eligible=false ALWAYS. Nothing from this adapter may enter the executable
+ * cohort until fill measurement (simulation post-balances) is implemented.
+ * effectiveEntryPrice is null — there is no measured price to report.
  */
 
 const TRADE_LOCAL_URL = 'https://pumpportal.fun/api/trade-local';
@@ -187,14 +190,16 @@ export async function curveQuoteExecutableEntry(
 
     const simFactor = simulationOk ? 1 : 0;
     const executionScore = clamp01(0.5 * (requireSimulation ? simFactor : 1) + 0.25 * 1 + 0.25 * (stable ? 1 : 0));
-    const eligible = requireSimulation ? simulationOk : true;
-    const status = eligible
-      ? (simulationOk ? 'curve_executable_simulated' : 'curve_executable_built')
+    // eligible is ALWAYS false here: the fill is unmeasured (see module comment).
+    const eligible = false;
+    const evidenceComplete = requireSimulation ? simulationOk : true;
+    const status = evidenceComplete
+      ? (simulationOk ? 'curve_entry_simulated_unpriced' : 'curve_entry_built_unpriced')
       : (simulationError || 'curve_simulation_failed');
     diag.lastStatus = status; diag.lastAt = new Date().toISOString();
     return {
       eligible, status,
-      effectiveEntryPrice: markPrice > 0 ? markPrice : null,
+      effectiveEntryPrice: null,   // no measured fill price exists for the curve yet
       positionSol, positionUsd: null, quotedOutUsd: null, quotedOutAmount: null,
       priceImpact: null, slippageBps: executionSettings.slippageBps,
       feeLamports: Math.round(PRIORITY_FEE_SOL * 1_000_000_000), router: 'pumpportal_curve',

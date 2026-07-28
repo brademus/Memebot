@@ -233,6 +233,24 @@ async function mark() {
 }
 
 async function closeAt(row: any, token: ReturnType<typeof getToken> | null, price: number | null, reason: string) {
+  // EXECUTION-HONEST EXITS (review finding, 2026-07-28): exit evidence used to be
+  // captured only when the 3x target hit, so the executable cohort contained only
+  // survivors. Every close of a measured eligible row now attempts a real exit
+  // quote/build/simulation first, best-effort, so promotion can compute executable
+  // proceeds for winners AND losers alike.
+  if (row?.execution_eligible && row?.quoted_out_amount && Number(row?.position_usd) > 0 && !row?.exit_quote_status && pool) {
+    try {
+      const exit = await quoteExecutableExit(row.ca, String(row.quoted_out_amount));
+      await pool.query(
+        `UPDATE paper_trades SET exit_quote_status=$2,exit_quoted_usd=$3,exit_price_impact_pct=$4,
+           exit_fee_lamports=$5,exit_router=$6,exit_quote_time_ms=$7,exit_transaction_built=$8,
+           exit_simulation_ok=$9,exit_simulation_error=$10
+         WHERE id=$1 AND exit_quote_status IS NULL`,
+        [row.id, exit.status, exit.proceedsUsd, exit.priceImpact, exit.feeLamports,
+         exit.router, exit.quoteTimeMs, exit.transactionBuilt, exit.simulationOk, exit.simulationError],
+      ).catch(() => {});
+    } catch { /* exit evidence is best-effort; the close itself must never fail on it */ }
+  }
   if (!pool) return;
   const closed = await pool.query(
     `UPDATE paper_trades SET closed=true,exit_at=now(),exit_reason=$2,
@@ -255,7 +273,8 @@ export async function paperScoreboard(days = 30): Promise<any[]> {
        COUNT(*) FILTER (WHERE execution_eligible) AS executable,
        COUNT(*) FILTER (WHERE transaction_built) AS transaction_built,
        COUNT(*) FILTER (WHERE simulation_ok) AS simulation_ok,
-       COUNT(*) FILTER (WHERE execution_eligible AND closed AND exit_reason IS DISTINCT FROM 'tracking_lost') AS resolved_executable,
+       COUNT(*) FILTER (WHERE execution_eligible AND closed AND exit_reason IS DISTINCT FROM 'tracking_lost'
+         AND position_usd>0 AND quoted_out_amount IS NOT NULL AND exit_simulation_ok=true AND exit_quoted_usd>0) AS resolved_executable,
        COUNT(*) FILTER (WHERE NOT execution_eligible) AS quote_ineligible,
        COUNT(*) FILTER (WHERE exit_reason='tracking_lost') AS incomplete,
        COUNT(*) FILTER (WHERE observed_target_hit_at IS NOT NULL) AS observed_hits_3x,
