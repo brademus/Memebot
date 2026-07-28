@@ -6,6 +6,10 @@ import {
   ConvictionQueueStatus,
   EntryTimingAssessment,
 } from './conviction-queue';
+import {
+  assessEntryRevalidation,
+  EntryRevalidationAssessment,
+} from './entry-revalidation';
 
 const autopsy = {
   since: Date.now(),
@@ -18,6 +22,7 @@ const autopsy = {
   burstTooHot: 0,
   dying: 0,
   modelAbstain: 0,
+  finalRevalidation: 0,
 };
 const autopsyCoins = new Set<string>();
 
@@ -34,15 +39,27 @@ export function triggerAutopsy() {
     burstTooHot: autopsy.burstTooHot,
     dying: autopsy.dying,
     modelAbstain: autopsy.modelAbstain,
+    finalRevalidation: autopsy.finalRevalidation,
   };
 }
+
+export type FinalEntryTimingAssessment = EntryTimingAssessment & EntryRevalidationAssessment;
 
 export function assessTrigger(
   token: TokenRecord,
   now = Date.now(),
   convictionOverride?: ConvictionQueueStatus,
-): EntryTimingAssessment {
-  return assessEntryTiming(token, now, convictionOverride);
+): FinalEntryTimingAssessment {
+  const timing = assessEntryTiming(token, now, convictionOverride);
+  const revalidation = assessEntryRevalidation(token, now);
+  const blockers = [...timing.blockers, ...revalidation.revalidationBlockers];
+  return {
+    ...timing,
+    ...revalidation,
+    blockers,
+    ready: timing.ready && revalidation.revalidationReady,
+    tooLate: timing.tooLate || revalidation.qualityTooLate,
+  };
 }
 
 export function updateState(
@@ -54,7 +71,7 @@ export function updateState(
   const age = cfg().age;
   const previous = token.state;
   const ageMin = (now - token.firstSeen) / 60_000;
-  const assessment = assessEntryTiming(token, now, convictionOverride);
+  const assessment = assessTrigger(token, now, convictionOverride);
 
   let next: TokenRecord['state'] = previous;
   if (ageMin > age.max_token_age_minutes) next = 'DEAD';
@@ -82,6 +99,7 @@ export function updateState(
       autopsy.burstTooHot = 0;
       autopsy.dying = 0;
       autopsy.modelAbstain = 0;
+      autopsy.finalRevalidation = 0;
       autopsyCoins.clear();
     }
     autopsy.aboveFloor++;
@@ -95,6 +113,7 @@ export function updateState(
       if (!assessment.evidenceReady) autopsy.evidence++;
       if (!assessment.persistenceReady) autopsy.persistence++;
       if (!assessment.burstCooled) autopsy.burstTooHot++;
+      if (!assessment.revalidationReady) autopsy.finalRevalidation++;
     }
   }
 

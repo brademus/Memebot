@@ -13,6 +13,12 @@ async function startLeaderWorker() {
   startBestBuysEngine();
   await import('./index');
 
+  // Refresh the latest persisted quality-selection reference before any candidate can
+  // complete its minimum conviction hold. The final trigger remains fail-closed until
+  // price, liquidity, buyer retention, and market continuity are revalidated.
+  const { startEntryRevalidation } = await import('./scoring/entry-revalidation');
+  startEntryRevalidation();
+
   const { startForwardEvidenceCollector } = await import('./tuning/snapshots');
   startForwardEvidenceCollector();
 
