@@ -9,9 +9,22 @@ import {
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function startLeaderWorker() {
+  // index initializes Postgres and the core scanner. Evidence schema activation follows
+  // immediately, before candidate engines can create new paper rows.
+  await import('./index');
+
+  // Evidence System v3 fingerprints every strategy-relevant configuration, journals
+  // execution mutations append-only, evaluates paired shadow policies on the same
+  // opportunities, gives every exit its own continuation shadow, and runs execution-
+  // quoted runner experiments. It is measurement-only and never signs or broadcasts.
+  const { initializeEvidenceSystemV3, startEvidenceSystemV3 } = await import('./evidence/system-v3');
+  const { hardenEvidenceSystemV3Schema } = await import('./evidence/schema-hardening');
+  await initializeEvidenceSystemV3();
+  await hardenEvidenceSystemV3Schema();
+  startEvidenceSystemV3();
+
   const { startBestBuysEngine } = await import('./api/bestbuys-runner');
   startBestBuysEngine();
-  await import('./index');
 
   // Refresh the latest persisted quality-selection reference before any candidate can
   // complete its minimum conviction hold. The final trigger remains fail-closed until
@@ -42,14 +55,6 @@ async function startLeaderWorker() {
   startStrategyLedgerReconciler();
   const { startStrategyExtremaReconciler } = await import('./paper/strategy-extrema-reconciler');
   startStrategyExtremaReconciler();
-
-  // Evidence System v3 fingerprints every strategy-relevant configuration, journals
-  // execution mutations append-only, evaluates paired shadow policies on the same
-  // opportunities, gives every exit its own continuation shadow, and runs execution-
-  // quoted runner experiments. It is measurement-only and never signs or broadcasts.
-  const { initializeEvidenceSystemV3, startEvidenceSystemV3 } = await import('./evidence/system-v3');
-  await initializeEvidenceSystemV3();
-  startEvidenceSystemV3();
 
   const { startDatabaseMaintenance } = await import('./ops/db-maintenance');
   startDatabaseMaintenance();
