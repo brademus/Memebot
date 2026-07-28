@@ -1,11 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { initDb, pool } from '../db';
+import { waitForCorePaperSchema } from './schema-hardening';
 import { initializeEvidenceSystemV3 } from './system-v3';
 
 test('evidence system stamps active policy and journals execution mutations append-only', async () => {
   assert.ok(pool, 'DATABASE_URL must be configured for the evidence integration test');
   await initDb();
+  await waitForCorePaperSchema();
   await initializeEvidenceSystemV3();
 
   const ca = `evidence-v3-${Date.now()}`;
