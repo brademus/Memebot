@@ -87,7 +87,14 @@ export function assessEntryRevalidation(token: TokenRecord, now = Date.now(), re
   const selectionPremiumPct = reference?.selectedPrice && token.priceUsd > 0 ? (token.priceUsd / reference.selectedPrice - 1) * 100 : null;
   const qualityTooLate = selectionPremiumPct !== null && selectionPremiumPct >= cfg().states.extended_pct;
   const isCurveToken = token.dex === 'pumpfun';
-  const liquidityReady = isCurveToken ? token.curveSol >= cfg().gates.min_liquidity_sol_curve : token.liquidityUsd >= cfg().gates.min_liquidity_usd;
+  const requiredLiquidityUsd = token.source === 'aged'
+    ? Math.max(cfg().gates.min_liquidity_usd, cfg().aged.min_liquidity_usd)
+    : cfg().gates.min_liquidity_usd;
+  const liquidityMcapRatio = token.mcapUsd > 0 ? token.liquidityUsd / token.mcapUsd : 0;
+  const agedRatioReady = token.source !== 'aged' || liquidityMcapRatio >= cfg().aged.min_liquidity_mcap_ratio;
+  const liquidityReady = isCurveToken
+    ? token.curveSol >= cfg().gates.min_liquidity_sol_curve
+    : token.liquidityUsd >= requiredLiquidityUsd && agedRatioReady;
   const retention = token.earlyBuyers.length >= 5 ? Math.max(0, 1 - token.earlyExited.length / token.earlyBuyers.length) : null;
   const retentionReady = retention === null || retention >= cfg().bestbuys.min_retention;
   const movedFromFirstScorePct = token.firstScorePrice && token.firstScorePrice > 0 && token.priceUsd > 0 ? (token.priceUsd / token.firstScorePrice - 1) * 100 : null;
@@ -97,8 +104,11 @@ export function assessEntryRevalidation(token: TokenRecord, now = Date.now(), re
   else reasons.push(`Quality observation ${reference.paperTradeId} remains the entry reference.`);
   if (qualityTooLate) blockers.push(`price is ${selectionPremiumPct!.toFixed(1)}% above the quality-selection price`);
   else if (selectionPremiumPct !== null) reasons.push(`Price is ${selectionPremiumPct.toFixed(1)}% from the quality-selection price.`);
-  if (!liquidityReady) blockers.push(isCurveToken ? `curve liquidity ${token.curveSol.toFixed(2)} SOL is below ${cfg().gates.min_liquidity_sol_curve} SOL` : `liquidity $${token.liquidityUsd.toFixed(2)} is below $${cfg().gates.min_liquidity_usd}`);
-  else reasons.push(isCurveToken ? 'Curve liquidity revalidated.' : 'DEX liquidity revalidated.');
+  if (!liquidityReady) {
+    if (isCurveToken) blockers.push(`curve liquidity ${token.curveSol.toFixed(2)} SOL is below ${cfg().gates.min_liquidity_sol_curve} SOL`);
+    else if (token.liquidityUsd < requiredLiquidityUsd) blockers.push(`liquidity $${token.liquidityUsd.toFixed(2)} is below $${requiredLiquidityUsd}`);
+    else blockers.push(`liquidity/mcap ${(liquidityMcapRatio * 100).toFixed(2)}% is below ${(cfg().aged.min_liquidity_mcap_ratio * 100).toFixed(2)}%`);
+  } else reasons.push(isCurveToken ? 'Curve liquidity revalidated.' : 'DEX liquidity revalidated.');
   if (!retentionReady && retention !== null) blockers.push(`early-buyer retention ${(retention * 100).toFixed(1)}% is below ${(cfg().bestbuys.min_retention * 100).toFixed(1)}%`);
   else if (retention !== null) reasons.push(`Early-buyer retention is ${(retention * 100).toFixed(1)}%.`);
   if (!marketContinuityReady && movedFromFirstScorePct !== null) blockers.push(`price is down ${Math.abs(movedFromFirstScorePct).toFixed(1)}% from first score; lifecycle or price continuity must reset`);
