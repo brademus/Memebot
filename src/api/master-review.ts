@@ -473,6 +473,61 @@ export async function buildMasterReview(days = 3650) {
       FROM paper_trades s JOIN paper_trades parent ON parent.id=s.parent_id
      WHERE s.signal='post_exit_watch' AND s.entry_at > now()-($1||' days')::interval`, [windowParameter]);
 
+  // Layer beneath the watchlist (user request 2026-07-28): coins killed at the
+  // GATE that still reached 3x from their kill-time snapshot — the misses that
+  // never earned a paper row. Sourced from the outcomes snapshots the kill flow
+  // already records; reasons come from the gate itself. Report-only.
+  const killedThreeX = await query('three_x_gate_killed', `
+    SELECT t.ca, MAX(t.symbol) AS symbol, MAX(t.gate_fail_reason) AS gate_fail_reason,
+           ROUND(MAX(o.multiple_from_first)::numeric, 2) AS peak_multiple_from_kill
+      FROM outcomes o JOIN tokens t ON t.ca=o.ca
+     WHERE o.taken_at > now()-($1||' days')::interval
+       AND t.gate_result='kill'
+       AND NOT EXISTS (SELECT 1 FROM paper_trades p WHERE p.ca=t.ca)
+     GROUP BY t.ca
+    HAVING MAX(o.multiple_from_first) >= 3
+     ORDER BY MAX(o.multiple_from_first) DESC
+     LIMIT 500`, [windowParameter]);
+  const killedByReason: Record<string, number> = {};
+  for (const row of killedThreeX) {
+    const key = String(row.gate_fail_reason || 'unknown_gate_reason');
+    killedByReason[key] = (killedByReason[key] || 0) + 1;
+  }
+
+  // 3X OVERSHOOT (user request 2026-07-28): for every 3x exit we actually took,
+  // the post-exit shadow measures how far the coin ran AFTER we sold everything.
+  // Peak-based figures are an UPPER BOUND on what any runner policy could have
+  // kept — the peak is not a realizable exit — and are labeled as such. This is
+  // the evidence base for a future partial-exit/runner design; nothing here
+  // changes the strategy.
+  const overshootRows = await query('three_x_overshoot', `
+    SELECT parent.ca, MAX(parent.symbol) AS symbol, MAX(parent.exit_reason) AS exit_reason,
+           MAX(parent.exit_at) AS exit_at,
+           ROUND(MAX(s.peak_price/NULLIF(parent.entry_price,0))::numeric, 2) AS post_exit_peak_vs_entry,
+           ROUND(MAX(s.peak_price/NULLIF(s.entry_price,0))::numeric, 2) AS continuation_vs_exit,
+           ROUND(MAX(EXTRACT(EPOCH FROM (s.peak_at - parent.exit_at))/60)::numeric, 1) AS minutes_to_post_exit_peak
+      FROM paper_trades s JOIN paper_trades parent ON parent.id=s.parent_id
+     WHERE s.signal='post_exit_watch'
+       AND parent.exit_reason IN ('target_3x_exit_simulated','strategy_take_profit_3x','target_3x_observed_legacy')
+       AND parent.entry_at > now()-($1||' days')::interval
+     GROUP BY parent.ca
+     ORDER BY MAX(s.peak_price/NULLIF(parent.entry_price,0)) DESC
+     LIMIT 200`, [windowParameter]);
+  const overshootMultiples = overshootRows.map((row: any) => Number(row.post_exit_peak_vs_entry)).filter((value: number) => Number.isFinite(value));
+  const sortedOvershoot = [...overshootMultiples].sort((left, right) => left - right);
+  const threeXOvershoot = {
+    exitsTracked: overshootRows.length,
+    medianPostExitPeakVsEntry: sortedOvershoot.length ? sortedOvershoot[Math.floor(sortedOvershoot.length / 2)] : null,
+    maxPostExitPeakVsEntry: sortedOvershoot.length ? sortedOvershoot[sortedOvershoot.length - 1] : null,
+    ranPast4x: overshootMultiples.filter((value: number) => value >= 4).length,
+    ranPast5x: overshootMultiples.filter((value: number) => value >= 5).length,
+    ranPast10x: overshootMultiples.filter((value: number) => value >= 10).length,
+    leftOnTablePer100UpperBoundUsd: Number(overshootMultiples
+      .reduce((sum: number, value: number) => sum + Math.max(0, (value - 3)) * 100, 0).toFixed(2)),
+    rows: overshootRows.slice(0, 40),
+    note: 'Upper-bound accounting: post-exit peaks are not realizable exits. leftOnTablePer100UpperBoundUsd sums (peak - 3x) x $100 across tracked 3x exits — the ceiling any runner-keeping policy could have captured, not an expectation. Evidence for future partial-exit design; no strategy behavior changes here.',
+  };
+
   const timedByCa = new Map<string, any>(timedThreeX.map((row: any) => [String(row.ca), row]));
   const reasonByCa = new Map<string, string | null>(blockedBeforePeak.map((row: any) => [String(row.ca), row.reason_code || null]));
   const missedByReason: Record<string, number> = {};
@@ -489,6 +544,8 @@ export async function buildMasterReview(days = 3650) {
     captured3xVerified: timedThreeX.filter((row: any) => row.captured_3x_verified).length,
     captured3xObserved: timedThreeX.filter((row: any) => row.captured_3x_observed).length,
     missedByReason,
+    killedBeforeWatch: { count: killedThreeX.length, byGateReason: killedByReason, rows: killedThreeX.slice(0, 40) },
+    threeXOvershoot,
     exitLadderVerdict: shadowVerdict[0] || { shadows: 0, original_trade_reached_3x_after_exit: 0, original_reached_1_5x_after_exit: 0, continued_3x_from_exit_price: 0 },
     rows: qualityThreeX.slice(0, 60).map((row: any) => ({
       ...row,
