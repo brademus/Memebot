@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { pumpPortalGuardDiag } from './pumpportal-guard';
-import { PUMPPORTAL_DAILY_PAID_EVENT_LIMIT } from './pumpportal-persistent-budget';
+import { PUMPPORTAL_DAILY_PAID_EVENT_LIMIT, PUMPPORTAL_ROLLING_14D_EVENT_LIMIT } from './pumpportal-persistent-budget';
 
 test('PumpPortal guard owns subscriptions and preserves the persistent spending ceiling', () => {
   const diag = pumpPortalGuardDiag();
@@ -20,9 +20,13 @@ test('PumpPortal guard owns subscriptions and preserves the persistent spending 
   // 2026-07-28), not an invariant.
   assert.equal(diag.persistentBudget.dailyEventLimit, PUMPPORTAL_DAILY_PAID_EVENT_LIMIT);
   assert.ok(PUMPPORTAL_DAILY_PAID_EVENT_LIMIT > 0 && PUMPPORTAL_DAILY_PAID_EVENT_LIMIT <= 30_000);
-  assert.ok(diag.persistentBudget.rolling14dEventLimit <= 50_000);
-  assert.ok(diag.persistentBudget.maxDailyCostSol <= 0.004);
-  assert.ok(diag.persistentBudget.maxRolling14dCostSol <= 0.05);
+  assert.equal(diag.persistentBudget.rolling14dEventLimit, PUMPPORTAL_ROLLING_14D_EVENT_LIMIT);
+  assert.ok(PUMPPORTAL_ROLLING_14D_EVENT_LIMIT > 0 && PUMPPORTAL_ROLLING_14D_EVENT_LIMIT <= 420_000);
+  // Cost figures must DERIVE from the event limits at 0.01 SOL per 10k messages —
+  // never frozen literals (two stale caps already hid here after the $10/week raise).
+  const COST_PER_EVENT = 0.01 / 10_000;
+  assert.ok(Math.abs(diag.persistentBudget.maxDailyCostSol - PUMPPORTAL_DAILY_PAID_EVENT_LIMIT * COST_PER_EVENT) < 1e-9);
+  assert.ok(Math.abs(diag.persistentBudget.maxRolling14dCostSol - PUMPPORTAL_ROLLING_14D_EVENT_LIMIT * COST_PER_EVENT) < 1e-9);
   assert.equal(diag.persistentBudget.failClosedWithoutDatabase, true);
   assert.equal(diag.persistentBudget.reservationModel, 'expiring_process_lease');
   assert.equal(diag.persistentBudget.legacyReservationLeakProtected, true);
