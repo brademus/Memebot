@@ -75,6 +75,8 @@ async function main() {
   }
   startSubscriptionReconciler();
   startPaperTrader();
+  const { ensureExecutionTruthEpoch } = await import('./paper/strategy-policy-epoch');
+  await ensureExecutionTruthEpoch();
   await startOpenPositionsCache();
   setPinnedKeysProvider(openTimedEntryCas);
 

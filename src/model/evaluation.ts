@@ -4,6 +4,7 @@ import { MODEL_VERSION } from './version';
 
 interface Row {
   at: number;
+  mint: string;
   creator: string;
   regime: string;
   probability: number;
@@ -28,18 +29,39 @@ export function evaluateRows(rows: Row[]) {
   const train = sorted.slice(0, split);
   const test = sorted.slice(split);
   const trainCreators = new Set(train.map(row => row.creator).filter(Boolean));
-  const unseen = test.filter(row => !row.creator || !trainCreators.has(row.creator));
-  const scored = unseen.length >= Math.max(10, test.length * 0.25) ? unseen : test;
+  const trainMints = new Set(train.map(row => row.mint).filter(Boolean));
+  // STRICT ISOLATION (review finding, 2026-07-28): a validation row must have a
+  // KNOWN creator absent from training AND a mint absent from training — an
+  // unknown creator is unidentified, not isolated. One sample per mint. When the
+  // isolated cohort is too small the evaluation FAILS with
+  // insufficient_isolated_validation_evidence; it never silently falls back to
+  // creator-contaminated data, which is what the old ternary did.
+  const seenMints = new Set<string>();
+  const unseen = test.filter(row => row.creator && !trainCreators.has(row.creator)
+    && row.mint && !trainMints.has(row.mint)
+    && !seenMints.has(row.mint) && (seenMints.add(row.mint), true));
+  const isolationOk = unseen.length >= Math.max(10, Math.ceil(test.length * 0.25));
+  const scored = unseen;
   const probabilities = scored.map(row => row.probability);
   const labels = scored.map(row => row.success);
   const allowed = scored.filter(row => row.allow);
   const actual = metrics(scored);
+  if (!isolationOk) {
+    return {
+      metrics: { scored_rows: scored.length, test_rows: test.length, isolation_status: 'insufficient_isolated_validation_evidence' },
+      placebo: {}, unseenCreatorRows: scored.length, passedFalsification: false,
+      isolationStatus: 'insufficient_isolated_validation_evidence',
+    } as any;
+  }
   const shuffledLabels = deterministicShuffle(labels, 71);
   const reversedProbabilities = [...probabilities].reverse();
   const placebo = {
     shuffled_brier: round(brierScore(probabilities, shuffledLabels)),
     shifted_brier: round(brierScore(reversedProbabilities, labels)),
-    shuffled_precision: round(mean(allowed.map((_, index) => shuffledLabels[index % Math.max(1, shuffledLabels.length)]))),
+    // pair each scored row with ITS shuffled label first, then filter to allowed —
+    // the old positional indexing broke row/label correspondence (review finding).
+    shuffled_precision: round(mean(scored.map((row, index) => ({ row, label: shuffledLabels[index] }))
+      .filter(pair => pair.row.allow).map(pair => pair.label))),
   };
   return {
     trainRows: train.length, testRows: test.length, unseenCreatorRows: unseen.length,
@@ -47,6 +69,7 @@ export function evaluateRows(rows: Row[]) {
     passedFalsification: scored.length >= 20
       && actual.brier < Math.min(placebo.shuffled_brier, placebo.shifted_brier)
       && actual.allow_precision >= placebo.shuffled_precision,
+    isolationStatus: 'isolated',
     evaluatedRows: scored,
   };
 }
@@ -56,6 +79,7 @@ export async function runModelEvaluation() {
   try {
     const result = await pool.query(
       `SELECT EXTRACT(EPOCH FROM decision.evaluated_at)*1000 AS at,
+              decision.ca AS mint,
               COALESCE(token.creator,'') AS creator,
               split_part(decision.regime_id,':',2) AS regime,
               decision.target_before_stop_probability AS probability,
@@ -70,7 +94,7 @@ export async function runModelEvaluation() {
         ORDER BY decision.evaluated_at`, [MODEL_VERSION],
     );
     const rows: Row[] = result.rows.map(row => ({
-      at: Number(row.at), creator: String(row.creator || ''), regime: String(row.regime || 'unknown'),
+      at: Number(row.at), mint: String(row.mint || ''), creator: String(row.creator || ''), regime: String(row.regime || 'unknown'),
       probability: Number(row.probability) || 0, allow: !!row.allow,
       success: Number(row.success) || 0, returnMultiple: Number(row.return_multiple) || 0,
     }));

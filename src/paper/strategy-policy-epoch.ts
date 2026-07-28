@@ -56,3 +56,22 @@ export function startStrategyPolicyEpoch() {
     console.log(`[strategy-policy] ${EXIT_POLICY_VERSION} prospective epoch=${epochAt}`);
   }).catch(error => console.error('[strategy-policy epoch]', (error as Error).message));
 }
+
+export const EXECUTION_TRUTH_EPOCH_NAME = 'execution_truth_v1';
+/**
+ * Marks the moment the execution-honest fixes deployed (strict round-trip
+ * promotion predicate, unpriced curve demotion, exit evidence at every eligible
+ * close, notional-aligned probes). Reports can scope executable cohorts to rows
+ * after this epoch; earlier execution evidence is classifiable as legacy.
+ */
+export async function ensureExecutionTruthEpoch(): Promise<void> {
+  if (!pool) return;
+  await pool.query(
+    `INSERT INTO evidence_epochs (name, metadata) VALUES ($1, $2::jsonb)
+     ON CONFLICT (name) DO NOTHING`,
+    [EXECUTION_TRUTH_EPOCH_NAME, JSON.stringify({
+      reason: 'promotion integrity + curve demotion + universal exit evidence + notional alignment',
+      commits: ['c9b5a37', '76fad02', '7a3913d'],
+    })],
+  ).catch(() => {});
+}
