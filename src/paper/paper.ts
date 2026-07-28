@@ -115,6 +115,10 @@ export function startPaperTrader() {
 
 const trackingRecoveryNoted = new Set<number>();
 
+// Snapshot pollers refresh watchlist tokens on multi-minute cadences; 30 minutes
+// tolerates slow sources while still letting genuinely dead coins age out.
+const PRICE_OBSERVATION_FRESH_MS = 30 * 60_000;
+
 async function mark() {
   if (!pool) return;
   const open = await pool.query(
@@ -124,7 +128,17 @@ async function mark() {
   ).catch(() => ({ rows: [] as any[] }));
   for (const row of open.rows) {
     const token = getToken(row.ca);
-    let price = token && token.priceUsd > 0 ? token.priceUsd : 0;
+    // A price only counts as ALIVE if it was observed recently (trade event or
+    // snapshot). Dead coins linger in memory with their last price frozen at
+    // entry; treating that as live wrote fresh-timestamped marks with a stale
+    // price forever, so the six-hour tracking-lost clock never started and the
+    // open board filled with immortal 1.00x zombies (observed live 2026-07-28:
+    // 50 of 51 open calls older than 6h, median 21.5h, prices bit-identical to
+    // entry). Stale in-memory prices now fall through to recovery and, failing
+    // that, the honest grace clock.
+    const priceFresh = !!token && token.priceUsd > 0
+      && !!token.priceAt && Date.now() - token.priceAt < PRICE_OBSERVATION_FRESH_MS;
+    let price = priceFresh ? token!.priceUsd : 0;
     let recovered = false;
 
     if (!(price > 0)) {

@@ -178,6 +178,8 @@ export interface TokenRecord {
   fillMinutes: number | null;
   secondWaveAt: number | null;
   priceUsd: number;
+  /** ms timestamp of the last GENUINE price observation (trade event or snapshot). */
+  priceAt?: number;
   liquidityUsd: number;
   mcapUsd: number;
   vol5m: number;

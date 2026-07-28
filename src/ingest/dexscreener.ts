@@ -46,6 +46,7 @@ async function enrich(batch: TokenRecord[], onUpdated: (t: TokenRecord) => void)
       const dexPrice = parseFloat(pair.priceUsd || '0');
       if (dexPrice > 0) {
         t.priceUsd = dexPrice;
+        t.priceAt = Date.now();
         (t as any).marketUpdatedAt = Date.now();
         backfillWalletEntryPrice(t.ca, dexPrice).catch(() => {});
         if (t.gradAt) {

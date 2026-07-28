@@ -216,6 +216,7 @@ function seedAgedToken(token: TokenRecord, pool: any, assessment: AgedAssessment
   token.dexId = pool.relationships?.dex?.data?.id || 'raydium';
   token.dex = token.dexId;
   token.priceUsd = number(attributes.base_token_price_usd);
+  token.priceAt = Date.now();
   token.liquidityUsd = assessment.metrics.liquidityUsd;
   token.mcapUsd = assessment.metrics.mcapUsd;
   token.vol5m = number(attributes.volume_usd?.m5);

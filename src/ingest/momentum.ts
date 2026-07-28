@@ -115,6 +115,7 @@ function seedFromPool(t: TokenRecord, p: any, a: any) {
   t.dexId = p.relationships?.dex?.data?.id || 'raydium';
   t.dex = t.dexId;                                    // NOT 'pumpfun' -> gates use the full AMM path
   t.priceUsd = Number(a.base_token_price_usd) || 0;
+  if (t.priceUsd > 0) t.priceAt = Date.now();
   t.liquidityUsd = Number(a.reserve_in_usd) || 0;
   t.mcapUsd = Number(a.fdv_usd) || Number(a.market_cap_usd) || 0;
   t.vol5m = Number(a.volume_usd?.m5) || 0;

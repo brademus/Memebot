@@ -239,7 +239,7 @@ function seedCurve(t: any, msg: any) {
   t.curveSol = solInCurve;
   t.liquidityUsd = solInCurve * SOL_USD;
   t.mcapUsd = mcapSol * SOL_USD;
-  if (solInCurve > 0 && tokensInCurve > 0) t.priceUsd = (solInCurve / tokensInCurve) * SOL_USD;
+  if (solInCurve > 0 && tokensInCurve > 0) { t.priceUsd = (solInCurve / tokensInCurve) * SOL_USD; t.priceAt = Date.now(); }
   if (t.priceUsd > 0) t.marketUpdatedAt = now;
   t.dex = 'pumpfun';
   t.dexId = 'pumpfun';
@@ -261,6 +261,7 @@ function applyCurveTrade(msg: any): boolean {
   if (msg.marketCapSol) t.mcapUsd = Number(msg.marketCapSol) * SOL_USD;
   if (msg.vSolInBondingCurve && msg.vTokensInBondingCurve) {
     t.priceUsd = (Number(msg.vSolInBondingCurve) / Number(msg.vTokensInBondingCurve)) * SOL_USD;
+    t.priceAt = Date.now();
     t.marketUpdatedAt = now;
   }
 
