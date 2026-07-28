@@ -3,6 +3,15 @@ export const STRATEGY_NOTIONAL_USD = 100;
 
 export type StrategyRole = 'quality_observation' | 'timed_entry' | 'model_observation' | 'legacy';
 export type StrategyDecisionAction = 'hold' | 'sell';
+export type DeteriorationFamily =
+  | 'market_flow'
+  | 'score_quality'
+  | 'liquidity'
+  | 'smart_wallet'
+  | 'holder_retention'
+  | 'model'
+  | 'market_state'
+  | 'price_momentum';
 
 export interface StrategyExitInput {
   role: StrategyRole;
@@ -36,7 +45,7 @@ export interface StrategyExitEvaluation {
   peakMultiple: number;
   activeStopMultiple: number;
   deteriorationSignals: string[];
-  metrics: Record<string, number | string | boolean | null>;
+  metrics: Record<string, unknown>;
 }
 
 export const ADAPTIVE_EXIT_POLICY = {
@@ -57,6 +66,9 @@ export const ADAPTIVE_EXIT_POLICY = {
   earlyRetentionFloor: 0.50,
   modelNegativeExpectedValue: 0,
   modelHighDownsideProbability: 0.55,
+  deteriorationFamiliesToExit: 3,
+  // Kept in the serialized policy for backwards-compatible report readers. Exit logic
+  // now counts independent evidence families rather than correlated raw conditions.
   deteriorationSignalsToExit: 3,
 };
 
@@ -71,6 +83,32 @@ export function strategyRoleForSignal(signal: string): StrategyRole {
   if (signal.startsWith('bb_') || signal === 'conviction') return 'quality_observation';
   if (signal.startsWith('model')) return 'model_observation';
   return 'legacy';
+}
+
+/**
+ * Convert human-readable raw deterioration messages into genuinely separate evidence
+ * families. The model's EV/downside outputs are one family. DYING/DEAD is derived from
+ * score, flow, momentum, and curve rules, so it is not counted again when one of those
+ * direct causes is already present.
+ */
+export function deteriorationFamiliesFromSignals(signals: string[]): DeteriorationFamily[] {
+  const families = new Set<DeteriorationFamily>();
+  for (const signal of signals) {
+    if (signal.startsWith('sell pressure dominates:')) families.add('market_flow');
+    else if (signal.startsWith('score deteriorated ')) families.add('score_quality');
+    else if (signal.startsWith('liquidity fell ')) families.add('liquidity');
+    else if (signal.includes('smart-wallet confirmation')) families.add('smart_wallet');
+    else if (signal.startsWith('early-buyer retention weakened')) families.add('holder_retention');
+    else if (signal.startsWith('model expected value turned negative')
+      || signal.startsWith('model downside probability rose')) families.add('model');
+    else if (signal.startsWith('token state changed to ')) families.add('market_state');
+    else if (signal.startsWith('five-minute price change collapsed')) families.add('price_momentum');
+  }
+  if (families.has('market_state')
+    && (families.has('score_quality') || families.has('market_flow') || families.has('price_momentum'))) {
+    families.delete('market_state');
+  }
+  return [...families];
 }
 
 export function benchmarkExitDecision(entryPrice: number, markPrice: number, peakPrice: number, ageHours: number): StrategyExitEvaluation {
@@ -140,7 +178,8 @@ export function adaptiveExitDecision(input: StrategyExitInput): StrategyExitEval
   if (input.priceChange5m !== null && input.priceChange5m <= -25)
     deteriorationSignals.push(`five-minute price change collapsed to ${input.priceChange5m.toFixed(1)}%`);
 
-  const metrics: Record<string, number | string | boolean | null> = {
+  const deteriorationFamilies = deteriorationFamiliesFromSignals(deteriorationSignals);
+  const metrics: Record<string, unknown> = {
     entryPrice: entry, markPrice: mark, peakPrice: peak, multiple, peakMultiple, activeStopMultiple,
     ageHours: input.ageHours, entryScore: finite(input.entryScore), currentScore: finite(input.currentScore), scoreDrop,
     entryLiquidityUsd: finite(input.entryLiquidityUsd), currentLiquidityUsd: finite(input.currentLiquidityUsd),
@@ -149,12 +188,15 @@ export function adaptiveExitDecision(input: StrategyExitInput): StrategyExitEval
     earlyRetention: finite(input.earlyRetention), modelExpectedValue: finite(input.modelExpectedValue),
     modelDownsideProbability: finite(input.modelDownsideProbability), state: input.state,
     insiderKilled: input.insiderKilled, fundedSnipers: input.fundedSnipers,
+    rawDeteriorationSignalCount: deteriorationSignals.length,
+    independentDeteriorationFamilyCount: deteriorationFamilies.length,
+    deteriorationFamilies,
   };
   const result = (action: StrategyDecisionAction, reasonCode: string, reasons: string[], exitPrice: number | null,
     exitMultiple = multiple): StrategyExitEvaluation => ({
-      action, reasonCode, reasons, exitPrice, multiple: exitMultiple, peakMultiple, activeStopMultiple,
-      deteriorationSignals, metrics,
-    });
+    action, reasonCode, reasons, exitPrice, multiple: exitMultiple, peakMultiple, activeStopMultiple,
+    deteriorationSignals, metrics,
+  });
 
   if (peakMultiple >= ADAPTIVE_EXIT_POLICY.takeProfitMultiple)
     return result('sell', 'strategy_take_profit_3x', ['The timed paper entry reached the 3x profit objective.'],
@@ -174,15 +216,16 @@ export function adaptiveExitDecision(input: StrategyExitInput): StrategyExitEval
       ? 'strategy_trailing_profit_exit_2x' : 'strategy_profit_lock_exit_1_5x',
     [`Profit protection armed at ${peakMultiple.toFixed(2)}x and price retraced to ${multiple.toFixed(2)}x, below the ${activeStopMultiple.toFixed(2)}x active floor.`], mark);
 
-  const deteriorationExit = deteriorationSignals.length >= ADAPTIVE_EXIT_POLICY.deteriorationSignalsToExit
-    || (deteriorationSignals.length >= 2 && (multiple >= 1.05 || multiple <= 0.85));
+  const deteriorationExit = deteriorationFamilies.length >= ADAPTIVE_EXIT_POLICY.deteriorationFamiliesToExit
+    || (deteriorationFamilies.length >= 2 && (multiple >= 1.05 || multiple <= 0.85));
   if (deteriorationExit) return result('sell', 'strategy_multi_signal_deterioration_exit',
-    [`${deteriorationSignals.length} independent post-entry conditions deteriorated.`, ...deteriorationSignals], mark);
+    [`${deteriorationFamilies.length} independent post-entry evidence families deteriorated.`,
+      `Families: ${deteriorationFamilies.join(', ')}.`, ...deteriorationSignals], mark);
 
   return result('hold', 'strategy_hold', [
     `Position remains above its active ${activeStopMultiple.toFixed(2)}x protection floor.`,
     deteriorationSignals.length
-      ? `${deteriorationSignals.length} deterioration signal(s) are present, below the current exit threshold.`
+      ? `${deteriorationSignals.length} raw condition(s) map to ${deteriorationFamilies.length} independent evidence family/families, below the current exit threshold.`
       : 'No material post-entry deterioration is confirmed.',
     'The 24-hour time exit is owned by the paper tracker, which first verifies a fresh or recovered market price.',
   ], null);
