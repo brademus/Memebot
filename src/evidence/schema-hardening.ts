@@ -1,5 +1,29 @@
 import { pool } from '../db';
 
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * `index.ts` starts `initDb()` asynchronously during module evaluation. On a fresh
+ * database, boot must not run evidence ALTERs before the core paper_trades table
+ * exists. Existing databases pass immediately; fresh databases wait for the core
+ * migration and fail closed if it never becomes ready.
+ */
+export async function waitForCorePaperSchema() {
+  if (!pool) return;
+  let lastError: string | null = null;
+  for (let attempt = 0; attempt < 120; attempt++) {
+    try {
+      const result = await pool.query(`SELECT to_regclass('paper_trades') AS relation`);
+      if (result.rows[0]?.relation) return;
+      lastError = null;
+    } catch (error) {
+      lastError = (error as Error).message;
+    }
+    await sleep(100);
+  }
+  throw new Error(`core paper schema did not become ready${lastError ? `: ${lastError}` : ''}`);
+}
+
 /**
  * Evidence fingerprints describe the policy under which a row was CREATED.
  * Updating a legacy row must never relabel it as current evidence. The main
