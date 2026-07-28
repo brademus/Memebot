@@ -6,7 +6,12 @@ import { analyzeWallet } from './quality';
 
 const VERDICT_RANK: Record<string, number> = { REJECT: 0, MARGINAL: 1, GOOD: 2, ELITE: 3 };
 const meetsBar = (verdict: string) => VERDICT_RANK[verdict] >= (VERDICT_RANK[cfg().wallets.quality_min_verdict] ?? 1);
-interface Diag { lastRun: string | null; lastError: string | null; winnersFound: number; walletsCredited: number; activeWallets: number; blockedBy: string | null }
+interface Diag {
+  lastRun: string | null; lastError: string | null; winnersFound: number;
+  walletsCredited: number; activeWallets: number; blockedBy: string | null;
+  lastActiveBumped?: number; qualityAnalysisErrors?: number; qualityInsufficientData?: number;
+  idleReaperSkipped?: string | null; idleReaped?: number; rosterRevived?: number;
+}
 const diag: Diag = { lastRun: null, lastError: null, winnersFound: 0, walletsCredited: 0, activeWallets: 0, blockedBy: null };
 export const discoveryDiag = () => diag;
 
@@ -25,6 +30,19 @@ export async function runDiscovery(): Promise<Diag> {
   try {
     diag.lastRun = new Date().toISOString();
     diag.lastError = null;
+
+    // FIX (wallet death spiral): a wallet's liveness must be learnable from ANY
+    // channel the bot observes, not only the Helius webhook. The full pump.fun
+    // trade stream already lands wallet trades in trade_events at zero marginal
+    // cost — bump last_active from it, so a webhook outage can never make the
+    // entire roster look idle. This was the first stage of the 551->5 collapse.
+    const bumped = await pool.query(
+      `UPDATE smart_wallets w SET last_active = g.max_at
+         FROM (SELECT wallet, MAX(at) AS max_at FROM trade_events
+                WHERE wallet IS NOT NULL AND wallet <> '' AND at > now()-interval '48 hours'
+                GROUP BY wallet) g
+        WHERE g.wallet = w.wallet AND (w.last_active IS NULL OR w.last_active < g.max_at)`);
+    diag.lastActiveBumped = bumped.rowCount || 0;
     const winners = await pool.query(
       `SELECT DISTINCT t.ca,t.early_buyers FROM tokens t
        JOIN outcomes o ON o.ca=t.ca
@@ -63,18 +81,46 @@ export async function runDiscovery(): Promise<Diag> {
                    quality_checked_at NULLS FIRST,winners_hit DESC LIMIT 30`,
         [String(settings.quality_recheck_days)]);
       for (const { wallet } of toCheck.rows) {
-        const quality = await analyzeWallet(wallet);
+        // FIX (wallet death spiral): under free-tier rate limiting, analyzeWallet can
+        // see a starved or empty history. A judgment needs data: if the analysis saw
+        // fewer than 3 traded tokens (or threw), record the attempt and judge NOTHING —
+        // no verdict write (a starved REJECT would also drop the wallet from webhook
+        // registration), no demotion. The wallet retries on the normal recheck cadence.
+        let quality;
+        try { quality = await analyzeWallet(wallet); }
+        catch (error) {
+          diag.qualityAnalysisErrors = (diag.qualityAnalysisErrors || 0) + 1;
+          await pool.query(`UPDATE smart_wallets SET quality_checked_at=now() WHERE wallet=$1`, [wallet]);
+          continue;
+        }
+        if (quality.tokensTraded < 3) {
+          diag.qualityInsufficientData = (diag.qualityInsufficientData || 0) + 1;
+          await pool.query(`UPDATE smart_wallets SET quality_checked_at=now() WHERE wallet=$1`, [wallet]);
+          continue;
+        }
         await pool.query(
           `UPDATE smart_wallets SET quality_verdict=$2,win_rate=$3,round_trips=$4,
              quality_checked_at=now(),active=active AND $5 WHERE wallet=$1`,
           [wallet, quality.verdict, +quality.winRate.toFixed(3), quality.roundTrips, meetsBar(quality.verdict)]);
       }
       if (settings.idle_deactivate_days > 0) {
-        await pool.query(
-          `UPDATE smart_wallets SET active=false
-            WHERE active AND last_active IS NOT NULL
-              AND last_active < now()-($1||' days')::interval`,
-          [String(settings.idle_deactivate_days)]);
+        // FIX (wallet death spiral): idleness is only evidence when the observation
+        // channels were alive. If NO wallet on the roster has shown activity on ANY
+        // channel in 24 hours, the channels are down — reaping then converts an
+        // outage into a roster wipe. Skip loudly instead.
+        const health = await pool.query(
+          `SELECT MAX(last_active) > now()-interval '24 hours' AS alive FROM smart_wallets`);
+        if (!health.rows[0]?.alive) {
+          diag.idleReaperSkipped = 'no wallet activity on any channel in 24h — observation outage, silence is not evidence';
+          console.warn('[wallets] idle reaper SKIPPED — observation channels appear down');
+        } else {
+          const reaped = await pool.query(
+            `UPDATE smart_wallets SET active=false
+              WHERE active AND last_active IS NOT NULL
+                AND last_active < now()-($1||' days')::interval`,
+            [String(settings.idle_deactivate_days)]);
+          diag.idleReaped = reaped.rowCount || 0;
+        }
       }
     }
 
@@ -121,6 +167,36 @@ export async function runDiscovery(): Promise<Diag> {
        ) RETURNING wallet`,
       [settings.prune_min_measured_buys, settings.prune_max_2x_rate]);
     if (pruned.rowCount) console.log(`[wallets] pruned ${pruned.rowCount} wallets from wallet-entry outcomes`);
+
+    // FIX (wallet death spiral, recovery): a roster cannot silently stay collapsed.
+    // If active wallets sit below a floor while proven, non-rejected wallets are
+    // deactivated, restore the best of them with a fresh liveness window and let
+    // per-entry outcome pruning re-judge from real evidence. Wallets pruned BY
+    // EVIDENCE (measured copied-entry returns below the bar) are excluded — outage
+    // recovery must never resurrect an evidence-based kill.
+    const ROSTER_FLOOR = 25;
+    const activeBefore = await pool.query(`SELECT COUNT(*)::int c FROM smart_wallets WHERE active`);
+    if (activeBefore.rows[0].c < ROSTER_FLOOR) {
+      const revived = await pool.query(
+        `UPDATE smart_wallets SET active=true, last_active=now()
+          WHERE wallet IN (
+            SELECT s.wallet FROM smart_wallets s
+             WHERE NOT s.active AND s.type <> 'pumpfun_candidate'
+               AND s.quality_verdict IS DISTINCT FROM 'REJECT'
+               AND s.wallet NOT IN (
+                 SELECT o.wallet FROM wallet_hit_outcomes o
+                  WHERE o.snapshot_minutes=240 AND o.multiple_from_buy IS NOT NULL
+                  GROUP BY o.wallet
+                 HAVING COUNT(DISTINCT o.ca) >= $2
+                    AND (COUNT(DISTINCT o.ca) FILTER (WHERE o.multiple_from_buy >= 2))::float
+                        / COUNT(DISTINCT o.ca) < $3)
+             ORDER BY s.winners_hit DESC NULLS LAST, s.round_trips DESC NULLS LAST
+             LIMIT $1) RETURNING wallet`,
+        [settings.max_tracked_wallets - activeBefore.rows[0].c,
+         settings.prune_min_measured_buys, settings.prune_max_2x_rate]);
+      diag.rosterRevived = revived.rowCount || 0;
+      if (revived.rowCount) console.log(`[wallets] roster recovery: revived ${revived.rowCount} proven wallets after collapse below floor ${ROSTER_FLOOR}`);
+    }
 
     const count = await pool.query(`SELECT COUNT(*)::int c FROM smart_wallets WHERE active`);
     diag.activeWallets = count.rows[0].c;
