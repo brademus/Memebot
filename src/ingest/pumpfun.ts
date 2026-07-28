@@ -201,7 +201,16 @@ export const pumpfunStreamDiag = () => {
           : !connected
             ? 'socket_not_open'
             : lastTradeAt === null
-              ? 'no_token_trade_events_received'
+              ? (messageCounts.creates > 0
+                  // Free channels (creates/migrations) delivering while the PAID
+                  // trade channel is mute, with an accepted key and clean sends, is
+                  // the signature of a drained PumpPortal funding wallet: the
+                  // provider meters trade events per message and silently stops
+                  // delivering when the balance is empty — no error, no rejection.
+                  // Observed live 2026-07-28: creates 8,692 / migrations 383 /
+                  // trades 0 while 5,906 trade subscriptions were accepted.
+                  ? 'paid_trade_channel_silent_while_free_channels_deliver__check_pumpportal_wallet_balance'
+                  : 'no_token_trade_events_received')
               : effectiveMode === 'lite'
                 ? 'token_trade_stream_stale'
                 : 'healthy',
