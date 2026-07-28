@@ -47,11 +47,15 @@ export function evaluateRows(rows: Row[]) {
   const allowed = scored.filter(row => row.allow);
   const actual = metrics(scored);
   if (!isolationOk) {
+    // Complete shape, honestly empty: never a silent fallback to contaminated rows.
     return {
-      metrics: { scored_rows: scored.length, test_rows: test.length, isolation_status: 'insufficient_isolated_validation_evidence' },
-      placebo: {}, unseenCreatorRows: scored.length, passedFalsification: false,
-      isolationStatus: 'insufficient_isolated_validation_evidence',
-    } as any;
+      trainRows: train.length, testRows: test.length, unseenCreatorRows: scored.length,
+      metrics: { scored_rows: scored.length, isolation_status: 'insufficient_isolated_validation_evidence' } as Record<string, unknown>,
+      placebo: {} as Record<string, unknown>,
+      passedFalsification: false,
+      isolationStatus: 'insufficient_isolated_validation_evidence' as const,
+      evaluatedRows: [] as Row[],
+    };
   }
   const shuffledLabels = deterministicShuffle(labels, 71);
   const reversedProbabilities = [...probabilities].reverse();
@@ -60,8 +64,8 @@ export function evaluateRows(rows: Row[]) {
     shifted_brier: round(brierScore(reversedProbabilities, labels)),
     // pair each scored row with ITS shuffled label first, then filter to allowed —
     // the old positional indexing broke row/label correspondence (review finding).
-    shuffled_precision: round(mean(scored.map((row, index) => ({ row, label: shuffledLabels[index] }))
-      .filter(pair => pair.row.allow).map(pair => pair.label))),
+    shuffled_precision: round(mean(scored.map((row: Row, index: number) => ({ row, label: shuffledLabels[index] }))
+      .filter((pair: { row: Row; label: number }) => pair.row.allow).map((pair: { row: Row; label: number }) => pair.label))),
   };
   return {
     trainRows: train.length, testRows: test.length, unseenCreatorRows: unseen.length,
