@@ -2,6 +2,11 @@ import { pool } from '../db';
 import { pumpfunStreamDiag } from '../ingest/pumpfun';
 import { strategyExtremaReconcilerDiag } from '../paper/strategy-extrema-reconciler';
 import {
+  EXIT_POLICY_VERSION,
+  ensureStrategyPolicyEpoch,
+  strategyPolicyEpochDiag,
+} from '../paper/strategy-policy-epoch';
+import {
   ADAPTIVE_EXIT_POLICY,
   DeteriorationFamily,
   deteriorationFamiliesFromSignals,
@@ -55,7 +60,14 @@ const guardDiag = () => {
 export async function buildStrategyIntegrityReport(days = 1) {
   const boundedDays = Math.max(1, Math.min(30, Math.floor(days) || 1));
   if (!pool) return { available: false, reason: 'database_unavailable' };
-  const windowStart = new Date(Date.now() - boundedDays * 86_400_000).toISOString();
+  const requestedWindowStart = new Date(Date.now() - boundedDays * 86_400_000).toISOString();
+  let policyEpochAt: string;
+  try {
+    policyEpochAt = await ensureStrategyPolicyEpoch();
+  } catch (error) {
+    return { available: false, reason: 'strategy_policy_epoch_unavailable', error: (error as Error).message };
+  }
+  const cohortStart = new Date(Math.max(Date.parse(requestedWindowStart), Date.parse(policyEpochAt))).toISOString();
   const errors: string[] = [];
   const query = async (name: string, text: string, values: unknown[] = []): Promise<any[]> => {
     try {
@@ -90,7 +102,7 @@ export async function buildStrategyIntegrityReport(days = 1) {
           AND exit_transaction_built AND exit_simulation_ok
           AND position_usd>0 AND exit_quoted_usd IS NOT NULL),0)::numeric,2) AS execution_proven_pnl_usd
       FROM paper_trades WHERE strategy_version=$1 AND strategy_role='timed_entry'
-        AND entry_at>=$2::timestamptz`, [STRATEGY_VERSION, windowStart]),
+        AND entry_at>=$2::timestamptz`, [STRATEGY_VERSION, cohortStart]),
     query('strategy integrity quote status', `SELECT COALESCE(quote_status,'unknown') AS quote_status,
       COUNT(*)::int AS entries,COUNT(*) FILTER (WHERE closed)::int AS closed,
       COUNT(*) FILTER (WHERE closed AND exit_reason IS DISTINCT FROM 'tracking_lost')::int AS resolved,
@@ -114,7 +126,7 @@ export async function buildStrategyIntegrityReport(days = 1) {
           AND exit_transaction_built AND exit_simulation_ok
           AND position_usd>0 AND exit_quoted_usd IS NOT NULL),0)::numeric,2) AS execution_proven_pnl_usd
       FROM paper_trades WHERE strategy_version=$1 AND strategy_role='timed_entry'
-        AND entry_at>=$2::timestamptz GROUP BY quote_status ORDER BY entries DESC`, [STRATEGY_VERSION, windowStart]),
+        AND entry_at>=$2::timestamptz GROUP BY quote_status ORDER BY entries DESC`, [STRATEGY_VERSION, cohortStart]),
     query('strategy integrity coverage', `SELECT COUNT(*)::int AS timed_entries,
       COUNT(*) FILTER (WHERE exact_trade_events_at_entry>0)::int AS with_exact_trade_events_at_entry,
       COUNT(*) FILTER (WHERE coverage_snapshot#>>'{walletIdentities}'='true')::int AS with_wallet_identities,
@@ -125,7 +137,7 @@ export async function buildStrategyIntegrityReport(days = 1) {
       COUNT(*) FILTER (WHERE coverage_snapshot#>>'{aggregateFlow}'='true')::int AS with_aggregate_flow,
       COUNT(*) FILTER (WHERE trigger_snapshot#>>'{revalidationReady}'='true')::int AS with_final_entry_revalidation
       FROM paper_trades WHERE strategy_version=$1 AND strategy_role='timed_entry'
-        AND entry_at>=$2::timestamptz`, [STRATEGY_VERSION, windowStart]),
+        AND entry_at>=$2::timestamptz`, [STRATEGY_VERSION, cohortStart]),
     query('strategy integrity pnl concentration summary', `WITH resolved AS (
         SELECT COALESCE(realized_pnl_usd,(final_multiple-1)*notional_usd)::numeric AS pnl_usd
         FROM paper_trades WHERE strategy_version=$1 AND strategy_role='timed_entry'
@@ -136,19 +148,19 @@ export async function buildStrategyIntegrityReport(days = 1) {
         ROUND(COALESCE(SUM(pnl_usd),0),2) AS total_market_mark_pnl_usd,
         ROUND(COALESCE(MAX(pnl_usd),0),2) AS largest_winner_pnl_usd,
         ROUND(COALESCE(SUM(pnl_usd) FILTER (WHERE rn<=2),0),2) AS top_two_pnl_usd
-      FROM ranked`, [STRATEGY_VERSION, windowStart]),
+      FROM ranked`, [STRATEGY_VERSION, cohortStart]),
     query('strategy integrity pnl concentration detail', `SELECT id,ca,symbol,entry_at,exit_at,quote_status,
       execution_eligible,transaction_built,simulation_ok,exit_transaction_built,exit_simulation_ok,
       position_usd,exit_quoted_usd,final_multiple,
       COALESCE(realized_pnl_usd,(final_multiple-1)*notional_usd) AS pnl_usd
       FROM paper_trades WHERE strategy_version=$1 AND strategy_role='timed_entry'
         AND entry_at>=$2::timestamptz AND closed AND exit_reason IS DISTINCT FROM 'tracking_lost'
-      ORDER BY pnl_usd DESC NULLS LAST LIMIT 500`, [STRATEGY_VERSION, windowStart]),
+      ORDER BY pnl_usd DESC NULLS LAST LIMIT 500`, [STRATEGY_VERSION, cohortStart]),
     query('strategy integrity exit audit', `SELECT id,ca,symbol,exit_at,exit_reason,final_multiple,
       exit_decision->'deteriorationSignals' AS deterioration_signals
       FROM paper_trades WHERE strategy_version=$1 AND strategy_role='timed_entry'
         AND entry_at>=$2::timestamptz AND closed
-      ORDER BY exit_at,id LIMIT 5000`, [STRATEGY_VERSION, windowStart]),
+      ORDER BY exit_at,id LIMIT 5000`, [STRATEGY_VERSION, cohortStart]),
   ]);
 
   const accounting: any = accountingRows[0] || {};
@@ -179,7 +191,7 @@ export async function buildStrategyIntegrityReport(days = 1) {
       meetsCurrentIndependentFamilyRule: meetsFamilyRule,
     };
   });
-  const legacyMultiSignal = auditedExits.filter((row: ExitAuditRow) =>
+  const multiSignal = auditedExits.filter((row: ExitAuditRow) =>
     row.exitReason === 'strategy_multi_signal_deterioration_exit');
 
   const warnings: string[] = [];
@@ -197,8 +209,12 @@ export async function buildStrategyIntegrityReport(days = 1) {
     available: true,
     reportType: 'strategy_integrity_and_execution_honesty',
     strategyVersion: STRATEGY_VERSION,
-    windowStart,
+    exitPolicyVersion: EXIT_POLICY_VERSION,
+    requestedWindowStart,
+    policyEpochAt,
+    cohortStart,
     windowDaysRequested: boundedDays,
+    cohortRule: 'Only timed entries opened at or after cohortStart are included. Pre-change trades remain in strategyLifecycle and historical evidence but cannot contaminate this policy headline.',
     accountingDefinitions: {
       marketMarkResearch: 'All timed-entry intents marked and exited from observed market prices. This measures signal behavior but does not prove the hypothetical order was routable or fillable.',
       executionProven: 'A closed timed entry is counted only when both entry and exit were eligible, transactions were built, simulations succeeded, and simulated exit proceeds are recorded. This remains shadow-only and does not broadcast.',
@@ -235,14 +251,15 @@ export async function buildStrategyIntegrityReport(days = 1) {
     },
     exitIndependenceAudit: {
       policy: 'Correlated model outputs count as one model family. DYING/DEAD is not counted again when direct score, flow, or momentum evidence already explains the state.',
-      legacyMultiSignalExits: legacyMultiSignal.length,
-      legacyExitsWithFewerThanThreeIndependentFamilies: legacyMultiSignal.filter((row: ExitAuditRow) =>
+      multiSignalExits: multiSignal.length,
+      exitsWithFewerThanThreeIndependentFamilies: multiSignal.filter((row: ExitAuditRow) =>
         row.independentFamilyCount < 3).length,
-      legacyExitsMeetingCurrentIndependentFamilyRule: legacyMultiSignal.filter((row: ExitAuditRow) =>
+      exitsMeetingCurrentIndependentFamilyRule: multiSignal.filter((row: ExitAuditRow) =>
         row.meetsCurrentIndependentFamilyRule).length,
       rows: auditedExits,
     },
     runtime: {
+      strategyPolicyEpoch: strategyPolicyEpochDiag(),
       pumpPortalApplication: pumpfun,
       pumpPortalSubscriptionGuard: guardDiag(),
       strategyExtremaReconciler: strategyExtremaReconcilerDiag(),
