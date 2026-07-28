@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   adaptiveExitDecision,
   benchmarkExitDecision,
+  deteriorationFamiliesFromSignals,
   strategyRoleForSignal,
   StrategyExitInput,
 } from './strategy-policy';
@@ -64,7 +65,7 @@ test('profit protection exits after a strong run reverses', () => {
   assert.ok(result.activeStopMultiple >= 1.35);
 });
 
-test('multiple independent deterioration signals can exit before the hard stop', () => {
+test('multiple independent deterioration families can exit before the hard stop', () => {
   const result = adaptiveExitDecision(healthy({
     markPrice: 0.82,
     peakPrice: 1.1,
@@ -81,7 +82,64 @@ test('multiple independent deterioration signals can exit before the hard stop',
   }));
   assert.equal(result.action, 'sell');
   assert.equal(result.reasonCode, 'strategy_multi_signal_deterioration_exit');
-  assert.ok(result.deteriorationSignals.length >= 3);
+  assert.ok(Number(result.metrics.independentDeteriorationFamilyCount) >= 3);
+});
+
+test('correlated model outputs count as one evidence family and do not force an early winner exit', () => {
+  const result = adaptiveExitDecision(healthy({
+    markPrice: 1.24,
+    peakPrice: 1.26,
+    modelExpectedValue: -0.08,
+    modelDownsideProbability: 0.61,
+  }));
+  assert.equal(result.action, 'hold');
+  assert.deepEqual(result.metrics.deteriorationFamilies, ['model']);
+  assert.equal(result.deteriorationSignals.length, 2);
+});
+
+test('derived DYING state is not counted twice with its score cause', () => {
+  const result = adaptiveExitDecision(healthy({
+    markPrice: 1.2,
+    peakPrice: 1.22,
+    currentScore: 48,
+    state: 'DYING',
+  }));
+  assert.equal(result.action, 'hold');
+  assert.deepEqual(result.metrics.deteriorationFamilies, ['score_quality']);
+});
+
+test('two genuine families may protect an extreme winner or loser', () => {
+  const result = adaptiveExitDecision(healthy({
+    markPrice: 0.82,
+    peakPrice: 1.02,
+    currentScore: 48,
+    buys5m: 4,
+    sells5m: 12,
+    state: 'DYING',
+  }));
+  assert.equal(result.action, 'sell');
+  assert.deepEqual(result.metrics.deteriorationFamilies, ['market_flow', 'score_quality']);
+});
+
+test('three independent families exit near breakeven without relying on correlation', () => {
+  const result = adaptiveExitDecision(healthy({
+    markPrice: 0.98,
+    peakPrice: 1.08,
+    currentScore: 48,
+    currentLiquidityUsd: 35_000,
+    currentSmartWallets: 0,
+  }));
+  assert.equal(result.action, 'sell');
+  assert.deepEqual(result.metrics.deteriorationFamilies, ['score_quality', 'liquidity', 'smart_wallet']);
+});
+
+test('family helper suppresses state when a direct causal measurement is present', () => {
+  assert.deepEqual(deteriorationFamiliesFromSignals([
+    'score deteriorated 20.0 points from entry',
+    'token state changed to DYING',
+    'model expected value turned negative (-0.100)',
+    'model downside probability rose to 65.0%',
+  ]), ['score_quality', 'model']);
 });
 
 test('quality observations use a fixed benchmark and are not adaptive purchases', () => {

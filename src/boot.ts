@@ -28,6 +28,11 @@ async function startLeaderWorker() {
   const { startPaperEvidenceHealthMonitor } = await import('./paper/persistence-health');
   startPaperEvidenceHealthMonitor();
 
+  // Start a fresh prospective evidence epoch before evaluating the revised exit policy.
+  // This prevents pre-change outcomes from being mixed into the new policy's headline.
+  const { startStrategyPolicyEpoch } = await import('./paper/strategy-policy-epoch');
+  startStrategyPolicyEpoch();
+
   // Quality selection is now a research observation, not a paper purchase. Only the
   // later trigger opens a timed $100 paper position, and every wait/hold/sell decision
   // is persisted with its evidence for strategy refinement.
@@ -35,6 +40,8 @@ async function startLeaderWorker() {
   startStrategyLifecycle();
   const { startStrategyLedgerReconciler } = await import('./paper/strategy-ledger-reconciler');
   startStrategyLedgerReconciler();
+  const { startStrategyExtremaReconciler } = await import('./paper/strategy-extrema-reconciler');
+  startStrategyExtremaReconciler();
 
   const { startDatabaseMaintenance } = await import('./ops/db-maintenance');
   startDatabaseMaintenance();
