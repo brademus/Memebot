@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { pumpPortalGuardDiag } from './pumpportal-guard';
+import { PUMPPORTAL_DAILY_PAID_EVENT_LIMIT } from './pumpportal-persistent-budget';
 
 test('PumpPortal guard owns subscriptions and preserves the persistent spending ceiling', () => {
   const diag = pumpPortalGuardDiag();
@@ -12,7 +13,13 @@ test('PumpPortal guard owns subscriptions and preserves the persistent spending 
   assert.equal(diag.subscriptionStrategy, 'single_owner_fresh_priority_no_scanner_unsubscribe');
   assert.equal(diag.budgetMode, 'postgres_daily_and_rolling_14d_with_time_aware_pacing');
   assert.equal(diag.pacingStrategy, 'proportional_to_day_remaining');
-  assert.ok(diag.persistentBudget.dailyEventLimit <= 4_000);
+  // Assert the WIRING and the CLAMP, not a frozen target: the daily limit must be
+  // exactly the exported budget constant, and that constant must sit under the
+  // hard ceiling (30,000/day ~= $1.6/day at 0.01 SOL per 10k msgs) that makes
+  // runaway spend impossible. The target itself is a user dial ($10/week as of
+  // 2026-07-28), not an invariant.
+  assert.equal(diag.persistentBudget.dailyEventLimit, PUMPPORTAL_DAILY_PAID_EVENT_LIMIT);
+  assert.ok(PUMPPORTAL_DAILY_PAID_EVENT_LIMIT > 0 && PUMPPORTAL_DAILY_PAID_EVENT_LIMIT <= 30_000);
   assert.ok(diag.persistentBudget.rolling14dEventLimit <= 50_000);
   assert.ok(diag.persistentBudget.maxDailyCostSol <= 0.004);
   assert.ok(diag.persistentBudget.maxRolling14dCostSol <= 0.05);
