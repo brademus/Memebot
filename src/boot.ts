@@ -9,8 +9,7 @@ import {
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function startLeaderWorker() {
-  // index initializes Postgres and the core scanner. Evidence schema activation follows
-  // immediately, before candidate engines can create new paper rows.
+  // index starts the async core database migration and scanner bootstrap.
   await import('./index');
 
   // Evidence System v3 fingerprints every strategy-relevant configuration, journals
@@ -18,7 +17,8 @@ async function startLeaderWorker() {
   // opportunities, gives every exit its own continuation shadow, and runs execution-
   // quoted runner experiments. It is measurement-only and never signs or broadcasts.
   const { initializeEvidenceSystemV3, startEvidenceSystemV3 } = await import('./evidence/system-v3');
-  const { hardenEvidenceSystemV3Schema } = await import('./evidence/schema-hardening');
+  const { waitForCorePaperSchema, hardenEvidenceSystemV3Schema } = await import('./evidence/schema-hardening');
+  await waitForCorePaperSchema();
   await initializeEvidenceSystemV3();
   await hardenEvidenceSystemV3Schema();
   startEvidenceSystemV3();
