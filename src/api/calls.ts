@@ -1,6 +1,6 @@
 import { pool } from '../db';
 import { ensureStrategyPolicyEpoch } from '../paper/strategy-policy-epoch';
-import { getBtcStatus } from '../btc/runtime';
+import { getBtcStatus } from '../btc/bridge';
 
 const NORMALIZED_STAKE_USD = 100;
 export const BUY_ALERT_SIGNAL = 'trigger' as const;
