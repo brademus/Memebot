@@ -15,7 +15,7 @@ import {
   updateCall,
 } from './ledger';
 import { assessPortfolioAdmission, DEFAULT_PORTFOLIO_LIMITS, solveRiskPlan } from './risk';
-import { BTC_STRATEGIES } from './strategies';
+import { BTC_STRATEGIES } from './strategy-registry';
 import {
   CallBook,
   MarketContext,
@@ -118,8 +118,16 @@ export class BtcMultiStrategyEngine {
       .filter(call => call.strategyId === candidate.strategyId)
       .sort((a, b) => b.openedAt - a.openedAt)[0];
     if (!recent) return false;
-    const cooldownMinutes = candidate.strategyId === 'btc-cross-venue-lag' ? 5
-      : candidate.strategyId === 'btc-orderflow-absorption' ? 10 : 30;
+    const cooldownByStrategy: Record<string, number> = {
+      'btc-cross-venue-lag': 5,
+      'btc-orderflow-absorption': 10,
+      'btc-adaptive-trend-rider': 120,
+      'btc-donchian-trend-breakout': 60,
+      'btc-funding-crowding-reversal': 120,
+      'btc-perp-premium-convergence': 45,
+      'btc-price-oi-state': 45,
+    };
+    const cooldownMinutes = cooldownByStrategy[candidate.strategyId] ?? 30;
     return candidate.createdAt - recent.openedAt < cooldownMinutes * 60_000;
   }
 
