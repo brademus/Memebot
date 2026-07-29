@@ -12,7 +12,7 @@ RUN npm ci --omit=optional
 
 # Copy source and build
 COPY src ./src
-COPY config.yaml schema.sql schema-v3.sql schema-telemetry.sql ./
+COPY config.yaml schema.sql schema-v3.sql schema-telemetry.sql schema-btc.sql ./
 
 RUN npm run build && npm test
 
@@ -30,8 +30,8 @@ RUN npm ci --omit=dev
 # Copy compiled JavaScript from builder
 COPY --from=builder /build/dist ./dist
 
-# Copy schema and config files
-COPY config.yaml schema.sql schema-v3.sql schema-telemetry.sql ./
+# Copy schema and config files required by runtime migrations
+COPY config.yaml schema.sql schema-v3.sql schema-telemetry.sql schema-btc.sql ./
 
 # Copy public dashboard assets
 COPY public ./public
@@ -44,4 +44,3 @@ EXPOSE 3000
 
 # Start application with quota guard and budget guard preloaded
 CMD ["node", "--require", "./dist/helius-quota-guard.js", "--require", "./dist/ingest/pumpportal-guard.js", "dist/boot.js"]
-
