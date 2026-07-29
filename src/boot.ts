@@ -1,3 +1,5 @@
+import path from 'path';
+import { ChildProcess, fork } from 'child_process';
 import {
   acquireWorkerLeadership,
   registerPrimaryClaim,
@@ -5,8 +7,53 @@ import {
   startYieldWatch,
   startLeaderAddressPublication,
 } from './leadership';
+import { BtcWorkerStatusMessage, markBtcWorkerUnavailable, setBtcWorkerStatus } from './btc/bridge';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+let btcChild: ChildProcess | null = null;
+let btcRestartTimer: NodeJS.Timeout | null = null;
+let stopping = false;
+
+function startIsolatedBtcWorker(): void {
+  if (stopping || btcChild) return;
+  const workerPath = path.join(__dirname, 'btc', 'worker.js');
+  const child = fork(workerPath, [], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
+  btcChild = child;
+
+  child.on('message', message => {
+    const candidate = message as Partial<BtcWorkerStatusMessage>;
+    if (candidate?.type === 'btc-status' && candidate.payload && typeof candidate.payload === 'object') {
+      setBtcWorkerStatus(candidate.payload);
+    }
+  });
+  child.on('error', error => {
+    markBtcWorkerUnavailable(`BTC worker process error: ${error.message}`);
+  });
+  child.on('exit', (code, signal) => {
+    btcChild = null;
+    const reason = `BTC worker exited (${signal || code || 'unknown'}); supervised restart scheduled`;
+    console.error(`[btc] ${reason}`);
+    markBtcWorkerUnavailable(reason);
+    if (!stopping && !btcRestartTimer) {
+      btcRestartTimer = setTimeout(() => {
+        btcRestartTimer = null;
+        startIsolatedBtcWorker();
+      }, 30_000);
+      btcRestartTimer.unref();
+    }
+  });
+  console.log(`[btc] supervised child worker started pid=${child.pid || 'pending'}`);
+}
+
+function stopIsolatedBtcWorker(): void {
+  stopping = true;
+  if (btcRestartTimer) clearTimeout(btcRestartTimer);
+  btcRestartTimer = null;
+  btcChild?.kill('SIGTERM');
+}
+
+process.once('SIGTERM', stopIsolatedBtcWorker);
+process.once('SIGINT', stopIsolatedBtcWorker);
 
 async function startLeaderWorker() {
   // index starts the async core database migration and scanner bootstrap.
@@ -70,12 +117,9 @@ async function startLeaderWorker() {
   await initializeJupiterCanary();
   startJupiterCanary();
 
-  // BTC is an optional, paper-only research lane. Start it after the core worker and
-  // never let exchange warmup or a BTC-specific migration prevent the existing service
-  // from binding its health endpoint. Failures remain visible in logs and make no calls.
-  void import('./btc/runtime')
-    .then(({ startBtcPaperEngine }) => startBtcPaperEngine())
-    .catch(error => console.error('[btc] startup isolated from core worker:', (error as Error).message));
+  // Coinbase/Kraken parsing runs in a supervised child process. An exchange-protocol
+  // exception can restart only BTC and can never terminate the existing Memebot API.
+  startIsolatedBtcWorker();
 }
 
 async function boot() {
