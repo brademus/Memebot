@@ -1,0 +1,31 @@
+name: Export Wave 2 Source
+
+on:
+  push:
+    branches:
+      - feature/btc-wave2-shadow-strategies
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wave2-source-${{ github.run_id }}
+          path: |
+            src
+            public
+            package.json
+            package-lock.json
+            tsconfig.json
+            schema-btc.sql
+            .github/workflows/ci.yml
+          retention-days: 1
