@@ -166,5 +166,8 @@ jobs:
       - name: Real Postgres paper persistence contract
         run: node --test dist/paper/persistence.integration.test.js
 
+      - name: BTC Postgres safety contract
+        run: node --test dist/btc/persistence.integration.test.js
+
       - name: Evidence policy and append-only journal contract
         run: node --test dist/evidence/system-v3.integration.test.js
