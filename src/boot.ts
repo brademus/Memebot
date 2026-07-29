@@ -23,11 +23,6 @@ async function startLeaderWorker() {
   await hardenEvidenceSystemV3Schema();
   startEvidenceSystemV3();
 
-  // BTC is a separate paper-only research lane. It consumes public Coinbase/Kraken
-  // market data, writes hypothetical calls, and has no exchange credentials or order path.
-  const { startBtcPaperEngine } = await import('./btc/runtime');
-  await startBtcPaperEngine();
-
   const { startBestBuysEngine } = await import('./api/bestbuys-runner');
   startBestBuysEngine();
 
@@ -74,6 +69,13 @@ async function startLeaderWorker() {
   const { initializeJupiterCanary, startJupiterCanary } = await import('./paper/jupiter-canary');
   await initializeJupiterCanary();
   startJupiterCanary();
+
+  // BTC is an optional, paper-only research lane. Start it after the core worker and
+  // never let exchange warmup or a BTC-specific migration prevent the existing service
+  // from binding its health endpoint. Failures remain visible in logs and make no calls.
+  void import('./btc/runtime')
+    .then(({ startBtcPaperEngine }) => startBtcPaperEngine())
+    .catch(error => console.error('[btc] startup isolated from core worker:', (error as Error).message));
 }
 
 async function boot() {
