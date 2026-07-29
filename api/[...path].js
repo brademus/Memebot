@@ -28,10 +28,33 @@ function backendBase() {
   }
 }
 
+function encodeSegments(segments) {
+  return segments
+    .map(segment => String(segment))
+    .filter(Boolean)
+    .map(segment => {
+      try { return encodeURIComponent(decodeURIComponent(segment)); }
+      catch { return encodeURIComponent(segment); }
+    })
+    .join('/');
+}
+
 function requestPath(req) {
   const value = req.query?.path;
-  const segments = Array.isArray(value) ? value : value == null ? [] : [value];
-  return segments.map(segment => encodeURIComponent(String(segment))).join('/');
+  const querySegments = Array.isArray(value) ? value : value == null ? [] : [value];
+  const fromQuery = encodeSegments(querySegments);
+  if (fromQuery) return fromQuery;
+
+  try {
+    const pathname = new URL(String(req.url || '/'), 'https://memebot.local').pathname;
+    if (pathname === '/api' || pathname === '/api/') return '';
+    const marker = '/api/';
+    const index = pathname.indexOf(marker);
+    if (index === -1) return '';
+    return encodeSegments(pathname.slice(index + marker.length).split('/'));
+  } catch {
+    return '';
+  }
 }
 
 function upstreamHeaders(req) {
@@ -55,7 +78,7 @@ function upstreamBody(req) {
   return JSON.stringify(req.body);
 }
 
-module.exports = async function handler(req, res) {
+async function handler(req, res) {
   const base = backendBase();
   if (!base) {
     res.status(503).json({
@@ -115,4 +138,7 @@ module.exports = async function handler(req, res) {
   } finally {
     clearTimeout(timeout);
   }
-};
+}
+
+module.exports = handler;
+module.exports.requestPath = requestPath;
