@@ -1,307 +1,568 @@
-import crypto from 'crypto';
-import fs from 'fs';
-import path from 'path';
 import WebSocket from 'ws';
-import { pool } from '../db';
+import { BtcMultiStrategyEngine } from './platform/engine';
+import { classifyRegime, clamp, median, safeDiv } from './platform/indicators';
 import {
-  BTC_STRATEGY_VERSION,
-  BtcCandle,
   BtcDirection,
-  BtcFeedQuality,
-  BtcImpulse,
-  DEFAULT_BTC_STRATEGY_PARAMETERS,
-  aggregateCandles,
-  assessBtcRegime,
-  detectBtcImpulse,
-  evaluateBtcRetest,
-} from './strategy';
+  BookLevel,
+  Candle,
+  FeedQuality,
+  MarketContext,
+  OrderFlowState,
+  PlatformStatus,
+} from './platform/types';
 
-type CallStatus = 'open' | 'won' | 'lost' | 'closed';
-interface BtcCall {
-  id: string; direction: BtcDirection; entry: number; stop: number; target: number;
-  confidence: number; riskReward: number; status: CallStatus; openedAt: string;
-  closedAt: string | null; exitPrice: number | null; exitReason: string | null;
-  resultR: number | null; maxFavorableR: number; maxAdverseR: number;
-  setup: Record<string, unknown>;
+interface TradeTick {
+  at: number;
+  price: number;
+  size: number;
+  usd: number;
+  direction: BtcDirection;
+  source: 'perp' | 'spot';
 }
 
-const PRODUCT = 'BTC-USD';
+interface LiquidationTick {
+  at: number;
+  usd: number;
+  side: 'long' | 'short';
+}
+
+const PRODUCT = 'BTCUSDT';
+const COINBASE_PRODUCT = 'BTC-USD';
+const REFERENCE_VENUE = process.env.BTC_REFERENCE_VENUE || 'BYBIT-BTCUSDT';
+const BYBIT_WS = process.env.BTC_REFERENCE_PERP_WS || 'wss://stream.bybit.com/v5/public/linear';
 const INTERVALS = [60, 300, 900, 3600, 14_400] as const;
-const enabled = process.env.BTC_SCANNER_ENABLED !== 'false';
-const series = new Map<number, BtcCandle[]>(INTERVALS.map(value => [value, []]));
+const engine = new BtcMultiStrategyEngine();
+const candles = new Map<number, Candle[]>(INTERVALS.map(interval => [interval, []]));
+const bids = new Map<number, number>();
+const asks = new Map<number, number>();
+const trades: TradeTick[] = [];
+const liquidations: LiquidationTick[] = [];
 const sequences = new Map<string, number>();
+
 let started = false;
-let socket: WebSocket | null = null;
-let reconnectTimer: NodeJS.Timeout | null = null;
-let reconnectAttempt = 0;
+let bybitSocket: WebSocket | null = null;
+let coinbaseSocket: WebSocket | null = null;
+let bybitReconnect: NodeJS.Timeout | null = null;
+let coinbaseReconnect: NodeJS.Timeout | null = null;
+let bybitReconnectAttempt = 0;
+let coinbaseReconnectAttempt = 0;
+let latestBybitAt: number | null = null;
+let latestCoinbaseAt: number | null = null;
+let latestKrakenAt: number | null = null;
+let sequenceGapAt: number | null = null;
+let lastPrice = 0;
+let bidPrice = 0;
+let askPrice = 0;
+let markPrice = 0;
+let indexPrice = 0;
 let coinbasePrice: number | null = null;
 let krakenPrice: number | null = null;
-let bestBid: number | null = null;
-let bestAsk: number | null = null;
-let coinbaseAt: number | null = null;
-let krakenAt: number | null = null;
-let sequenceGapAt: number | null = null;
-let impulse: BtcImpulse | null = null;
-let activeCall: BtcCall | null = null;
-let recentCalls: BtcCall[] = [];
-let engineState = enabled ? 'warming_up' : 'disabled';
-let blockers: string[] = [];
-let lastImpulseAt: number | null = null;
-let cooldownUntil = 0;
+let fundingRate = 0;
+let predictedFundingRate = 0;
+let nextFundingAt: number | null = null;
+let openInterest = 0;
+let openInterestValue = 0;
+let openInterestBaseline = 0;
+let openInterestBaselineAt = 0;
 let evaluation = Promise.resolve();
-let dailyDate = '';
-let dailyCalls = 0;
-let dailyLosses = 0;
+let pingTimer: NodeJS.Timeout | null = null;
+let evaluationTimer: NodeJS.Timeout | null = null;
+let krakenTimer: NodeJS.Timeout | null = null;
+let status: PlatformStatus | null = null;
 
-const n = (value: unknown): number | null => {
+const numeric = (value: unknown): number | null => {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 };
-const list = (interval: number) => series.get(interval) || [];
-const chicagoDate = () => new Intl.DateTimeFormat('en-CA', {
-  timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit',
-}).format(new Date());
+const list = (interval: number): Candle[] => candles.get(interval) || [];
 
-function resetDaily(): void {
-  const date = chicagoDate();
-  if (date === dailyDate) return;
-  dailyDate = date; dailyCalls = 0; dailyLosses = 0;
+function prune(): void {
+  const cutoff = Date.now() - 30 * 60_000;
+  while (trades.length && trades[0].at < cutoff) trades.shift();
+  while (liquidations.length && liquidations[0].at < cutoff) liquidations.shift();
 }
 
-function primarySession(at: number): boolean {
-  const date = new Date(at);
-  return date.getUTCDay() >= 1 && date.getUTCDay() <= 5 && date.getUTCHours() >= 12 && date.getUTCHours() < 21;
-}
-
-async function initializeSchema(): Promise<void> {
-  if (!pool) return;
-  const file = path.join(process.cwd(), 'schema-btc.sql');
-  if (!fs.existsSync(file)) throw new Error('schema-btc.sql is missing');
-  await pool.query(fs.readFileSync(file, 'utf8'));
-}
-
-async function history(interval: 60 | 300 | 900 | 3600): Promise<BtcCandle[]> {
-  const response = await fetch(`https://api.exchange.coinbase.com/products/${PRODUCT}/candles?granularity=${interval}`, {
-    headers: { Accept: 'application/json', 'User-Agent': 'Memebot-BTC-Paper/1.0' },
-  });
-  if (!response.ok) throw new Error(`Coinbase history ${interval}s returned ${response.status}`);
-  const payload = await response.json() as unknown;
-  if (!Array.isArray(payload)) throw new Error('Coinbase history payload is invalid');
-  const now = Date.now();
-  return payload.map((row): BtcCandle | null => {
-    if (!Array.isArray(row) || row.length < 6) return null;
-    const values = row.slice(0, 6).map(Number);
-    if (!values.every(Number.isFinite)) return null;
-    const [seconds, low, high, open, close, volume] = values;
-    return { timeframeSec: interval, startMs: seconds * 1000, open, high, low, close, volume,
-      tradeCount: 0, buyVolume: 0, sellVolume: 0, complete: seconds * 1000 + interval * 1000 <= now - 2000 };
-  }).filter((row): row is BtcCandle => row !== null).sort((a, b) => a.startMs - b.startMs);
-}
-
-async function warm(): Promise<void> {
-  const [m1, m5, m15, h1] = await Promise.all([history(60), history(300), history(900), history(3600)]);
-  series.set(60, m1); series.set(300, m5); series.set(900, m15); series.set(3600, h1);
-  series.set(14_400, aggregateCandles(h1, 14_400).map(candle => ({
-    ...candle, complete: candle.startMs + 14_400_000 <= Date.now() - 2000,
-  })));
-}
-
-function updateCandle(interval: number, price: number, size: number, at: number, direction: BtcDirection): boolean {
-  const candles = list(interval);
+function updateCandle(interval: number, price: number, size: number, at: number, direction: BtcDirection): void {
+  const series = list(interval);
   const startMs = Math.floor(at / (interval * 1000)) * interval * 1000;
-  let candle = candles.at(-1);
-  let closed = false;
+  let candle = series.at(-1);
   if (!candle || candle.startMs !== startMs) {
-    if (candle && candle.startMs < startMs) { candle.complete = true; closed = true; }
-    candle = { timeframeSec: interval, startMs, open: price, high: price, low: price, close: price,
-      volume: 0, tradeCount: 0, buyVolume: 0, sellVolume: 0, complete: false };
-    candles.push(candle);
-    if (candles.length > 2500) candles.splice(0, candles.length - 2500);
+    if (candle && candle.startMs < startMs) candle.complete = true;
+    candle = {
+      timeframeSec: interval,
+      startMs,
+      open: price,
+      high: price,
+      low: price,
+      close: price,
+      volume: 0,
+      tradeCount: 0,
+      buyVolume: 0,
+      sellVolume: 0,
+      complete: false,
+    };
+    series.push(candle);
+    if (series.length > 3000) series.splice(0, series.length - 3000);
   }
-  candle.high = Math.max(candle.high, price); candle.low = Math.min(candle.low, price); candle.close = price;
-  candle.volume += size; candle.tradeCount++;
-  if (direction === 'long') candle.buyVolume += size; else candle.sellVolume += size;
-  return closed;
+  candle.high = Math.max(candle.high, price);
+  candle.low = Math.min(candle.low, price);
+  candle.close = price;
+  candle.volume += size;
+  candle.tradeCount++;
+  if (direction === 'long') candle.buyVolume += size;
+  else candle.sellVolume += size;
 }
 
-function callR(call: BtcCall, price: number): number {
-  const risk = Math.abs(call.entry - call.stop);
-  return call.direction === 'long' ? (price - call.entry) / risk : (call.entry - price) / risk;
+function recordTrade(price: number, size: number, at: number, direction: BtcDirection, source: 'perp' | 'spot'): void {
+  if (!(price > 0 && size > 0 && Number.isFinite(at))) return;
+  trades.push({ at, price, size, usd: price * size, direction, source });
+  prune();
+  const derivativesFresh = latestBybitAt !== null && Date.now() - latestBybitAt < 12_000;
+  if (source === 'perp' || !derivativesFresh) {
+    for (const interval of INTERVALS) updateCandle(interval, price, size, at, direction);
+  }
 }
 
-async function closeCall(price: number, reason: string, at: number): Promise<void> {
-  const call = activeCall;
-  if (!call) return;
-  call.resultR = callR(call, price);
-  call.status = call.resultR > 0 ? 'won' : call.resultR < 0 ? 'lost' : 'closed';
-  call.closedAt = new Date(at).toISOString(); call.exitPrice = price; call.exitReason = reason;
-  if (call.status === 'lost') dailyLosses++;
-  activeCall = null; cooldownUntil = at + 30 * 60_000; engineState = 'cooldown';
-  if (pool) await pool.query(`UPDATE btc_calls SET status=$2,closed_at=to_timestamp($3/1000.0),exit_price=$4,
-    exit_reason=$5,result_r=$6,max_favorable_r=$7,max_adverse_r=$8,updated_at=now() WHERE id=$1`,
-    [call.id, call.status, at, price, reason, call.resultR, call.maxFavorableR, call.maxAdverseR]);
+function updateSequence(topic: string, sequence: unknown): void {
+  if (!Number.isInteger(sequence)) return;
+  const value = Number(sequence);
+  const previous = sequences.get(topic);
+  if (previous !== undefined && value > previous + 1) sequenceGapAt = Date.now();
+  sequences.set(topic, Math.max(previous || 0, value));
 }
 
-function monitorCall(price: number, at: number): void {
-  const call = activeCall;
-  if (!call) return;
-  const r = callR(call, price);
-  call.maxFavorableR = Math.max(call.maxFavorableR, r); call.maxAdverseR = Math.min(call.maxAdverseR, r);
-  const stop = call.direction === 'long' ? price <= call.stop : price >= call.stop;
-  const target = call.direction === 'long' ? price >= call.target : price <= call.target;
-  if (stop) void closeCall(price, 'stop', at);
-  else if (target) void closeCall(price, 'target_2_5r', at);
-  else if (at - Date.parse(call.openedAt) >= 8 * 60 * 60_000) void closeCall(price, 'eight_hour_time_exit', at);
+function setBookSide(map: Map<number, number>, levels: unknown): void {
+  if (!Array.isArray(levels)) return;
+  for (const row of levels) {
+    if (!Array.isArray(row) || row.length < 2) continue;
+    const price = numeric(row[0]);
+    const size = Number(row[1]);
+    if (!price || !Number.isFinite(size) || size < 0) continue;
+    if (size === 0) map.delete(price);
+    else map.set(price, size);
+  }
 }
 
-function onTrade(price: number, size: number, at: number, makerSide: string): void {
-  coinbasePrice = price; coinbaseAt = Date.now();
-  const direction: BtcDirection = makerSide.toUpperCase() === 'BUY' ? 'short' : 'long';
-  let evaluate = false;
-  for (const interval of INTERVALS) if (updateCandle(interval, price, size, at, direction) && interval >= 300) evaluate = true;
-  monitorCall(price, at);
-  if (evaluate) evaluation = evaluation.then(() => evaluateStrategy(at)).catch(error => console.error('[btc]', (error as Error).message));
-}
-
-function parse(raw: WebSocket.RawData): void {
+function parseBybit(raw: WebSocket.RawData): void {
   let message: any;
   try { message = JSON.parse(raw.toString()); } catch { return; }
-  const channel = String(message.channel || 'unknown');
-  if (Number.isInteger(message.sequence_num)) {
-    const previous = sequences.get(channel);
-    if (previous !== undefined && message.sequence_num > previous + 1) sequenceGapAt = Date.now();
-    sequences.set(channel, Math.max(previous || 0, message.sequence_num));
+  if (message.op === 'pong' || message.ret_msg === 'pong') return;
+  const topic = String(message.topic || '');
+  updateSequence(topic, message.cs);
+  const now = Date.now();
+
+  if (topic === `tickers.${PRODUCT}`) {
+    const row = Array.isArray(message.data) ? message.data[0] : message.data;
+    if (!row) return;
+    lastPrice = numeric(row.lastPrice) ?? lastPrice;
+    bidPrice = numeric(row.bid1Price) ?? bidPrice;
+    askPrice = numeric(row.ask1Price) ?? askPrice;
+    markPrice = numeric(row.markPrice) ?? markPrice;
+    indexPrice = numeric(row.indexPrice) ?? indexPrice;
+    fundingRate = Number.isFinite(Number(row.fundingRate)) ? Number(row.fundingRate) : fundingRate;
+    predictedFundingRate = fundingRate;
+    nextFundingAt = numeric(row.nextFundingTime) ?? nextFundingAt;
+    const nextOi = numeric(row.openInterest) ?? openInterest;
+    const nextOiValue = numeric(row.openInterestValue) ?? openInterestValue;
+    if (!openInterestBaseline || now - openInterestBaselineAt > 15 * 60_000) {
+      openInterestBaseline = nextOi;
+      openInterestBaselineAt = now;
+    }
+    openInterest = nextOi;
+    openInterestValue = nextOiValue;
+    latestBybitAt = now;
+    return;
   }
-  if (message.channel === 'ticker') for (const event of message.events || []) for (const ticker of event.tickers || []) {
-    coinbasePrice = n(ticker.price) ?? coinbasePrice; bestBid = n(ticker.best_bid) ?? bestBid; bestAsk = n(ticker.best_ask) ?? bestAsk;
-    coinbaseAt = Date.now();
+
+  if (topic === `publicTrade.${PRODUCT}` && Array.isArray(message.data)) {
+    latestBybitAt = now;
+    for (const row of message.data) {
+      const price = numeric(row.p);
+      const size = numeric(row.v);
+      const at = Number(row.T || message.ts || now);
+      const direction: BtcDirection = String(row.S).toLowerCase() === 'buy' ? 'long' : 'short';
+      if (price && size) {
+        lastPrice = price;
+        recordTrade(price, size, at, direction, 'perp');
+      }
+    }
+    return;
   }
-  if (message.channel === 'market_trades') for (const event of message.events || []) for (const trade of event.trades || []) {
-    const price = n(trade.price); const size = n(trade.size); const at = Date.parse(String(trade.time || message.timestamp || ''));
-    if (price && size && Number.isFinite(at)) onTrade(price, size, at, String(trade.side || ''));
+
+  if (topic === `orderbook.50.${PRODUCT}`) {
+    if (message.type === 'snapshot') { bids.clear(); asks.clear(); }
+    setBookSide(bids, message.data?.b);
+    setBookSide(asks, message.data?.a);
+    const bestBid = [...bids.keys()].sort((a, b) => b - a)[0];
+    const bestAsk = [...asks.keys()].sort((a, b) => a - b)[0];
+    if (bestBid) bidPrice = bestBid;
+    if (bestAsk) askPrice = bestAsk;
+    latestBybitAt = now;
+    return;
+  }
+
+  if (topic === `allLiquidation.${PRODUCT}` && Array.isArray(message.data)) {
+    latestBybitAt = now;
+    for (const row of message.data) {
+      const price = numeric(row.p);
+      const size = numeric(row.v);
+      const at = Number(row.T || message.ts || now);
+      if (!price || !size) continue;
+      liquidations.push({
+        at,
+        usd: price * size,
+        side: String(row.S).toLowerCase() === 'buy' ? 'long' : 'short',
+      });
+    }
+    prune();
   }
 }
 
-function connect(): void {
-  if (!enabled) return;
-  const ws = new WebSocket('wss://advanced-trade-ws.coinbase.com'); socket = ws;
+function connectBybit(): void {
+  const ws = new WebSocket(BYBIT_WS);
+  bybitSocket = ws;
   ws.on('open', () => {
-    reconnectAttempt = 0;
+    bybitReconnectAttempt = 0;
+    ws.send(JSON.stringify({
+      op: 'subscribe',
+      args: [`tickers.${PRODUCT}`, `publicTrade.${PRODUCT}`, `orderbook.50.${PRODUCT}`, `allLiquidation.${PRODUCT}`],
+    }));
+  });
+  ws.on('message', parseBybit);
+  ws.on('error', error => console.error('[btc-bybit]', error.message));
+  ws.on('close', () => {
+    if (bybitSocket === ws) bybitSocket = null;
+    if (bybitReconnect) return;
+    const delay = Math.min(30_000, 1_000 * 2 ** Math.min(bybitReconnectAttempt++, 5));
+    bybitReconnect = setTimeout(() => { bybitReconnect = null; connectBybit(); }, delay);
+    bybitReconnect.unref();
+  });
+}
+
+function parseCoinbase(raw: WebSocket.RawData): void {
+  let message: any;
+  try { message = JSON.parse(raw.toString()); } catch { return; }
+  const now = Date.now();
+  if (message.channel === 'ticker') {
+    for (const event of message.events || []) for (const ticker of event.tickers || []) {
+      coinbasePrice = numeric(ticker.price) ?? coinbasePrice;
+      latestCoinbaseAt = now;
+    }
+  }
+  if (message.channel === 'market_trades') {
+    for (const event of message.events || []) for (const trade of event.trades || []) {
+      const price = numeric(trade.price);
+      const size = numeric(trade.size);
+      const at = Date.parse(String(trade.time || message.timestamp || ''));
+      const direction: BtcDirection = String(trade.side).toUpperCase() === 'BUY' ? 'short' : 'long';
+      if (price && size && Number.isFinite(at)) {
+        coinbasePrice = price;
+        latestCoinbaseAt = now;
+        recordTrade(price, size, at, direction, 'spot');
+      }
+    }
+  }
+}
+
+function connectCoinbase(): void {
+  const ws = new WebSocket('wss://advanced-trade-ws.coinbase.com');
+  coinbaseSocket = ws;
+  ws.on('open', () => {
+    coinbaseReconnectAttempt = 0;
     for (const channel of ['heartbeats', 'ticker', 'market_trades']) {
-      ws.send(JSON.stringify({ type: 'subscribe', channel, ...(channel === 'heartbeats' ? {} : { product_ids: [PRODUCT] }) }));
+      ws.send(JSON.stringify({ type: 'subscribe', channel, ...(channel === 'heartbeats' ? {} : { product_ids: [COINBASE_PRODUCT] }) }));
     }
   });
-  ws.on('message', parse);
-  ws.on('error', () => ws.close());
+  ws.on('message', parseCoinbase);
+  ws.on('error', error => console.error('[btc-coinbase]', error.message));
   ws.on('close', () => {
-    if (socket === ws) socket = null;
-    if (reconnectTimer) return;
-    const delay = Math.min(30_000, 1000 * 2 ** Math.min(reconnectAttempt++, 5));
-    reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, delay);
+    if (coinbaseSocket === ws) coinbaseSocket = null;
+    if (coinbaseReconnect) return;
+    const delay = Math.min(30_000, 1_000 * 2 ** Math.min(coinbaseReconnectAttempt++, 5));
+    coinbaseReconnect = setTimeout(() => { coinbaseReconnect = null; connectCoinbase(); }, delay);
+    coinbaseReconnect.unref();
   });
 }
 
 async function pollKraken(): Promise<void> {
   try {
-    const response = await fetch('https://api.kraken.com/0/public/Ticker?pair=XBTUSD');
+    const response = await fetch('https://api.kraken.com/0/public/Ticker?pair=XBTUSD', {
+      headers: { Accept: 'application/json', 'User-Agent': 'Memebot-BTC-Research/2.0' },
+    });
+    if (!response.ok) return;
     const payload = await response.json() as any;
     const row = Object.values(payload?.result || {})[0] as any;
-    krakenPrice = n(row?.c?.[0]); krakenAt = krakenPrice ? Date.now() : krakenAt;
-  } catch {}
-}
-
-function quality(now = Date.now()): BtcFeedQuality {
-  const coinbaseAgeMs = coinbaseAt === null ? null : now - coinbaseAt;
-  const krakenAgeMs = krakenAt === null ? null : now - krakenAt;
-  const spreadBps = bestBid && bestAsk ? ((bestAsk - bestBid) / ((bestAsk + bestBid) / 2)) * 10_000 : null;
-  const divergenceBps = coinbasePrice && krakenPrice ? Math.abs(coinbasePrice - krakenPrice) / ((coinbasePrice + krakenPrice) / 2) * 10_000 : null;
-  const recentSequenceGap = sequenceGapAt !== null && now - sequenceGapAt < 60_000;
-  const reasons: string[] = [];
-  if (coinbaseAgeMs === null || coinbaseAgeMs > 10_000) reasons.push('Coinbase price feed is stale');
-  if (krakenAgeMs === null || krakenAgeMs > 45_000) reasons.push('Kraken validation price is stale');
-  if (spreadBps === null || spreadBps > DEFAULT_BTC_STRATEGY_PARAMETERS.maxSpreadBps) reasons.push('Coinbase spread is abnormal');
-  if (divergenceBps === null || divergenceBps > DEFAULT_BTC_STRATEGY_PARAMETERS.maxDivergenceBps) reasons.push('Coinbase and Kraken prices disagree');
-  if (recentSequenceGap) reasons.push('a recent Coinbase sequence gap was detected');
-  return { healthy: reasons.length === 0, coinbaseAgeMs, krakenAgeMs, spreadBps, divergenceBps, recentSequenceGap, blockers: reasons };
-}
-
-async function createCall(decision: ReturnType<typeof evaluateBtcRetest>, source: BtcImpulse, at: number): Promise<void> {
-  if (!decision.ready || decision.entry === null || decision.stop === null || decision.target === null) return;
-  const call: BtcCall = { id: crypto.randomUUID(), direction: decision.direction, entry: decision.entry,
-    stop: decision.stop, target: decision.target, confidence: decision.confidence, riskReward: decision.riskReward,
-    status: 'open', openedAt: new Date(at).toISOString(), closedAt: null, exitPrice: null, exitReason: null,
-    resultR: null, maxFavorableR: 0, maxAdverseR: 0, setup: { paperOnly: true, impulse: source, flowRatio: decision.flowRatio } };
-  if (pool) await pool.query(`INSERT INTO btc_calls
-    (id,strategy_version,direction,entry_price,stop_price,target_price,confidence,risk_reward,status,opened_at,setup)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'open',to_timestamp($9/1000.0),$10)`,
-    [call.id, BTC_STRATEGY_VERSION, call.direction, call.entry, call.stop, call.target, call.confidence, call.riskReward, at, JSON.stringify(call.setup)]);
-  activeCall = call; recentCalls.unshift(call); recentCalls = recentCalls.slice(0, 50); dailyCalls++; impulse = null; engineState = 'call_active'; blockers = [];
-}
-
-async function evaluateStrategy(now: number): Promise<void> {
-  resetDaily();
-  if (activeCall) { engineState = 'call_active'; return; }
-  if (now < cooldownUntil) { engineState = 'cooldown'; blockers = ['post-call cooldown is active']; return; }
-  if (dailyCalls >= 2 || dailyLosses >= 2) { engineState = 'daily_limit'; blockers = ['daily BTC call circuit breaker is active']; return; }
-  if (!primarySession(now)) { engineState = 'outside_session'; blockers = ['waiting for weekdays 12:00-21:00 UTC']; return; }
-  const feed = quality(now);
-  if (!feed.healthy) { engineState = 'feed_blocked'; blockers = feed.blockers; return; }
-  const regime = assessBtcRegime(list(3600), list(14_400), list(900));
-  if (!regime.direction) { impulse = null; engineState = 'no_setup'; blockers = regime.blockers; return; }
-  if (impulse) {
-    const decision = evaluateBtcRetest(impulse, list(300), feed, now);
-    impulse = decision.nextImpulse;
-    if (decision.ready && impulse) await createCall(decision, impulse, now);
-    else { engineState = impulse ? 'waiting_for_retest' : 'no_setup'; blockers = decision.blockers; }
-    return;
+    krakenPrice = numeric(row?.c?.[0]);
+    if (krakenPrice) latestKrakenAt = Date.now();
+  } catch (error) {
+    console.error('[btc-kraken]', (error as Error).message);
   }
-  const latest = list(900).filter(candle => candle.complete).at(-1);
-  if (!latest || latest.startMs === lastImpulseAt) { engineState = 'no_setup'; blockers = ['waiting for the next fifteen-minute candle']; return; }
-  lastImpulseAt = latest.startMs;
-  const result = detectBtcImpulse(list(900), regime, now);
-  impulse = result.impulse; engineState = impulse ? 'waiting_for_retest' : 'no_setup';
-  blockers = impulse ? ['qualified impulse found; waiting for a controlled retest'] : result.blockers;
 }
 
-function fromRow(row: any): BtcCall {
-  return { id: row.id, direction: row.direction, entry: Number(row.entry_price), stop: Number(row.stop_price),
-    target: Number(row.target_price), confidence: Number(row.confidence), riskReward: Number(row.risk_reward),
-    status: row.status, openedAt: new Date(row.opened_at).toISOString(), closedAt: row.closed_at ? new Date(row.closed_at).toISOString() : null,
-    exitPrice: row.exit_price === null ? null : Number(row.exit_price), exitReason: row.exit_reason,
-    resultR: row.result_r === null ? null : Number(row.result_r), maxFavorableR: Number(row.max_favorable_r || 0),
-    maxAdverseR: Number(row.max_adverse_r || 0), setup: row.setup || {} };
+function mapBybitCandle(interval: number, row: unknown): Candle | null {
+  if (!Array.isArray(row) || row.length < 6) return null;
+  const startMs = Number(row[0]);
+  const open = Number(row[1]);
+  const high = Number(row[2]);
+  const low = Number(row[3]);
+  const close = Number(row[4]);
+  const volume = Number(row[5]);
+  if (![startMs, open, high, low, close, volume].every(Number.isFinite)) return null;
+  return {
+    timeframeSec: interval,
+    startMs,
+    open,
+    high,
+    low,
+    close,
+    volume,
+    tradeCount: 0,
+    buyVolume: 0,
+    sellVolume: 0,
+    complete: startMs + interval * 1000 <= Date.now() - 2_000,
+  };
 }
 
-async function hydrate(): Promise<void> {
-  if (!pool) return;
-  const result = await pool.query('SELECT * FROM btc_calls ORDER BY opened_at DESC LIMIT 50');
-  recentCalls = result.rows.map(fromRow); activeCall = recentCalls.find(call => call.status === 'open') || null;
+async function bybitHistory(interval: 60 | 300 | 900 | 3600 | 14_400): Promise<Candle[]> {
+  const intervalCode = interval === 60 ? '1' : interval === 300 ? '5' : interval === 900 ? '15' : interval === 3600 ? '60' : '240';
+  const response = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${PRODUCT}&interval=${intervalCode}&limit=1000`, {
+    headers: { Accept: 'application/json', 'User-Agent': 'Memebot-BTC-Research/2.0' },
+  });
+  if (!response.ok) throw new Error(`Bybit history ${intervalCode} returned ${response.status}`);
+  const payload = await response.json() as any;
+  if (Number(payload?.retCode) !== 0 || !Array.isArray(payload?.result?.list)) throw new Error(`Bybit history ${intervalCode} payload invalid`);
+  return payload.result.list.map((row: unknown) => mapBybitCandle(interval, row))
+    .filter((row: Candle | null): row is Candle => row !== null)
+    .sort((a: Candle, b: Candle) => a.startMs - b.startMs);
+}
+
+async function coinbaseHistory(interval: 60 | 300 | 900 | 3600): Promise<Candle[]> {
+  const response = await fetch(`https://api.exchange.coinbase.com/products/${COINBASE_PRODUCT}/candles?granularity=${interval}`, {
+    headers: { Accept: 'application/json', 'User-Agent': 'Memebot-BTC-Research/2.0' },
+  });
+  if (!response.ok) throw new Error(`Coinbase history ${interval} returned ${response.status}`);
+  const payload = await response.json() as unknown;
+  if (!Array.isArray(payload)) throw new Error('Coinbase history payload invalid');
+  return payload.map((row): Candle | null => {
+    if (!Array.isArray(row) || row.length < 6) return null;
+    const [seconds, low, high, open, close, volume] = row.slice(0, 6).map(Number);
+    if (![seconds, low, high, open, close, volume].every(Number.isFinite)) return null;
+    return {
+      timeframeSec: interval,
+      startMs: seconds * 1000,
+      open, high, low, close, volume,
+      tradeCount: 0, buyVolume: 0, sellVolume: 0,
+      complete: seconds * 1000 + interval * 1000 <= Date.now() - 2_000,
+    };
+  }).filter((row): row is Candle => row !== null).sort((a, b) => a.startMs - b.startMs);
+}
+
+function aggregate(source: Candle[], interval: number): Candle[] {
+  const grouped = new Map<number, Candle>();
+  for (const candle of source) {
+    const startMs = Math.floor(candle.startMs / (interval * 1000)) * interval * 1000;
+    const existing = grouped.get(startMs);
+    if (!existing) {
+      grouped.set(startMs, { ...candle, timeframeSec: interval, startMs });
+    } else {
+      existing.high = Math.max(existing.high, candle.high);
+      existing.low = Math.min(existing.low, candle.low);
+      existing.close = candle.close;
+      existing.volume += candle.volume;
+      existing.tradeCount += candle.tradeCount;
+      existing.buyVolume += candle.buyVolume;
+      existing.sellVolume += candle.sellVolume;
+      existing.complete = existing.complete && candle.complete;
+    }
+  }
+  return [...grouped.values()].sort((a, b) => a.startMs - b.startMs);
+}
+
+async function warmHistory(): Promise<void> {
+  try {
+    const results = await Promise.all(INTERVALS.map(interval => bybitHistory(interval)));
+    INTERVALS.forEach((interval, index) => candles.set(interval, results[index]));
+    console.log('[btc] warmed reference-perpetual history');
+    return;
+  } catch (error) {
+    console.error('[btc] reference history unavailable; using Coinbase fallback:', (error as Error).message);
+  }
+  const [m1, m5, m15, h1] = await Promise.all([
+    coinbaseHistory(60), coinbaseHistory(300), coinbaseHistory(900), coinbaseHistory(3600),
+  ]);
+  candles.set(60, m1);
+  candles.set(300, m5);
+  candles.set(900, m15);
+  candles.set(3600, h1);
+  candles.set(14_400, aggregate(h1, 14_400));
+}
+
+function sortedLevels(map: Map<number, number>, direction: 'bids' | 'asks', count = 20): BookLevel[] {
+  return [...map.entries()]
+    .sort((a, b) => direction === 'bids' ? b[0] - a[0] : a[0] - b[0])
+    .slice(0, count)
+    .map(([price, size]) => ({ price, size }));
+}
+
+function flowSince(milliseconds: number, source: 'perp' | 'spot' | 'all' = 'all'): { buy: number; sell: number; movePct: number } {
+  const cutoff = Date.now() - milliseconds;
+  const sample = trades.filter(trade => trade.at >= cutoff && (source === 'all' || trade.source === source));
+  const buy = sample.filter(trade => trade.direction === 'long').reduce((sum, trade) => sum + trade.usd, 0);
+  const sell = sample.filter(trade => trade.direction === 'short').reduce((sum, trade) => sum + trade.usd, 0);
+  const first = sample[0]?.price || 0;
+  const final = sample.at(-1)?.price || first;
+  return { buy, sell, movePct: first > 0 ? Math.abs(final - first) / first * 100 : 0 };
+}
+
+function orderFlowState(): OrderFlowState {
+  const bidLevels = sortedLevels(bids, 'bids');
+  const askLevels = sortedLevels(asks, 'asks');
+  const one = flowSince(60_000, latestBybitAt && Date.now() - latestBybitAt < 12_000 ? 'perp' : 'all');
+  const five = flowSince(5 * 60_000, latestBybitAt && Date.now() - latestBybitAt < 12_000 ? 'perp' : 'all');
+  const bestBidSize = bidLevels[0]?.size || 0;
+  const bestAskSize = askLevels[0]?.size || 0;
+  const topBookImbalance = safeDiv(bestBidSize - bestAskSize, bestBidSize + bestAskSize, 0);
+  const reference = markPrice || lastPrice || coinbasePrice || 0;
+  const bidDepth = bidLevels.filter(level => reference && (reference - level.price) / reference <= 0.0005)
+    .reduce((sum, level) => sum + level.price * level.size, 0);
+  const askDepth = askLevels.filter(level => reference && (level.price - reference) / reference <= 0.0005)
+    .reduce((sum, level) => sum + level.price * level.size, 0);
+  const depthImbalance5Bps = safeDiv(bidDepth - askDepth, bidDepth + askDepth, 0);
+  const totalDepth = bidDepth + askDepth;
+  const bookFragility = clamp(1 - safeDiv(totalDepth, Math.max(five.buy + five.sell, 1), 0), 0, 1);
+  const flowImbalance = Math.abs(safeDiv(one.buy - one.sell, one.buy + one.sell, 0));
+  const expectedMove = safeDiv(flowImbalance * (one.buy + one.sell), Math.max(totalDepth, 1), 0);
+  const absorptionScore = clamp(flowImbalance * 0.55 + (one.movePct < 0.04 ? 0.3 : 0) + (expectedMove > 1 && one.movePct < 0.08 ? 0.25 : 0), 0, 1);
+  return {
+    aggressiveBuyUsd1m: one.buy,
+    aggressiveSellUsd1m: one.sell,
+    aggressiveBuyUsd5m: five.buy,
+    aggressiveSellUsd5m: five.sell,
+    topBookImbalance,
+    depthImbalance5Bps,
+    bookFragility,
+    absorptionScore,
+    bids: bidLevels,
+    asks: askLevels,
+  };
+}
+
+function quality(now = Date.now()): FeedQuality {
+  const referenceAgeMs = latestBybitAt === null ? null : now - latestBybitAt;
+  const coinbaseAgeMs = latestCoinbaseAt === null ? null : now - latestCoinbaseAt;
+  const krakenAgeMs = latestKrakenAt === null ? null : now - latestKrakenAt;
+  const referenceFresh = referenceAgeMs !== null && referenceAgeMs < 12_000 && markPrice > 0 && indexPrice > 0;
+  const fallbackFresh = coinbaseAgeMs !== null && coinbaseAgeMs < 15_000 && !!coinbasePrice;
+  const effectiveBid = referenceFresh ? bidPrice : coinbasePrice || 0;
+  const effectiveAsk = referenceFresh ? askPrice : coinbasePrice || 0;
+  const effectiveMark = referenceFresh ? markPrice : coinbasePrice || 0;
+  const fairValues = [coinbasePrice, krakenPrice].filter((value): value is number => !!value && value > 0);
+  const fair = fairValues.length ? median(fairValues) : indexPrice || effectiveMark;
+  const spreadBps = effectiveBid && effectiveAsk ? (effectiveAsk - effectiveBid) / ((effectiveAsk + effectiveBid) / 2) * 10_000 : null;
+  const markIndexBps = referenceFresh ? Math.abs(markPrice - indexPrice) / ((markPrice + indexPrice) / 2) * 10_000 : null;
+  const crossVenueBps = effectiveMark && fair ? Math.abs(effectiveMark - fair) / ((effectiveMark + fair) / 2) * 10_000 : null;
+  const recentSequenceGap = sequenceGapAt !== null && now - sequenceGapAt < 60_000;
+  const blockers: string[] = [];
+  if (!referenceFresh && !fallbackFresh) blockers.push('both reference-perpetual and Coinbase fallback prices are stale');
+  if (coinbaseAgeMs === null || coinbaseAgeMs > 30_000) blockers.push('Coinbase spot validation is stale');
+  if (krakenAgeMs === null || krakenAgeMs > 60_000) blockers.push('Kraken spot validation is stale');
+  if (spreadBps === null || spreadBps > 15) blockers.push('executable spread is abnormal');
+  if (markIndexBps !== null && markIndexBps > 35) blockers.push('reference mark/index divergence is abnormal');
+  if (crossVenueBps !== null && crossVenueBps > 45) blockers.push('reference market and spot validation disagree');
+  if (recentSequenceGap) blockers.push('a recent market-data sequence gap was detected');
+  return {
+    healthy: blockers.filter(reason => !reason.includes('reference-perpetual')).length === 0 && (referenceFresh || fallbackFresh),
+    derivativesHealthy: referenceFresh,
+    referenceVenue: REFERENCE_VENUE,
+    referenceAgeMs,
+    coinbaseAgeMs,
+    krakenAgeMs,
+    spreadBps,
+    markIndexBps,
+    crossVenueBps,
+    recentSequenceGap,
+    blockers,
+  };
+}
+
+function buildContext(): MarketContext | null {
+  const feed = quality();
+  const referenceFresh = feed.derivativesHealthy;
+  const mark = referenceFresh ? markPrice : coinbasePrice || lastPrice;
+  const index = referenceFresh ? indexPrice : median([coinbasePrice, krakenPrice].filter((value): value is number => !!value));
+  const bid = referenceFresh ? bidPrice : coinbasePrice || mark;
+  const ask = referenceFresh ? askPrice : coinbasePrice || mark;
+  const last = referenceFresh ? lastPrice : coinbasePrice || mark;
+  if (!(mark > 0 && index > 0 && bid > 0 && ask > 0 && last > 0)) return null;
+  const fairCandidates = [coinbasePrice, krakenPrice, index].filter((value): value is number => !!value && value > 0);
+  const fair = median(fairCandidates);
+  const flow = orderFlowState();
+  const now = Date.now();
+  const longLiquidationUsd5m = liquidations.filter(item => item.at >= now - 5 * 60_000 && item.side === 'long').reduce((sum, item) => sum + item.usd, 0);
+  const shortLiquidationUsd5m = liquidations.filter(item => item.at >= now - 5 * 60_000 && item.side === 'short').reduce((sum, item) => sum + item.usd, 0);
+  const openInterestChangePct = openInterestBaseline > 0 ? (openInterest / openInterestBaseline - 1) * 100 : 0;
+  const base = {
+    timestamp: now,
+    prices: {
+      last, bid, ask, mark, index,
+      coinbaseSpot: coinbasePrice,
+      krakenSpot: krakenPrice,
+      consolidatedFair: fair,
+    },
+    candles: {
+      oneMinute: list(60),
+      fiveMinute: list(300),
+      fifteenMinute: list(900),
+      oneHour: list(3600),
+      fourHour: list(14_400),
+    },
+    derivatives: {
+      fundingRate,
+      predictedFundingRate,
+      nextFundingAt,
+      openInterest,
+      openInterestValue,
+      openInterestChangePct,
+      longLiquidationUsd5m,
+      shortLiquidationUsd5m,
+      basisBps: index > 0 ? (mark - index) / index * 10_000 : 0,
+    },
+    orderFlow: flow,
+    feed,
+  };
+  return { ...base, regime: classifyRegime(base) };
+}
+
+async function evaluate(): Promise<void> {
+  const context = buildContext();
+  if (!context) return;
+  await engine.evaluate(context);
+  status = engine.getStatus();
 }
 
 export async function startBtcPaperEngine(): Promise<void> {
-  if (started) return; started = true;
-  if (!enabled) return;
-  await initializeSchema();
-  try { await warm(); } catch (error) { console.error('[btc] warmup:', (error as Error).message); }
-  await hydrate(); await pollKraken(); connect();
-  const poll = setInterval(() => void pollKraken(), 15_000); poll.unref();
-  const scan = setInterval(() => { evaluation = evaluation.then(() => evaluateStrategy(Date.now())).catch(() => {}); }, 60_000); scan.unref();
-  engineState = activeCall ? 'call_active' : 'warming_up';
-  console.log('[btc] paper-only BTC strategy engine started');
+  if (started) return;
+  started = true;
+  await engine.initialize();
+  await warmHistory();
+  await pollKraken();
+  connectBybit();
+  connectCoinbase();
+  pingTimer = setInterval(() => {
+    if (bybitSocket?.readyState === WebSocket.OPEN) bybitSocket.send(JSON.stringify({ op: 'ping' }));
+  }, 20_000);
+  pingTimer.unref();
+  krakenTimer = setInterval(() => void pollKraken(), 15_000);
+  krakenTimer.unref();
+  evaluationTimer = setInterval(() => {
+    evaluation = evaluation.then(evaluate).catch(error => console.error('[btc-platform]', (error as Error).message));
+  }, 5_000);
+  evaluationTimer.unref();
+  await evaluate();
+  console.log('[btc] multistrategy leveraged paper platform active');
 }
 
-function publicCall(call: BtcCall | null): Record<string, unknown> | null {
-  if (!call) return null;
-  return { ...call, strategyVersion: BTC_STRATEGY_VERSION, currentPrice: coinbasePrice,
-    currentR: coinbasePrice ? callR(call, coinbasePrice) : null, paperOnly: true };
-}
-
-export async function getBtcStatus(): Promise<Record<string, unknown>> {
-  resetDaily();
-  return { market: PRODUCT, mode: 'paper', enabled, strategyVersion: BTC_STRATEGY_VERSION,
-    strategyName: 'Regime-Filtered High-Volume Momentum Retest', engineState, price: coinbasePrice,
-    validationPrice: krakenPrice, feed: quality(), session: { active: primarySession(Date.now()), window: 'Weekdays 12:00-21:00 UTC' },
-    limits: { dailyCalls, dailyLosses, maxCalls: 2, maxLosses: 2 }, warmup: { m1: list(60).length, m5: list(300).length,
-      m15: list(900).length, h1: list(3600).length, h4: list(14_400).length }, setup: impulse, blockers,
-    activeCall: publicCall(activeCall), recentCalls: recentCalls.slice(0, 12).map(call => publicCall(call)), updatedAt: new Date().toISOString() };
+export async function getBtcStatus(): Promise<PlatformStatus> {
+  status = status || engine.getStatus();
+  return status;
 }
