@@ -1,4 +1,12 @@
 (() => {
+  if (!document.querySelector('link[data-btc-platform-style]')) {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/btc-platform.css?v=20260729-multistrategy';
+    link.dataset.btcPlatformStyle = 'true';
+    document.head.appendChild(link);
+  }
+
   const STORAGE_KEY = 'memewatchDashboardMarket';
   const validModes = new Set(['memecoins', 'btc']);
   const brand = document.querySelector('.brand');
