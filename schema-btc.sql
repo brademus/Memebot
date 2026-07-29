@@ -29,3 +29,31 @@ CREATE UNIQUE INDEX IF NOT EXISTS btc_one_open_call_idx
   ON btc_calls ((status)) WHERE status='open';
 CREATE INDEX IF NOT EXISTS btc_calls_opened_idx ON btc_calls (opened_at DESC);
 CREATE INDEX IF NOT EXISTS btc_calls_strategy_idx ON btc_calls (strategy_version,opened_at DESC);
+
+CREATE OR REPLACE FUNCTION btc_enforce_daily_paper_limits()
+RETURNS trigger AS $$
+DECLARE
+  local_day_start TIMESTAMPTZ;
+  calls_today INTEGER;
+  losses_today INTEGER;
+BEGIN
+  local_day_start := date_trunc('day', NEW.opened_at AT TIME ZONE 'America/Chicago') AT TIME ZONE 'America/Chicago';
+  SELECT COUNT(*)::int, COUNT(*) FILTER (WHERE status='lost')::int
+    INTO calls_today, losses_today
+    FROM btc_calls
+   WHERE opened_at >= local_day_start
+     AND opened_at < local_day_start + interval '1 day';
+  IF calls_today >= 2 THEN
+    RAISE EXCEPTION 'BTC paper daily call limit reached';
+  END IF;
+  IF losses_today >= 2 THEN
+    RAISE EXCEPTION 'BTC paper daily loss circuit breaker reached';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS btc_daily_paper_limits ON btc_calls;
+CREATE TRIGGER btc_daily_paper_limits
+  BEFORE INSERT ON btc_calls
+  FOR EACH ROW EXECUTE FUNCTION btc_enforce_daily_paper_limits();
