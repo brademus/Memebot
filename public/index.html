@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="/styles.css?v=20260712-final" />
   <link rel="stylesheet" href="/layout-fixes.css?v=20260712-final" />
   <link rel="stylesheet" href="/dashboard-v2.css?v=20260719-open-admin" />
-  <link rel="stylesheet" href="/market-mode.css?v=20260728-btc-mode" />
+  <link rel="stylesheet" href="/market-mode.css?v=20260729-btc-multistrategy" />
 </head>
 <body data-market="memecoins">
 <header>
@@ -31,56 +31,28 @@
       <div><p>MEMECOIN INTELLIGENCE</p><h1>One clear<br><span>decision flow.</span></h1></div>
       <small>Watch every qualified coin, see what the bot is preparing to call, track active alerts in real time, and audit every finished result.</small>
     </div>
-
-    <div class="decisionFlow" aria-label="Bot decision flow">
-      <span>WATCHING</span><i>→</i><span>CONVICTION</span><i>→</i><span>BUY ALERT</span><i>→</i><span>WIN / LOSS</span>
-    </div>
-
+    <div class="decisionFlow" aria-label="Bot decision flow"><span>WATCHING</span><i>→</i><span>CONVICTION</span><i>→</i><span>BUY ALERT</span><i>→</i><span>WIN / LOSS</span></div>
     <div class="focusTiles">
-      <button class="focusTile watchTile" data-go="watchlist">
-        <span class="tag">LIVE PIPELINE</span><strong id="nWatch">0</strong><h2>Watchlist</h2>
-        <p>Every coin the bot is actively watching after its safety gates.</p><b>Open watchlist →</b>
-      </button>
-      <button class="focusTile" data-go="convictions">
-        <span class="tag">WAITING FOR TIMING</span><strong id="nConvictions">0</strong><h2>Convictions</h2>
-        <p>Coins the bot likes enough to prepare a buy call, but has not alerted yet.</p><b>View convictions →</b>
-      </button>
-      <button class="focusTile" data-go="calls">
-        <span class="tag">ACTIVE ALERTS</span><strong id="nCalls">0</strong><h2>Current Calls</h2>
-        <p>Real timed entries since the clean-slate epoch — research observations and old eras excluded.</p><b>Track calls →</b>
-      </button>
-      <button class="focusTile" data-go="results">
-        <span class="tag">ACCOUNTABILITY</span><strong id="nPnl">$0</strong><h2>Wins &amp; Losses</h2>
-        <p>Every resolved buy alert, the bot’s total hypothetical P&amp;L, and win rate.</p><b>Audit results →</b>
-      </button>
-      <button class="focusTile adminTile" data-go="admin">
-        <span class="tag">OPERATIONS</span><strong>ADMIN</strong><h2>Admin</h2>
-        <p>All-time master review, AI analysis, system health, wallet diagnostics, and discovery controls.</p><b>Open admin →</b>
-      </button>
+      <button class="focusTile watchTile" data-go="watchlist"><span class="tag">LIVE PIPELINE</span><strong id="nWatch">0</strong><h2>Watchlist</h2><p>Every coin the bot is actively watching after its safety gates.</p><b>Open watchlist →</b></button>
+      <button class="focusTile" data-go="convictions"><span class="tag">WAITING FOR TIMING</span><strong id="nConvictions">0</strong><h2>Convictions</h2><p>Coins the bot likes enough to prepare a buy call, but has not alerted yet.</p><b>View convictions →</b></button>
+      <button class="focusTile" data-go="calls"><span class="tag">ACTIVE ALERTS</span><strong id="nCalls">0</strong><h2>Current Calls</h2><p>Real timed entries since the clean-slate epoch — research observations and old eras excluded.</p><b>Track calls →</b></button>
+      <button class="focusTile" data-go="results"><span class="tag">ACCOUNTABILITY</span><strong id="nPnl">$0</strong><h2>Wins &amp; Losses</h2><p>Every resolved buy alert, the bot’s total hypothetical P&amp;L, and win rate.</p><b>Audit results →</b></button>
+      <button class="focusTile adminTile" data-go="admin"><span class="tag">OPERATIONS</span><strong>ADMIN</strong><h2>Admin</h2><p>All-time master review, AI analysis, system health, wallet diagnostics, and discovery controls.</p><b>Open admin →</b></button>
     </div>
   </section>
 
   <section id="btcHome" class="view btcView">
     <div class="hero focusedHero">
-      <div><p>BITCOIN MARKET INTELLIGENCE</p><h1>One strict<br><span>BTC decision flow.</span></h1></div>
-      <small>A paper-only BTC-USD scanner using Coinbase market trades, Kraken price validation, higher-timeframe regime filters, high-volume impulses, controlled retests, and fixed-risk outcome tracking.</small>
+      <div><p>LEVERAGED BITCOIN INTELLIGENCE</p><h1>Seven strategies.<br><span>One risk engine.</span></h1></div>
+      <small>A paper-only BTC perpetual alert desk using a reference derivatives feed, Coinbase and Kraken validation, dynamic 1x–50x leverage, net 3R controls, exact call accounting, and real-time entry and exit alerts.</small>
     </div>
-
-    <div class="decisionFlow" aria-label="Bitcoin bot decision flow">
-      <span>REGIME</span><i>→</i><span>IMPULSE</span><i>→</i><span>RETEST</span><i>→</i><span>BTC CALL</span><i>→</i><span>RESULT</span>
-    </div>
-
-    <div class="focusTiles">
-      <button class="focusTile btcPrimary" data-go="btcCalls">
-        <span class="tag">BTC PAPER TRADE DESK</span><strong id="nBtcCalls">0</strong><h2>Current Calls</h2>
-        <p>Live paper calls with direction, exact entry, stop, 2.5R target, confidence, feed health, and continuously measured outcome.</p>
-        <span id="btcHomeStatus" class="btcStatus">Connecting to the BTC strategy engine</span>
-        <b>Open current calls →</b>
-      </button>
-      <button class="focusTile adminTile" data-go="btcAdmin">
-        <span class="tag">BTC OPERATIONS</span><strong>ADMIN</strong><h2>Admin</h2>
-        <p>Read-only strategy version, market-data health, candle warmup, session gate, daily call limits, and paper-only safety status.</p><b>Open BTC admin →</b>
-      </button>
+    <div class="decisionFlow" aria-label="Bitcoin bot decision flow"><span>REGIME</span><i>→</i><span>STRATEGIES</span><i>→</i><span>RISK</span><i>→</i><span>ENTRY</span><i>→</i><span>EXIT</span></div>
+    <div class="focusTiles btcTiles">
+      <button class="focusTile btcPrimary" data-go="btcCalls"><span class="tag">ACTIONABLE ALERT BOOK</span><strong id="nBtcCalls">0</strong><h2>Current Calls</h2><p>Portfolio-controlled long and short alerts with $100 isolated paper margin, dynamic leverage, stop, liquidation estimate, target, runner state, and live net P&amp;L.</p><span id="btcHomeStatus" class="btcStatus">Connecting to the BTC platform</span><b>Open current calls →</b></button>
+      <button class="focusTile" data-go="btcCalls"><span class="tag">ACTIVE NET P&amp;L</span><strong id="nBtcPnl">$0.00</strong><h2>Live Portfolio</h2><p>Executable-side unrealized P&amp;L plus realized partial exits, fees, estimated funding, and liquidation-aware risk.</p><b>Track live P&amp;L →</b></button>
+      <button class="focusTile" data-go="btcResults"><span class="tag">FULL ACCOUNTABILITY</span><strong id="nBtcRecord">0–0</strong><h2>Wins &amp; Losses</h2><p>Every completed actionable and research call, separated by strategy, leverage, direction, exit type, and result in R.</p><b>Audit results →</b></button>
+      <button class="focusTile" data-go="btcStrategies"><span class="tag">PARALLEL RESEARCH</span><strong id="nBtcStrategies">7</strong><h2>Strategies</h2><p>Five actionable strategies and two shadow microstructure strategies, each versioned and measured independently.</p><b>Compare strategies →</b></button>
+      <button class="focusTile adminTile" data-go="btcAdmin"><span class="tag">BTC OPERATIONS</span><strong>ADMIN</strong><h2>System State</h2><p>Reference venue, feed quality, regime, portfolio limits, risk contract, recent candidates, and paper-only execution status.</p><b>Open BTC admin →</b></button>
     </div>
   </section>
 
@@ -90,74 +62,60 @@
     <div class="table"><table><thead><tr><th>Coin</th><th>State</th><th>Score</th><th>Age</th><th>Liquidity</th><th>B:S</th><th>5m</th><th>Moved</th><th>Smart</th><th></th></tr></thead><tbody id="watchRows"></tbody></table></div>
   </section>
 
-  <section id="convictions" class="view">
-    <div class="title"><div><p>WAITING FOR THE ENTRY</p><h1>Convictions <span id="convictionCount">0</span></h1></div><small>These coins have cleared the bot’s high-quality candidate logic. They are not buy alerts yet; the bot is waiting for its trigger conditions and timing.</small></div>
-    <div id="convictionStats" class="stats"></div>
-    <div id="convictionList" class="cards"></div>
-  </section>
-
-  <section id="calls" class="view">
-    <div class="title"><div><p>BUY ALERTS NOW OPEN</p><h1>Current Calls <span id="callCount">0</span></h1></div><small>A live snapshot, not the day's total: calls usually resolve within the hour, so a thin column with rising resolved counts is the system working. P&amp;L is measured from the exact alert price; the comparison uses a hypothetical $100 per call.</small></div>
-    <div id="callStats" class="stats"></div>
-    <div id="callList" class="callGrid"></div>
-  </section>
-
-  <section id="results" class="view">
-    <div class="title"><div><p>FULL CALL ACCOUNTABILITY</p><h1>Wins &amp; Losses</h1></div><small>Every resolved buy alert is counted once. Results use a normalized hypothetical $100 per call so performance is comparable even when liquidity changes.</small></div>
-    <div id="resultStats" class="stats resultStats"></div>
-    <div id="unresolvedNote" class="notice hidden"></div>
-    <div class="resultSplit">
-      <div class="resultColumn"><div class="sectionHeading"><h2>Winners</h2><span id="winnerCount">0</span></div><div id="winnerList" class="resultList"></div></div>
-      <div class="resultColumn"><div class="sectionHeading"><h2>Losers</h2><span id="loserCount">0</span></div><div id="loserList" class="resultList"></div></div>
-    </div>
-  </section>
+  <section id="convictions" class="view"><div class="title"><div><p>WAITING FOR THE ENTRY</p><h1>Convictions <span id="convictionCount">0</span></h1></div><small>These coins cleared the bot’s high-quality candidate logic. They are not buy alerts yet.</small></div><div id="convictionStats" class="stats"></div><div id="convictionList" class="cards"></div></section>
+  <section id="calls" class="view"><div class="title"><div><p>BUY ALERTS NOW OPEN</p><h1>Current Calls <span id="callCount">0</span></h1></div><small>A live snapshot of exact timed memecoin entries.</small></div><div id="callStats" class="stats"></div><div id="callList" class="callGrid"></div></section>
+  <section id="results" class="view"><div class="title"><div><p>FULL CALL ACCOUNTABILITY</p><h1>Wins &amp; Losses</h1></div><small>Every resolved buy alert is counted once.</small></div><div id="resultStats" class="stats resultStats"></div><div id="unresolvedNote" class="notice hidden"></div><div class="resultSplit"><div class="resultColumn"><div class="sectionHeading"><h2>Winners</h2><span id="winnerCount">0</span></div><div id="winnerList" class="resultList"></div></div><div class="resultColumn"><div class="sectionHeading"><h2>Losers</h2><span id="loserCount">0</span></div><div id="loserList" class="resultList"></div></div></div></section>
 
   <section id="admin" class="view">
-    <div class="title"><div><p>OPERATIONS</p><h1>Admin</h1></div><small>All current operations tools are available directly. No admin key is required or stored by the browser.</small></div>
-    <div class="adminTools">
-      <button id="report"><b>Master review — all time</b><small>Build the complete history of everything the bot has ever done and download it as a ZIP.</small></button>
-      <button id="aiReview"><b>AI review</b><small>Ask the reviewer to analyze current evidence.</small></button>
-      <button id="systemMonitor"><b>System monitor</b><small>Inspect worker, model, market, and persistence health.</small></button>
-      <button id="walletDebug"><b>Wallet diagnostics</b><small>Inspect Pump.fun activity, tracked wallets, and surfaced buys.</small></button>
-      <button id="runDiscovery"><b>Winner discovery</b><small>Run the established winner-first wallet discovery pass.</small></button>
-      <button id="activityMine"><b>Activity wallet scan</b><small>Find heavily active Pump.fun wallets and vet realized profitability now.</small></button>
-      <button id="walletRankings"><b>Wallet rankings</b><small>Show active, profitable, candidate, and rejected wallets.</small></button>
-      <button id="clearAdminKey" class="secondary"><b>Reset output</b><small>Clear the current operations output panel.</small></button>
-    </div>
+    <div class="title"><div><p>OPERATIONS</p><h1>Admin</h1></div><small>All current operations tools are available directly.</small></div>
+    <div class="adminTools"><button id="report"><b>Master review — all time</b><small>Build the complete history and download it as a ZIP.</small></button><button id="aiReview"><b>AI review</b><small>Ask the reviewer to analyze current evidence.</small></button><button id="systemMonitor"><b>System monitor</b><small>Inspect worker, model, market, and persistence health.</small></button><button id="walletDebug"><b>Wallet diagnostics</b><small>Inspect Pump.fun activity and tracked wallets.</small></button><button id="runDiscovery"><b>Winner discovery</b><small>Run the established winner-first wallet discovery pass.</small></button><button id="activityMine"><b>Activity wallet scan</b><small>Find heavily active Pump.fun wallets.</small></button><button id="walletRankings"><b>Wallet rankings</b><small>Show active, profitable, candidate, and rejected wallets.</small></button><button id="clearAdminKey" class="secondary"><b>Reset output</b><small>Clear the operations output panel.</small></button></div>
     <div class="toolPanel"><div class="toolPanelHead"><h2>Output</h2><button id="copyTool" class="ghost hidden">Copy</button></div><pre id="toolOutput">Choose an operations tool above.</pre></div>
   </section>
 
   <section id="btcCalls" class="view btcView">
-    <div class="title"><div><p>BTC PAPER EXECUTION</p><h1>Current Calls <span id="btcCallCount">0</span></h1></div><small>No money or exchange account is connected. Calls are created and resolved automatically from exact BTC-USD market prices so we can accumulate honest prospective evidence before considering execution.</small></div>
-    <div class="stats">
-      <div class="stat"><small>BTC price</small><b id="btcPrice">—</b></div>
-      <div class="stat"><small>Engine state</small><b id="btcEngine">Connecting</b></div>
-      <div class="stat"><small>Feed quality</small><b id="btcFeed">Checking</b></div>
-      <div class="stat"><small>Risk model</small><b>2.5R paper</b></div>
+    <div class="title"><div><p>BTC ACTIONABLE PORTFOLIO</p><h1>Current Calls <span id="btcCallCount">0</span></h1></div><small>Each alert uses a standardized hypothetical $100 isolated margin. Leverage is solved from the technical stop and capped at 50x; no money or exchange account is connected.</small></div>
+    <div class="stats btcOverviewStats">
+      <div class="stat"><small>Mark price</small><b id="btcPrice">—</b></div>
+      <div class="stat"><small>Active net P&amp;L</small><b id="btcActivePnl">$0.00</b></div>
+      <div class="stat"><small>Realized P&amp;L</small><b id="btcRealizedPnl">$0.00</b></div>
+      <div class="stat"><small>Active notional</small><b id="btcNotional">$0</b></div>
+      <div class="stat"><small>Weighted leverage</small><b id="btcLeverage">0x</b></div>
+      <div class="stat"><small>Engine</small><b id="btcEngine">Connecting</b></div>
+      <div class="stat"><small>Feed</small><b id="btcFeed">Checking</b></div>
+      <div class="stat"><small>Regime</small><b id="btcRegime">—</b></div>
     </div>
-    <div id="btcCallList" class="callGrid">
-      <div class="btcEmpty"><div><strong>Connecting to BTC.</strong><p>The first call will only appear when every strategy and feed-quality condition passes.</p></div></div>
-    </div>
-    <div class="toolPanel btcSetupPanel"><div class="toolPanelHead"><h2>Current setup monitor</h2></div><pre id="btcSetup">Loading BTC strategy state…</pre></div>
+    <div id="btcCallList" class="callGrid"><div class="btcEmpty"><div><strong>Connecting to BTC.</strong><p>The platform only publishes an actionable alert after a strategy, execution-quality, leverage, liquidation, net +20%, 3R, portfolio, and entry-zone check all pass.</p></div></div></div>
+    <div class="toolPanel btcSetupPanel"><div class="toolPanelHead"><h2>Latest strategy candidates</h2></div><pre id="btcSetup">Loading candidate state…</pre></div>
+  </section>
+
+  <section id="btcResults" class="view btcView">
+    <div class="title"><div><p>LEVERAGED CALL ACCOUNTABILITY</p><h1>Wins &amp; Losses</h1></div><small>Net results include modeled fees, spread, slippage, funding, partial exits, and liquidation outcomes. Actionable and independent research books remain distinguishable.</small></div>
+    <div id="btcResultStats" class="stats resultStats"></div>
+    <div class="resultSplit"><div class="resultColumn"><div class="sectionHeading"><h2>Winners</h2><span id="btcWinnerCount">0</span></div><div id="btcWinnerList" class="resultList"></div></div><div class="resultColumn"><div class="sectionHeading"><h2>Losses &amp; Liquidations</h2><span id="btcLoserCount">0</span></div><div id="btcLoserList" class="resultList"></div></div></div>
+  </section>
+
+  <section id="btcStrategies" class="view btcView">
+    <div class="title"><div><p>INDEPENDENT STRATEGY RESEARCH</p><h1>Strategies <span id="btcStrategyCount">7</span></h1></div><small>Each strategy receives its own standardized paper calls so merging actionable alerts cannot distort its win rate, expectancy, profit factor, or leverage-band evidence.</small></div>
+    <div id="btcStrategyList" class="btcStrategyGrid"></div>
   </section>
 
   <section id="btcAdmin" class="view btcView">
-    <div class="title"><div><p>BTC OPERATIONS</p><h1>Admin</h1></div><small>This first release is intentionally read-only. It exposes the actual running configuration and safety state but cannot place trades or silently change strategy parameters.</small></div>
+    <div class="title"><div><p>BTC OPERATIONS</p><h1>System State</h1></div><small>Read-only production diagnostics. The platform can observe, simulate, persist, and alert; it has no signing capability or real-order endpoint.</small></div>
     <div class="adminTools btcAdminTools">
-      <button disabled><b>Strategy model</b><small>Regime-filtered high-volume momentum breakout and five-minute retest.</small><small>Versioned and active</small></button>
-      <button disabled><b>Risk controls</b><small>2.5R target, structural stop, maximum two calls and two losses per Chicago day.</small><small>Paper only</small></button>
-      <button disabled><b>Session rules</b><small>Weekdays during the European/U.S. liquidity window, 12:00–21:00 UTC.</small><small>Active gate</small></button>
-      <button disabled><b>Market data health</b><small>Coinbase trades and bid/ask with Kraken cross-exchange validation.</small><small>Fail closed</small></button>
-      <button disabled><b>Execution</b><small>No wallet, exchange key, signing capability, leverage, or real order endpoint exists.</small><small>Disabled</small></button>
-      <button disabled><b>Evidence</b><small>Every paper call is persisted with strategy version, entry, stop, target, outcome, MFE, and MAE.</small><small>PostgreSQL</small></button>
+      <button disabled><b>Strategy library</b><small>Momentum Retest, Compression Breakout, Sweep Reversal, VWAP Mean Reversion, Funding/OI Squeeze, plus two shadow microstructure strategies.</small><small>Versioned</small></button>
+      <button disabled><b>Leverage contract</b><small>$100 isolated paper margin, dynamic 1x–50x, structural stop first, net +$20 target, and minimum 3R after modeled costs.</small><small>Fail closed</small></button>
+      <button disabled><b>Portfolio coordinator</b><small>Independent research calls, merged actionable signals, conflict rejection, one-way exposure, cooldowns, notional and daily-loss controls.</small><small>Active</small></button>
+      <button disabled><b>Market data</b><small>Reference perpetual mark/index/order book/funding/OI/liquidations with Coinbase and Kraken spot validation.</small><small>Multivenue</small></button>
+      <button disabled><b>Execution simulation</b><small>Executable bid/ask fills, slippage, fees, funding, partial targets, runner trailing, time exits, and liquidation checks.</small><small>Paper only</small></button>
+      <button disabled><b>Real execution</b><small>No exchange API key, wallet, balance access, signing, withdrawal, or order-placement route exists.</small><small>Disabled</small></button>
     </div>
     <div class="toolPanel"><div class="toolPanelHead"><h2>BTC system output</h2></div><pre id="btcAdminOutput">Loading BTC system state…</pre></div>
   </section>
 </main>
 
 <script src="/app.js?v=20260719-open-admin" defer></script>
-<script src="/market-mode.js?v=20260728-btc-mode" defer></script>
-<script src="/btc-dashboard.js?v=20260728-btc-engine" defer></script>
+<script src="/market-mode.js?v=20260729-btc-multistrategy" defer></script>
+<script src="/btc-dashboard.js?v=20260729-btc-multistrategy" defer></script>
 <script src="/no-admin.js?v=20260719-open-admin" defer></script>
 <script src="/daily-review.js?v=20260720-zip-download" defer></script>
 </body>
