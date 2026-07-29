@@ -1,0 +1,28 @@
+name: Export Wave 1 Source
+
+on:
+  push:
+    branches:
+      - feature/btc-wave1-24-7-strategies
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wave1-source-${{ github.run_id }}
+          path: |
+            src
+            public
+            package.json
+            package-lock.json
+            tsconfig.json
+            schema-btc.sql
+            .github/workflows/ci.yml
+          retention-days: 1
