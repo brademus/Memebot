@@ -108,6 +108,9 @@ jobs:
       - name: Observation milestone test
         run: node --test --test-name-pattern="observations include" dist/model/model.test.js
 
+      - name: Vercel API proxy path regression tests
+        run: node --test tests/vercel-proxy-path.test.js
+
       - name: Full test manifest
         shell: bash
         run: |
