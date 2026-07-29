@@ -22,6 +22,16 @@ async function main(): Promise<void> {
 }
 
 main().catch(error => {
-  console.error('[btc-worker] fatal startup:', error);
-  process.exit(1);
+  const normalized = error instanceof Error ? error : new Error(String(error));
+  console.error('[btc-worker] fatal startup:', normalized);
+  if (!process.send) {
+    process.exit(1);
+    return;
+  }
+  process.send({
+    type: 'btc-fatal',
+    error: normalized.message,
+    stack: normalized.stack?.slice(0, 4_000) || null,
+    at: Date.now(),
+  }, () => setTimeout(() => process.exit(1), 25));
 });
