@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - feature/btc-wave1-24-7-strategies
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
