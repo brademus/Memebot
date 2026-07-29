@@ -35,6 +35,7 @@ let latest: Record<string, unknown> = {
   prices: null,
   feed: unavailableFeed('BTC worker has not published a platform snapshot yet'),
   regime: null,
+  crossAsset: null,
   portfolio: {
     activePnlUsd: 0,
     realizedPnlUsd: 0,

@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 import { BtcMultiStrategyEngine } from './platform/engine';
+import { buildCrossAssetState, TimedPrice } from './platform/cross-asset';
 import { classifyRegime, clamp, median, safeDiv } from './platform/indicators';
 import {
   BtcDirection,
@@ -28,6 +29,7 @@ interface LiquidationTick {
 
 const PRODUCT = 'BTCUSDT';
 const COINBASE_PRODUCT = 'BTC-USD';
+const COINBASE_ETH_PRODUCT = 'ETH-USD';
 const REFERENCE_VENUE = process.env.BTC_REFERENCE_VENUE || 'BYBIT-BTCUSDT';
 const BYBIT_WS = process.env.BTC_REFERENCE_PERP_WS || 'wss://stream.bybit.com/v5/public/linear';
 const INTERVALS = [60, 300, 900, 3600, 14_400] as const;
@@ -37,6 +39,7 @@ const bids = new Map<number, number>();
 const asks = new Map<number, number>();
 const trades: TradeTick[] = [];
 const liquidations: LiquidationTick[] = [];
+const ethObservations: TimedPrice[] = [];
 const sequences = new Map<string, number>();
 
 let started = false;
@@ -49,6 +52,7 @@ let coinbaseReconnectAttempt = 0;
 let latestBybitAt: number | null = null;
 let latestCoinbaseAt: number | null = null;
 let latestKrakenAt: number | null = null;
+let latestEthAt: number | null = null;
 let sequenceGapAt: number | null = null;
 let lastPrice = 0;
 let bidPrice = 0;
@@ -57,6 +61,7 @@ let markPrice = 0;
 let indexPrice = 0;
 let coinbasePrice: number | null = null;
 let krakenPrice: number | null = null;
+let ethPrice: number | null = null;
 let fundingRate = 0;
 let predictedFundingRate = 0;
 let nextFundingAt: number | null = null;
@@ -76,10 +81,25 @@ const numeric = (value: unknown): number | null => {
 };
 const list = (interval: number): Candle[] => candles.get(interval) || [];
 
+function recordEthPrice(price: number, at = Date.now()): void {
+  if (!(price > 0 && Number.isFinite(at))) return;
+  ethPrice = price;
+  latestEthAt = Date.now();
+  const previous = ethObservations.at(-1);
+  if (previous && Math.abs(previous.at - at) < 1_000) {
+    previous.at = at;
+    previous.price = price;
+  } else {
+    ethObservations.push({ at, price });
+  }
+}
+
 function prune(): void {
   const cutoff = Date.now() - 30 * 60_000;
+  const crossAssetCutoff = Date.now() - 2 * 60 * 60_000;
   while (trades.length && trades[0].at < cutoff) trades.shift();
   while (liquidations.length && liquidations[0].at < cutoff) liquidations.shift();
+  while (ethObservations.length && ethObservations[0].at < crossAssetCutoff) ethObservations.shift();
 }
 
 function updateCandle(interval: number, price: number, size: number, at: number, direction: BtcDirection): void {
@@ -245,8 +265,15 @@ function parseCoinbase(raw: WebSocket.RawData): void {
   const now = Date.now();
   if (message.channel === 'ticker') {
     for (const event of message.events || []) for (const ticker of event.tickers || []) {
-      coinbasePrice = numeric(ticker.price) ?? coinbasePrice;
-      latestCoinbaseAt = now;
+      const price = numeric(ticker.price);
+      const productId = String(ticker.product_id || event.product_id || '');
+      if (!price) continue;
+      if (productId === COINBASE_ETH_PRODUCT) {
+        recordEthPrice(price, now);
+      } else if (productId === COINBASE_PRODUCT || !productId) {
+        coinbasePrice = price;
+        latestCoinbaseAt = now;
+      }
     }
   }
   if (message.channel === 'market_trades') {
@@ -254,14 +281,21 @@ function parseCoinbase(raw: WebSocket.RawData): void {
       const price = numeric(trade.price);
       const size = numeric(trade.size);
       const at = Date.parse(String(trade.time || message.timestamp || ''));
-      const direction: BtcDirection = String(trade.side).toUpperCase() === 'BUY' ? 'short' : 'long';
-      if (price && size && Number.isFinite(at)) {
-        coinbasePrice = price;
-        latestCoinbaseAt = now;
-        recordTrade(price, size, at, direction, 'spot');
+      const productId = String(trade.product_id || event.product_id || '');
+      if (!price || !Number.isFinite(at)) continue;
+      if (productId === COINBASE_ETH_PRODUCT) {
+        recordEthPrice(price, at);
+        continue;
       }
+      if (productId !== COINBASE_PRODUCT && productId) continue;
+      if (!size) continue;
+      const direction: BtcDirection = String(trade.side).toUpperCase() === 'BUY' ? 'short' : 'long';
+      coinbasePrice = price;
+      latestCoinbaseAt = now;
+      recordTrade(price, size, at, direction, 'spot');
     }
   }
+  prune();
 }
 
 function connectCoinbase(): void {
@@ -270,7 +304,11 @@ function connectCoinbase(): void {
   ws.on('open', () => {
     coinbaseReconnectAttempt = 0;
     for (const channel of ['heartbeats', 'ticker', 'market_trades']) {
-      ws.send(JSON.stringify({ type: 'subscribe', channel, ...(channel === 'heartbeats' ? {} : { product_ids: [COINBASE_PRODUCT] }) }));
+      ws.send(JSON.stringify({
+        type: 'subscribe',
+        channel,
+        ...(channel === 'heartbeats' ? {} : { product_ids: [COINBASE_PRODUCT, COINBASE_ETH_PRODUCT] }),
+      }));
     }
   });
   ws.on('message', parseCoinbase);
@@ -378,23 +416,50 @@ function aggregate(source: Candle[], interval: number): Candle[] {
   return [...grouped.values()].sort((a, b) => a.startMs - b.startMs);
 }
 
+async function warmEthHistory(): Promise<void> {
+  const response = await fetch(`https://api.exchange.coinbase.com/products/${COINBASE_ETH_PRODUCT}/candles?granularity=60`, {
+    headers: { Accept: 'application/json', 'User-Agent': 'Memebot-BTC-Research/2.0' },
+  });
+  if (!response.ok) throw new Error(`Coinbase ETH history returned ${response.status}`);
+  const payload = await response.json() as unknown;
+  if (!Array.isArray(payload)) throw new Error('Coinbase ETH history payload invalid');
+  const history = payload.map((row): TimedPrice | null => {
+    if (!Array.isArray(row) || row.length < 6) return null;
+    const at = Number(row[0]) * 1000;
+    const price = Number(row[4]);
+    return Number.isFinite(at) && price > 0 ? { at, price } : null;
+  }).filter((row): row is TimedPrice => row !== null)
+    .sort((a, b) => a.at - b.at)
+    .slice(-120);
+  ethObservations.splice(0, ethObservations.length, ...history);
+  const latest = history.at(-1);
+  if (latest) ethPrice = latest.price;
+  console.log('[btc] warmed ETH cross-asset history');
+}
+
 async function warmHistory(): Promise<void> {
+  let referenceHistoryLoaded = false;
   try {
     const results = await Promise.all(INTERVALS.map(interval => bybitHistory(interval)));
     INTERVALS.forEach((interval, index) => candles.set(interval, results[index]));
+    referenceHistoryLoaded = true;
     console.log('[btc] warmed reference-perpetual history');
-    return;
   } catch (error) {
     console.error('[btc] reference history unavailable; using Coinbase fallback:', (error as Error).message);
   }
-  const [m1, m5, m15, h1] = await Promise.all([
-    coinbaseHistory(60), coinbaseHistory(300), coinbaseHistory(900), coinbaseHistory(3600),
-  ]);
-  candles.set(60, m1);
-  candles.set(300, m5);
-  candles.set(900, m15);
-  candles.set(3600, h1);
-  candles.set(14_400, aggregate(h1, 14_400));
+  if (!referenceHistoryLoaded) {
+    const [m1, m5, m15, h1] = await Promise.all([
+      coinbaseHistory(60), coinbaseHistory(300), coinbaseHistory(900), coinbaseHistory(3600),
+    ]);
+    candles.set(60, m1);
+    candles.set(300, m5);
+    candles.set(900, m15);
+    candles.set(3600, h1);
+    candles.set(14_400, aggregate(h1, 14_400));
+  }
+  await warmEthHistory().catch(error => {
+    console.error('[btc] ETH cross-asset history unavailable; waiting for live samples:', (error as Error).message);
+  });
 }
 
 function sortedLevels(map: Map<number, number>, direction: 'bids' | 'asks', count = 20): BookLevel[] {
@@ -528,6 +593,14 @@ function buildContext(): MarketContext | null {
       basisBps: index > 0 ? (mark - index) / index * 10_000 : 0,
     },
     orderFlow: flow,
+    crossAsset: buildCrossAssetState({
+      now,
+      currentBtc: mark,
+      btcOneMinuteCandles: list(60),
+      currentEth: ethPrice,
+      ethObservations,
+      latestEthAt,
+    }),
     feed,
   };
   return { ...base, regime: classifyRegime(base) };
