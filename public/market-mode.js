@@ -1,6 +1,6 @@
 (() => {
   const STORAGE_KEY = 'memewatchDashboardMarket';
-  const validModes = new Set(['memecoins', 'nasdaq']);
+  const validModes = new Set(['memecoins', 'btc']);
   const brand = document.querySelector('.brand');
   const back = document.getElementById('back');
   const themeMeta = document.querySelector('meta[name="theme-color"]');
@@ -13,7 +13,7 @@
     if (validModes.has(saved)) market = saved;
   } catch {}
 
-  const homeForMarket = () => market === 'nasdaq' ? 'nasdaqHome' : 'home';
+  const homeForMarket = () => market === 'btc' ? 'btcHome' : 'home';
 
   function openView(target) {
     const resolved = target === 'home' ? homeForMarket() : target;
@@ -25,7 +25,7 @@
     }
     if (back) {
       back.classList.toggle('hidden', resolved === homeForMarket());
-      back.textContent = market === 'nasdaq' ? '← Nasdaq Dashboard' : '← Dashboard';
+      back.textContent = market === 'btc' ? '← Bitcoin Dashboard' : '← Dashboard';
     }
   }
 
@@ -45,10 +45,10 @@
       button.setAttribute('aria-pressed', String(active));
     });
 
-    if (market === 'nasdaq') {
-      if (brand) brand.innerHTML = '<span>NQ</span>WATCH';
-      document.title = 'NQWATCH — Nasdaq Dashboard';
-      if (themeMeta) themeMeta.setAttribute('content', '#020713');
+    if (market === 'btc') {
+      if (brand) brand.innerHTML = '<span>BTC</span>WATCH';
+      document.title = 'BTCWATCH — Bitcoin Dashboard';
+      if (themeMeta) themeMeta.setAttribute('content', '#05070f');
     } else {
       if (brand) brand.innerHTML = '<span>MEME</span>WATCH';
       document.title = 'MEMEWATCH';
