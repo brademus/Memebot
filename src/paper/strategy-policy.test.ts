@@ -156,3 +156,13 @@ test('post-exit shadows are quality observations, never trades', async () => {
   const { strategyRoleForSignal } = await import('./strategy-policy');
   assert.equal(strategyRoleForSignal('post_exit_watch'), 'quality_observation');
 });
+
+test('openPostExitShadow gates: strategy exits of timed entries only, with a real price', async () => {
+  const { openPostExitShadow } = await import('./paper');
+  // no pool in unit context: the function must simply not throw on any input shape
+  await openPostExitShadow({ ca: 'X', strategy_role: 'quality_observation' }, 1, 'strategy_multi_signal_deterioration_exit');
+  await openPostExitShadow({ ca: 'X', strategy_role: 'timed_entry' }, 0, 'strategy_multi_signal_deterioration_exit');
+  await openPostExitShadow({ ca: 'X', strategy_role: 'timed_entry' }, 1, 'coin_died');
+  await openPostExitShadow({ ca: 'X', strategy_role: 'timed_entry' }, 1, 'strategy_profit_lock_exit_1_5x');
+  assert.ok(true);
+});

@@ -74,7 +74,7 @@ async function runDailyMasterReview() {
   dailyReviewOutput.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
   try {
-    let job = await dailyReviewJson('/api/daily-review-jobs?days=1', { method: 'POST' });
+    let job = await dailyReviewJson('/api/daily-review-jobs', { method: 'POST' });
     const deadline = Date.now() + 10 * 60_000;
 
     while (job.status === 'queued' || job.status === 'building') {

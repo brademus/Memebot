@@ -1,4 +1,5 @@
 import { pool } from '../db';
+import { openPostExitShadow } from './paper';
 import { assessTrigger } from '../scoring/states';
 import { getToken } from '../store';
 import { TokenRecord } from '../types';
@@ -434,6 +435,9 @@ async function closeFromEvaluation(row: any, token: TokenRecord | null, evaluati
     row.id, evaluation.reasonCode, evaluation.exitPrice, JSON.stringify(decision), STRATEGY_VERSION,
     STRATEGY_NOTIONAL_USD, realizedPnlUsd,
   ]).catch(() => null);
+  if (closed?.rowCount) {
+    await openPostExitShadow({ ...row, strategy_role: role }, evaluation.exitPrice, evaluation.reasonCode);
+  }
   if (!closed?.rowCount) return;
   await finalizePaperTelemetry(Number(row.id), token || null, evaluation.exitPrice, evaluation.reasonCode);
   await recordPaperEvent(Number(row.id), token || null, row.signal, row.model_version,

@@ -309,18 +309,25 @@ async function closeAt(row: any, token: ReturnType<typeof getToken> | null, pric
   trackingRecoveryNoted.delete(Number(row.id));
   await finalizePaperTelemetry(Number(row.id), token || null, price, reason);
 
-  // POST-EXIT SHADOW (goal: multiple 3x/day, 2026-07-28): after a strategy-decided
-  // exit of a real timed entry, a $0 quality observation keeps watching from the
-  // exit price. This measures — never guesses — how often our own exits leave a
-  // 3x on the table, which is the prerequisite evidence for ever touching the
-  // exit ladder. Dead/unobservable coins are skipped: nothing left to watch.
-  if (row?.strategy_role === 'timed_entry' && price && price > 0
-    && typeof reason === 'string' && reason.startsWith('strategy_')) {
-    try {
-      await openPaper(row.ca, row.symbol || '?', 'post_exit_watch', price, null, undefined,
-        { skipExecutionQuote: true, parentId: Number(row.id) || null });
-    } catch { /* shadows are best-effort */ }
-  }
+  await openPostExitShadow(row, price, reason);
+}
+
+/**
+ * POST-EXIT SHADOW (goal: multiple 3x/day): after a strategy-decided exit of a
+ * real timed entry, a $0 quality observation keeps watching from the exit price —
+ * the evidence base for whether our exits leave 3xs on the table. Exported and
+ * called from BOTH close paths: closeAt (mark loop) and the strategy engine's own
+ * close in strategy-lifecycle, which bypasses closeAt entirely (the reason the
+ * first wiring produced zero shadows despite 30 strategy exits).
+ */
+export async function openPostExitShadow(row: any, price: number | null, reason: string) {
+  const role = row?.strategy_role || 'timed_entry';   // the strategy engine only closes timed entries
+  if (role !== 'timed_entry' || !price || price <= 0) return;
+  if (typeof reason !== 'string' || !reason.startsWith('strategy_')) return;
+  try {
+    await openPaper(row.ca, row.symbol || '?', 'post_exit_watch', price, null, undefined,
+      { skipExecutionQuote: true, parentId: Number(row.id) || null });
+  } catch { /* shadows are best-effort */ }
 }
 
 const numberValue = (value: unknown) => Number.isFinite(Number(value)) ? Number(value) : 0;

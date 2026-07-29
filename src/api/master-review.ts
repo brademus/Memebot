@@ -462,7 +462,8 @@ export async function buildMasterReview(days = 3650) {
        ORDER BY p.ca, (p.peak_price/NULLIF(p.entry_price,0)) DESC)
     SELECT q.ca, blocked.reason_code
       FROM q LEFT JOIN LATERAL (
-        SELECT s.reason_code FROM signal_decisions s
+        SELECT NULLIF(array_to_string(s.reasons, '+'), '') AS reason_code
+          FROM signal_decisions s
          WHERE s.ca=q.ca AND s.allow=false AND s.evaluated_at <= q.peak_at
          ORDER BY s.evaluated_at DESC LIMIT 1) blocked ON true`, [windowParameter]);
   const shadowVerdict = await query('post_exit_shadow_verdict', `
