@@ -17,6 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Record base tree
+        run: git rev-parse 'HEAD^{tree}' > tree-sha.txt
       - uses: actions/upload-artifact@v4
         with:
           name: wave2-source-${{ github.run_id }}
@@ -28,4 +30,5 @@ jobs:
             tsconfig.json
             schema-btc.sql
             .github/workflows/ci.yml
+            tree-sha.txt
           retention-days: 1
