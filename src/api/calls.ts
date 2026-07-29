@@ -1,5 +1,6 @@
 import { pool } from '../db';
 import { ensureStrategyPolicyEpoch } from '../paper/strategy-policy-epoch';
+import { getBtcStatus } from '../btc/runtime';
 
 const NORMALIZED_STAKE_USD = 100;
 export const BUY_ALERT_SIGNAL = 'trigger' as const;
@@ -113,6 +114,7 @@ export function normalizeDashboardCall(row: PaperCallRow): DashboardCall {
 }
 
 export async function buildCallsDashboard() {
+  const btc = await getBtcStatus();
   if (!pool) {
     return {
       normalizedStakeUsd: NORMALIZED_STAKE_USD,
@@ -122,6 +124,7 @@ export async function buildCallsDashboard() {
       losers: [],
       unresolved: [],
       note: 'Attach Postgres to track calls and results.',
+      btc,
     };
   }
 
@@ -143,6 +146,7 @@ export async function buildCallsDashboard() {
       epochAt: null,
       current: [], winners: [], breakevens: [], losers: [], unresolved: [],
       note: 'Cohort unavailable: the evidence epoch could not be verified. Showing nothing rather than mixed-era history.',
+      btc,
     };
   }
   const result = await pool.query<PaperCallRow>(`
@@ -193,6 +197,7 @@ export async function buildCallsDashboard() {
     breakevens,
     losers,
     unresolved,
+    btc,
   };
 }
 
