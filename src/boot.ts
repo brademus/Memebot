@@ -7,7 +7,12 @@ import {
   startYieldWatch,
   startLeaderAddressPublication,
 } from './leadership';
-import { BtcWorkerStatusMessage, markBtcWorkerUnavailable, setBtcWorkerStatus } from './btc/bridge';
+import {
+  BtcWorkerMessage,
+  markBtcWorkerFatal,
+  markBtcWorkerUnavailable,
+  setBtcWorkerStatus,
+} from './btc/bridge';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 let btcChild: ChildProcess | null = null;
@@ -19,11 +24,21 @@ function startIsolatedBtcWorker(): void {
   const workerPath = path.join(__dirname, 'btc', 'worker.js');
   const child = fork(workerPath, [], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
   btcChild = child;
+  let fatalReported = false;
 
   child.on('message', message => {
-    const candidate = message as Partial<BtcWorkerStatusMessage>;
-    if (candidate?.type === 'btc-status' && candidate.payload && typeof candidate.payload === 'object') {
+    const candidate = message as Partial<BtcWorkerMessage>;
+    if (candidate?.type === 'btc-status' && 'payload' in candidate && candidate.payload && typeof candidate.payload === 'object') {
       setBtcWorkerStatus(candidate.payload);
+      return;
+    }
+    if (candidate?.type === 'btc-fatal' && 'error' in candidate && typeof candidate.error === 'string') {
+      fatalReported = true;
+      markBtcWorkerFatal(
+        candidate.error,
+        'stack' in candidate && typeof candidate.stack === 'string' ? candidate.stack : null,
+        'at' in candidate && typeof candidate.at === 'number' ? candidate.at : Date.now(),
+      );
     }
   });
   child.on('error', error => {
@@ -33,7 +48,7 @@ function startIsolatedBtcWorker(): void {
     btcChild = null;
     const reason = `BTC worker exited (${signal || code || 'unknown'}); supervised restart scheduled`;
     console.error(`[btc] ${reason}`);
-    markBtcWorkerUnavailable(reason);
+    if (!fatalReported) markBtcWorkerUnavailable(reason);
     if (!stopping && !btcRestartTimer) {
       btcRestartTimer = setTimeout(() => {
         btcRestartTimer = null;
