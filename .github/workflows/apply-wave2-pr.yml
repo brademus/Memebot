@@ -20,13 +20,13 @@ jobs:
       - name: Apply Wave 2 implementation
         run: |
           set -euo pipefail
-          base64 --decode .wave2-patch.gz.b64 | gzip --decompress > /tmp/wave2.patch
-          echo "6bb1fa53e37053284c3ea1fb3e6956807d10554c513dd8bcf915fdb8dd606f5b  /tmp/wave2.patch" | sha256sum --check
           if test -f src/btc/platform/wave2/liquidation-cascade-exhaustion.ts; then
             exit 0
           fi
+          cat .wave2-chunk-* | base64 --decode | gzip --decompress > /tmp/wave2.patch
+          echo "6bb1fa53e37053284c3ea1fb3e6956807d10554c513dd8bcf915fdb8dd606f5b  /tmp/wave2.patch" | sha256sum --check
           git apply --index /tmp/wave2.patch
-          git rm .wave2-patch.gz.b64
+          git rm .wave2-chunk-* .wave2-patch.gz.b64
           git config user.name "Memebot Wave 2"
           git config user.email "actions@users.noreply.github.com"
           git commit -m "Add Wave 2 BTC shadow strategies"
