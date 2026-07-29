@@ -3,6 +3,15 @@ export interface BtcWorkerStatusMessage {
   payload: Record<string, unknown>;
 }
 
+export interface BtcWorkerFatalMessage {
+  type: 'btc-fatal';
+  error: string;
+  stack?: string | null;
+  at?: number;
+}
+
+export type BtcWorkerMessage = BtcWorkerStatusMessage | BtcWorkerFatalMessage;
+
 const unavailableFeed = (reason: string) => ({
   healthy: false,
   derivativesHealthy: false,
@@ -57,6 +66,22 @@ export function markBtcWorkerUnavailable(reason: string): void {
     engineState: 'worker_restarting',
     feed: unavailableFeed(reason),
     blockers: [reason],
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function markBtcWorkerFatal(error: string, stack?: string | null, at = Date.now()): void {
+  const message = `BTC worker fatal startup: ${error}; supervised restart scheduled`;
+  latest = {
+    ...latest,
+    engineState: 'worker_failed',
+    feed: unavailableFeed(message),
+    blockers: [message],
+    lastFatalError: {
+      message: error,
+      stack: stack || null,
+      at: new Date(at).toISOString(),
+    },
     updatedAt: new Date().toISOString(),
   };
 }
