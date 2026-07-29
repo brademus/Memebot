@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { solveRiskPlan } from './risk';
-import { BTC_STRATEGIES } from './strategies';
+import { BTC_STRATEGIES } from './strategy-registry';
 import { MarketContext, StrategyCandidate } from './types';
 
 const context: MarketContext = {
@@ -91,9 +91,9 @@ function candidate(overrides: Partial<StrategyCandidate> = {}): StrategyCandidat
   };
 }
 
-test('BTC strategy registry contains seven unique versioned strategies', () => {
-  assert.equal(BTC_STRATEGIES.length, 7);
-  assert.equal(new Set(BTC_STRATEGIES.map(strategy => strategy.id)).size, 7);
+test('BTC strategy registry contains twelve unique versioned strategies', () => {
+  assert.equal(BTC_STRATEGIES.length, 12);
+  assert.equal(new Set(BTC_STRATEGIES.map(strategy => strategy.id)).size, 12);
   for (const strategy of BTC_STRATEGIES) {
     assert.ok(strategy.version.length > 0);
     assert.ok(strategy.leverageCap >= 1 && strategy.leverageCap <= 50);
