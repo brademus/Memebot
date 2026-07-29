@@ -110,10 +110,10 @@ test('risk solver never exceeds 50x and clears net target and reward-to-risk gat
   assert.ok(plan.liquidationBufferPct > 0);
 });
 
-test('risk solver rejects a structural stop that cannot fit the planned loss budget', () => {
-  const plan = solveRiskPlan(context, candidate({ structuralStop: 97_000, maximumRealisticTarget: 120_000 }));
+test('risk solver rejects an invalid structural stop beyond the maximum allowed setup distance', () => {
+  const plan = solveRiskPlan(context, candidate({ structuralStop: 90_000, maximumRealisticTarget: 140_000 }));
   assert.equal(plan.approved, false);
-  assert.ok(plan.rejectionReasons.length > 0);
+  assert.ok(plan.rejectionReasons.some(reason => reason.includes('structural stop distance')));
 });
 
 test('strategy-specific leverage cap is enforced independently of the platform ceiling', () => {
