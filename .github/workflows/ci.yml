@@ -84,6 +84,9 @@ jobs:
       - name: State-machine and abstention tests
         run: node --test dist/scoring/states.test.js
 
+      - name: BTC regime and retest strategy tests
+        run: node --test dist/btc/strategy.test.js
+
       - name: Exact forward snapshot tests
         run: node --test dist/tuning/snapshots.test.js
 
@@ -117,7 +120,7 @@ jobs:
           retention-days: 7
 
       - name: Dashboard JavaScript syntax
-        run: node --check public/app.js && node --check public/market-mode.js && node --check public/no-admin.js && node --check public/daily-review.js && node --check public/observed-wins.js
+        run: node --check public/app.js && node --check public/market-mode.js && node --check public/btc-dashboard.js && node --check public/no-admin.js && node --check public/daily-review.js && node --check public/observed-wins.js
 
   postgres-persistence:
     needs: build-and-test
