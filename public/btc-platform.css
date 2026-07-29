@@ -1,0 +1,112 @@
+.btcTiles .focusTile:not(.btcPrimary) { min-height: 245px; }
+
+.btcOverviewStats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.btcCallCard h2 {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.btcCallCard h2 span {
+  color: var(--amber-2);
+  font: 700 14px/1 "IBM Plex Mono", monospace;
+}
+
+.btcMetrics {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.btcSupport {
+  margin: 14px 0 0;
+  color: var(--amber-2);
+  font: 600 11px/1.5 "IBM Plex Mono", monospace;
+}
+
+.btcPositive { color: var(--green) !important; }
+.btcNegative { color: var(--red) !important; }
+
+.btcStrategyGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.btcStrategyCard {
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(circle at 94% 0%, rgba(247, 147, 26, .08), transparent 15rem),
+    linear-gradient(145deg, rgba(24, 24, 28, .98), rgba(8, 10, 16, .99));
+}
+
+.btcStrategyCard h2 {
+  margin: 18px 0 5px;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 22px;
+  letter-spacing: -.035em;
+}
+
+.btcStrategyCard > small {
+  color: var(--dim);
+  font: 600 10px/1.4 "IBM Plex Mono", monospace;
+}
+
+.btcResultCard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 18px;
+  align-items: center;
+}
+
+.btcResultCard > div:first-child {
+  display: grid;
+  gap: 5px;
+}
+
+.btcResultCard > div:nth-child(2) {
+  display: grid;
+  gap: 4px;
+  justify-items: end;
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.btcResultCard > p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+body[data-market="btc"] .resultCard,
+body[data-market="btc"] .btcStrategyCard {
+  border-color: #3c3428;
+}
+
+body[data-market="btc"] .resultCard:hover,
+body[data-market="btc"] .btcStrategyCard:hover {
+  border-color: #80531e;
+}
+
+@media (max-width: 1000px) {
+  .btcOverviewStats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .btcMetrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 760px) {
+  .btcStrategyGrid { grid-template-columns: 1fr; }
+  .btcMetrics { grid-template-columns: 1fr 1fr; }
+}
+
+@media (max-width: 520px) {
+  .btcOverviewStats,
+  .btcMetrics { grid-template-columns: 1fr; }
+  .btcResultCard { grid-template-columns: 1fr; }
+  .btcResultCard > div:nth-child(2) { justify-items: start; }
+}
