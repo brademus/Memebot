@@ -23,6 +23,11 @@ async function startLeaderWorker() {
   await hardenEvidenceSystemV3Schema();
   startEvidenceSystemV3();
 
+  // BTC is a separate paper-only research lane. It consumes public Coinbase/Kraken
+  // market data, writes hypothetical calls, and has no exchange credentials or order path.
+  const { startBtcPaperEngine } = await import('./btc/runtime');
+  await startBtcPaperEngine();
+
   const { startBestBuysEngine } = await import('./api/bestbuys-runner');
   startBestBuysEngine();
 
