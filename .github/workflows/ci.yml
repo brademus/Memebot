@@ -87,6 +87,9 @@ jobs:
       - name: BTC regime and retest strategy tests
         run: node --test dist/btc/strategy.test.js
 
+      - name: BTC multistrategy leverage and registry tests
+        run: node --test dist/btc/platform/platform.test.js
+
       - name: Exact forward snapshot tests
         run: node --test dist/tuning/snapshots.test.js
 
@@ -168,6 +171,9 @@ jobs:
 
       - name: BTC Postgres safety contract
         run: node --test dist/btc/persistence.integration.test.js
+
+      - name: BTC multistrategy Postgres contract
+        run: node --test dist/btc/platform/platform.integration.test.js
 
       - name: Evidence policy and append-only journal contract
         run: node --test dist/evidence/system-v3.integration.test.js
