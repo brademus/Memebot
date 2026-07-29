@@ -10,8 +10,9 @@ COPY tsconfig.json ./
 # Deterministic install with no optional dependencies
 RUN npm ci --omit=optional
 
-# Copy source and build
+# Copy source, runtime assets, and the image definition inspected by packaging tests
 COPY src ./src
+COPY Dockerfile ./
 COPY config.yaml schema.sql schema-v3.sql schema-telemetry.sql schema-btc.sql ./
 
 RUN npm run build && npm test
