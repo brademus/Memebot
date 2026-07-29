@@ -126,6 +126,11 @@ export class BtcMultiStrategyEngine {
       'btc-funding-crowding-reversal': 120,
       'btc-perp-premium-convergence': 45,
       'btc-price-oi-state': 45,
+      'btc-liquidation-cascade-exhaustion': 30,
+      'btc-cvd-divergence': 20,
+      'btc-microprice-orderbook-scalper': 2,
+      'btc-eth-led-catch-up': 15,
+      'btc-post-jump-continuation': 45,
     };
     const cooldownMinutes = cooldownByStrategy[candidate.strategyId] ?? 30;
     return candidate.createdAt - recent.openedAt < cooldownMinutes * 60_000;
@@ -306,6 +311,7 @@ export class BtcMultiStrategyEngine {
       prices: context?.prices || null,
       feed: context?.feed || emptyFeed,
       regime: context?.regime || null,
+      crossAsset: context?.crossAsset || null,
       portfolio: {
         activePnlUsd,
         realizedPnlUsd,

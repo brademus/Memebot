@@ -74,6 +74,18 @@ export interface OrderFlowState {
   asks: BookLevel[];
 }
 
+export interface CrossAssetState {
+  healthy: boolean;
+  ethSpot: number | null;
+  ethAgeMs: number | null;
+  ethReturn5mPct: number | null;
+  ethReturn15mPct: number | null;
+  btcReturn5mPct: number | null;
+  btcReturn15mPct: number | null;
+  relativeReturn5mPct: number | null;
+  relativeReturn15mPct: number | null;
+}
+
 export interface MarketRegime {
   direction: 'strong_bull' | 'bull' | 'range' | 'bear' | 'strong_bear';
   volatility: 'compressed' | 'normal' | 'elevated' | 'extreme';
@@ -96,6 +108,7 @@ export interface MarketContext {
   };
   derivatives: DerivativesState;
   orderFlow: OrderFlowState;
+  crossAsset?: CrossAssetState;
   regime: MarketRegime;
   feed: FeedQuality;
 }
@@ -252,6 +265,7 @@ export interface PlatformStatus {
   prices: PriceState | null;
   feed: FeedQuality;
   regime: MarketRegime | null;
+  crossAsset: CrossAssetState | null;
   portfolio: {
     activePnlUsd: number;
     realizedPnlUsd: number;

@@ -90,6 +90,12 @@ jobs:
       - name: BTC multistrategy leverage and registry tests
         run: node --test dist/btc/platform/platform.test.js
 
+      - name: BTC Wave 2 shadow strategy tests
+        run: node --test dist/btc/platform/wave2-strategies.test.js
+
+      - name: BTC cross-asset lead state tests
+        run: node --test dist/btc/platform/cross-asset.test.js
+
       - name: Exact forward snapshot tests
         run: node --test dist/tuning/snapshots.test.js
 

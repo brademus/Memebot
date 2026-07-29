@@ -92,8 +92,8 @@
     if (byId('btcCallCount')) byId('btcCallCount').textContent = String(actionable.length);
     if (byId('nBtcPnl')) byId('nBtcPnl').textContent = money(portfolio.activePnlUsd || 0);
     if (byId('nBtcRecord')) byId('nBtcRecord').textContent = `${winners.length}–${losers.length}`;
-    if (byId('nBtcStrategies')) byId('nBtcStrategies').textContent = String(strategies.length || 7);
-    if (byId('btcStrategyCount')) byId('btcStrategyCount').textContent = String(strategies.length || 7);
+    if (byId('nBtcStrategies')) byId('nBtcStrategies').textContent = String(strategies.length);
+    if (byId('btcStrategyCount')) byId('btcStrategyCount').textContent = String(strategies.length);
     if (byId('btcEngine')) byId('btcEngine').textContent = title(btc.engineState);
     if (byId('btcPrice')) byId('btcPrice').textContent = money(prices.mark ?? prices.last);
     if (byId('btcFeed')) byId('btcFeed').textContent = feedHealthy ? (btc.feed?.derivativesHealthy ? 'Perp healthy' : 'Spot fallback') : 'Blocked';
@@ -113,7 +113,7 @@
       const ordered = [...actionable, ...research];
       callList.innerHTML = ordered.length
         ? ordered.map(callCard).join('')
-        : '<div class="btcEmpty"><div><strong>No active BTC calls.</strong><p>Seven strategies are scanning. A call only opens after its entry zone, risk, liquidation, cost, portfolio, and data-quality conditions all pass.</p></div></div>';
+        : `<div class="btcEmpty"><div><strong>No active BTC calls.</strong><p>${strategies.length || 'Registered'} strategies are scanning. A call only opens after its entry zone, risk, liquidation, cost, portfolio, and data-quality conditions all pass.</p></div></div>`;
     }
 
     if (byId('btcWinnerCount')) byId('btcWinnerCount').textContent = String(winners.length);
@@ -138,6 +138,7 @@
     if (byId('btcSetup')) byId('btcSetup').textContent = JSON.stringify({
       engineState: btc.engineState,
       regime: btc.regime,
+      crossAsset: btc.crossAsset,
       feed: btc.feed,
       actionableActive: actionable.map(call => ({ id: call.id, strategy: call.strategyId, direction: call.direction, leverage: call.leverage, pnl: call.netPnlUsd })),
       latestCandidates: candidates.map(candidate => ({
@@ -163,6 +164,7 @@
       prices: btc.prices,
       feed: btc.feed,
       regime: btc.regime,
+      crossAsset: btc.crossAsset,
       portfolio: btc.portfolio,
       platformContract: {
         marginPerCallUsd: 100,
