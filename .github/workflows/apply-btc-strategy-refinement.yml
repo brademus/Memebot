@@ -25,7 +25,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Apply refinement
-        run: python3 scripts/apply_btc_strategy_refinement.py
+        run: |
+          python3 scripts/apply_btc_strategy_refinement.py
+          python3 scripts/finalize_btc_strategy_refinement.py
       - name: Verify focused contracts
         run: |
           npm run build
