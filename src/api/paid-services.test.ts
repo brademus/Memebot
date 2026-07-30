@@ -4,6 +4,8 @@ import { buildPaidServicesStatus } from './paid-services';
 
 const healthyOverrides = {
   pumpportal: { effectiveMode: 'full', messages: { lastTradeAt: 'now', tradesReceived: 500 } },
+  pumpportalBudget: { available: true, exhausted: false, actualToday: 100, dailyEventLimit: 19000 },
+  pumpportalGuard: { subscribeCommands: 3, suppressedOverBudgetKeys: 0, budgetTripped: false },
   helius: { configured: true, lastSuccessAt: new Date().toISOString(), lastFailureAt: null, lastError: null },
   gemini: { configured: true, hardBlocked: false, retryAfterAt: null, lastError: null, lastSuccessAt: 'now', calls: 5 },
 };
@@ -85,4 +87,40 @@ test('request classification prices enhanced history at 100 and rpc at 1', async
     { cost: 100, category: 'enhanced_address_history' });
   assert.deepEqual(classifyHeliusRequest('https://mainnet.helius-rpc.com/?api-key=x'),
     { cost: 1, category: 'rpc' });
+});
+
+test('a budget-paused stream names the governor, never the provider wallet — the 2026-07-30 misdirection', () => {
+  const rows = buildPaidServicesStatus({
+    pumpportal: {
+      effectiveMode: 'lite',
+      reason: 'paid_trade_channel_silent_while_free_channels_deliver__check_pumpportal_wallet_balance',
+      messages: {},
+    },
+    pumpportalBudget: {
+      available: false, exhausted: true,
+      actualToday: 19000, dailyEventLimit: 19000,
+      actualRolling14d: 120000, rolling14dEventLimit: 266000,
+    },
+    pumpportalGuard: { suppressedOverBudgetKeys: 1759, subscribeCommands: 0, budgetTripped: true },
+    helius: { configured: true, lastSuccessAt: new Date().toISOString() },
+    heliusBudget: { estimatedCreditsRemaining: 1, estimatedRpcCreditsRemaining: 1, estimatedEnhancedCreditsUsed: 0, estimatedRpcCreditsUsed: 0, dailyBudgetCredits: 30000, dailyRpcBudgetCredits: 50000, byCategory: {} },
+    gemini: { configured: true, hardBlocked: false, lastSuccessAt: 'now' },
+  } as any);
+  const pumpportal = rows.find(row => row.id === 'pumpportal')!;
+  assert.equal(pumpportal.status, 'red');
+  assert.match(pumpportal.reason!, /budget exhausted \(19000 events today \/ 19000 daily/);
+  assert.match(pumpportal.reason!, /wallet is NOT the problem/);
+  assert.equal((pumpportal.detail as any).guard.suppressedOverBudgetKeys, 1759);
+});
+
+test('with budget available, non-full mode falls through to the stream-level reason as before', () => {
+  const rows = buildPaidServicesStatus({
+    pumpportal: { effectiveMode: 'lite', reason: 'socket_not_open', messages: {} },
+    pumpportalBudget: { available: true, exhausted: false, actualToday: 5, dailyEventLimit: 19000 },
+    pumpportalGuard: {},
+    helius: { configured: true, lastSuccessAt: new Date().toISOString() },
+    heliusBudget: { estimatedCreditsRemaining: 1, estimatedRpcCreditsRemaining: 1, estimatedEnhancedCreditsUsed: 0, estimatedRpcCreditsUsed: 0, dailyBudgetCredits: 30000, dailyRpcBudgetCredits: 50000, byCategory: {} },
+    gemini: { configured: true, hardBlocked: false, lastSuccessAt: 'now' },
+  } as any);
+  assert.match(rows.find(row => row.id === 'pumpportal')!.reason!, /Websocket not connected/);
 });

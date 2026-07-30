@@ -2,6 +2,8 @@ import { pumpfunStreamDiag } from '../ingest/pumpfun';
 import { heliusHealth } from '../helius';
 import { geminiDiag } from '../ai/gemini';
 import { heliusFreeBudgetDiag } from '../helius-free-budget';
+import { pumpPortalGuardDiag } from '../ingest/pumpportal-guard';
+import { pumpPortalPersistentBudgetDiag } from '../ingest/pumpportal-persistent-budget';
 
 /**
  * One light per PAID service, with the reason when it's red. Born from the week
@@ -20,6 +22,11 @@ export interface PaidServiceLight {
 }
 
 const STALE_SUCCESS_MS = 15 * 60_000;
+
+/** Diag modules are side-effectful; never let one crashing take the whole status board down. */
+function safeDiag<T>(fn: () => T): T | null {
+  try { return fn(); } catch { return null; }
+}
 
 function humanPumpportalReason(reason: string, protocolError: unknown): string {
   const providerWords = (() => {
@@ -42,23 +49,56 @@ function humanPumpportalReason(reason: string, protocolError: unknown): string {
 }
 
 export function buildPaidServicesStatus(overrides?: {
-  pumpportal?: any; helius?: any; gemini?: any; heliusBudget?: any; now?: number;
+  pumpportal?: any; helius?: any; gemini?: any; heliusBudget?: any;
+  pumpportalBudget?: any; pumpportalGuard?: any; now?: number;
 }): PaidServiceLight[] {
   const now = overrides?.now ?? Date.now();
   const rows: PaidServiceLight[] = [];
 
   // ---- PumpPortal (paid trade data, per-message billing) ----
   const pp = overrides?.pumpportal ?? pumpfunStreamDiag();
+  const ppBudget = overrides?.pumpportalBudget ?? safeDiag(pumpPortalPersistentBudgetDiag);
+  const ppGuard = overrides?.pumpportalGuard ?? safeDiag(pumpPortalGuardDiag);
   const ppGreen = pp?.effectiveMode === 'full';
+  // Root-cause precedence (2026-07-30, found the hard way): when the bot's OWN
+  // persistent event budget is exhausted, the guard silently swallows every
+  // subscribe frame — zero acks, zero trades, on every fresh socket, surviving
+  // reboots — and the stream-level heuristic then falsely blames the provider
+  // wallet ("check the PumpPortal wallet balance"). That misdirection cost a
+  // multi-hour investigation chasing keys, clients, and IP theories around our
+  // own spending governor. The budget pause is the more specific truth and must
+  // be stated first.
+  const budgetPaused = !ppGreen && ppBudget && ppBudget.available === false;
+  const ppReason = ppGreen
+    ? null
+    : budgetPaused
+      ? `Paid-event budget exhausted (${ppBudget?.actualToday ?? '?'} events today / ${ppBudget?.dailyEventLimit ?? '?'} daily; 14d ${ppBudget?.actualRolling14d ?? '?'}/${ppBudget?.rolling14dEventLimit ?? '?'}) — stream paused by the bot's own spending governor, resumes at UTC midnight. The provider wallet is NOT the problem.`
+      : humanPumpportalReason(String(pp?.reason || 'unknown'), pp?.messages?.lastProtocolError);
   rows.push({
     id: 'pumpportal',
     name: 'PumpPortal trade stream',
     status: ppGreen ? 'green' : 'red',
-    reason: ppGreen ? null : humanPumpportalReason(String(pp?.reason || 'unknown'), pp?.messages?.lastProtocolError),
+    reason: ppReason,
     detail: {
       effectiveMode: pp?.effectiveMode ?? null,
       lastTradeAt: pp?.messages?.lastTradeAt ?? pp?.lastTradeAt ?? null,
       tradesReceived: pp?.messages?.tradesReceived ?? null,
+      budget: ppBudget ? {
+        available: ppBudget.available ?? null,
+        exhausted: ppBudget.exhausted ?? null,
+        eventsToday: ppBudget.actualToday ?? null,
+        dailyEventLimit: ppBudget.dailyEventLimit ?? null,
+        eventsRolling14d: ppBudget.actualRolling14d ?? null,
+        rolling14dEventLimit: ppBudget.rolling14dEventLimit ?? null,
+        estimatedCostTodaySol: ppBudget.estimatedActualCostTodaySol ?? null,
+      } : null,
+      guard: ppGuard ? {
+        activeSlots: ppGuard.activeCount ?? ppGuard.active ?? null,
+        pendingKeys: ppGuard.pendingBudgetKeys ?? ppGuard.pending ?? null,
+        suppressedOverBudgetKeys: ppGuard.suppressedOverBudgetKeys ?? null,
+        subscribeCommandsOnWire: ppGuard.subscribeCommands ?? null,
+        budgetTripped: ppGuard.budgetTripped ?? null,
+      } : null,
       // Diagnostic depth (2026-07-30): the earlier version hid exactly the
       // fields needed to tell "still ramping up after a fresh boot" apart from
       // "genuinely stuck" — both looked identical from the outside. These come
