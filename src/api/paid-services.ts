@@ -1,6 +1,7 @@
 import { pumpfunStreamDiag } from '../ingest/pumpfun';
 import { heliusHealth } from '../helius';
 import { geminiDiag } from '../ai/gemini';
+import { heliusFreeBudgetDiag } from '../helius-free-budget';
 
 /**
  * One light per PAID service, with the reason when it's red. Born from the week
@@ -41,7 +42,7 @@ function humanPumpportalReason(reason: string, protocolError: unknown): string {
 }
 
 export function buildPaidServicesStatus(overrides?: {
-  pumpportal?: any; helius?: any; gemini?: any; now?: number;
+  pumpportal?: any; helius?: any; gemini?: any; heliusBudget?: any; now?: number;
 }): PaidServiceLight[] {
   const now = overrides?.now ?? Date.now();
   const rows: PaidServiceLight[] = [];
@@ -67,8 +68,11 @@ export function buildPaidServicesStatus(overrides?: {
   const heliusFailedAfterSuccess = helius?.lastFailureAt && helius?.lastSuccessAt
     ? new Date(helius.lastFailureAt).getTime() > new Date(helius.lastSuccessAt).getTime()
     : !!helius?.lastFailureAt;
+  const heliusBudget = overrides?.heliusBudget ?? heliusFreeBudgetDiag();
+  const budgetSpent = heliusBudget && heliusBudget.estimatedCreditsRemaining === 0;
   let heliusReason: string | null = null;
   if (!helius?.configured) heliusReason = 'No API key configured (HELIUS_API_KEY).';
+  else if (budgetSpent) heliusReason = `Daily credit budget spent (${heliusBudget.estimatedCreditsUsed}/${heliusBudget.dailyBudgetCredits} estimated) — Helius calls paused until UTC midnight.`;
   else if (heliusFailedAfterSuccess && helius?.lastError) heliusReason = `Last call failed: ${String(helius.lastError)}`;
   else if (heliusSuccessAgeMs > STALE_SUCCESS_MS) heliusReason = `No successful call in ${Math.round(heliusSuccessAgeMs / 60_000)} minutes.`;
   rows.push({
@@ -80,6 +84,14 @@ export function buildPaidServicesStatus(overrides?: {
       lastSuccessAt: helius?.lastSuccessAt ?? null,
       throttledCalls: helius?.throttledCalls ?? null,
       got429: helius?.got429 ?? null,
+      estCreditsToday: heliusBudget?.estimatedCreditsUsed ?? null,
+      dailyBudget: heliusBudget?.dailyBudgetCredits ?? null,
+      topBurner: (() => {
+        const entries = Object.entries(heliusBudget?.byCategory || {});
+        if (!entries.length) return null;
+        entries.sort((left, right) => Number(right[1]) - Number(left[1]));
+        return `${entries[0][0]} (${entries[0][1]} est credits)`;
+      })(),
     },
   });
 

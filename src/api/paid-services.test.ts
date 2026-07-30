@@ -38,3 +38,24 @@ test('helius red on stale success, gemini red carries recovery guidance when har
   assert.equal(gem.status, 'red');
   assert.match(gem.reason!, /restore AI Studio prepaid credits/);
 });
+
+test('helius light goes red with the burn numbers when the daily budget is spent', () => {
+  const rows = buildPaidServicesStatus({
+    pumpportal: { effectiveMode: 'full', messages: {} },
+    helius: { configured: true, lastSuccessAt: new Date().toISOString() },
+    heliusBudget: { estimatedCreditsUsed: 30000, dailyBudgetCredits: 30000, estimatedCreditsRemaining: 0, byCategory: { enhanced_address_history: 22000, rpc: 8000 } },
+    gemini: { configured: true, hardBlocked: false, lastSuccessAt: 'now' },
+  } as any);
+  const helius = rows.find(row => row.id === 'helius')!;
+  assert.equal(helius.status, 'red');
+  assert.match(helius.reason!, /Daily credit budget spent \(30000\/30000/);
+  assert.match(String(helius.detail.topBurner), /enhanced_address_history/);
+});
+
+test('request classification prices enhanced history at 100 and rpc at 1', async () => {
+  const { classifyHeliusRequest } = await import('../helius-free-budget');
+  assert.deepEqual(classifyHeliusRequest('https://api.helius.xyz/v0/addresses/ABC/transactions?api-key=x'),
+    { cost: 100, category: 'enhanced_address_history' });
+  assert.deepEqual(classifyHeliusRequest('https://mainnet.helius-rpc.com/?api-key=x'),
+    { cost: 1, category: 'rpc' });
+});
