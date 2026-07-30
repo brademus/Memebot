@@ -1,0 +1,146 @@
+name: Install BTC sequence-gate hotfix
+
+on:
+  push:
+    branches: [fix/btc-bybit-sequence-gate]
+
+permissions:
+  contents: write
+
+jobs:
+  install:
+    if: github.event.head_commit.message != 'Fix Bybit order-book sequence gate'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/btc-bybit-sequence-gate
+          fetch-depth: 0
+
+      - name: Apply validated sequence fix
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/btc/runtime.ts')
+          text = path.read_text()
+
+          def replace_once(old: str, new: str) -> None:
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected one replacement, found {count}: {old[:100]!r}')
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              "import { buildCrossAssetState, TimedPrice } from './platform/cross-asset';\n",
+              "import { buildCrossAssetState, TimedPrice } from './platform/cross-asset';\nimport { assessOrderbookSequence } from './platform/bybit-sequence';\n",
+          )
+          replace_once("const ethObservations: TimedPrice[] = [];\nconst sequences = new Map<string, number>();\n", "const ethObservations: TimedPrice[] = [];\n")
+          replace_once("let sequenceGapAt: number | null = null;\n", "let sequenceGapAt: number | null = null;\nlet orderbookUpdateId: number | null = null;\n")
+          replace_once(
+              "function updateSequence(topic: string, sequence: unknown): void {\n  if (!Number.isInteger(sequence)) return;\n  const value = Number(sequence);\n  const previous = sequences.get(topic);\n  if (previous !== undefined && value > previous + 1) sequenceGapAt = Date.now();\n  sequences.set(topic, Math.max(previous || 0, value));\n}\n",
+              "function requestOrderbookResync(now = Date.now()): void {\n  sequenceGapAt = now;\n  orderbookUpdateId = null;\n  bids.clear();\n  asks.clear();\n  const socket = bybitSocket;\n  if (socket?.readyState === WebSocket.OPEN) {\n    socket.close(1012, 'orderbook sequence gap');\n  }\n}\n",
+          )
+          replace_once("  const topic = String(message.topic || '');\n  updateSequence(topic, message.cs);\n  const now = Date.now();\n", "  const topic = String(message.topic || '');\n  const now = Date.now();\n")
+          replace_once(
+              "  if (topic === `orderbook.50.${PRODUCT}`) {\n    if (message.type === 'snapshot') { bids.clear(); asks.clear(); }\n    setBookSide(bids, message.data?.b);\n    setBookSide(asks, message.data?.a);\n    const bestBid = [...bids.keys()].sort((a, b) => b - a)[0];\n    const bestAsk = [...asks.keys()].sort((a, b) => a - b)[0];\n    if (bestBid) bidPrice = bestBid;\n    if (bestAsk) askPrice = bestAsk;\n    latestBybitAt = now;\n    return;\n  }\n",
+              "  if (topic === `orderbook.50.${PRODUCT}`) {\n    const decision = assessOrderbookSequence(orderbookUpdateId, message.type, message.data?.u);\n    if (decision.gap) {\n      requestOrderbookResync(now);\n      return;\n    }\n    if (!decision.accept) return;\n    if (decision.reset) {\n      bids.clear();\n      asks.clear();\n      sequenceGapAt = null;\n    }\n    orderbookUpdateId = decision.current;\n    setBookSide(bids, message.data?.b);\n    setBookSide(asks, message.data?.a);\n    const bestBid = [...bids.keys()].sort((a, b) => b - a)[0];\n    const bestAsk = [...asks.keys()].sort((a, b) => a - b)[0];\n    if (bestBid) bidPrice = bestBid;\n    if (bestAsk) askPrice = bestAsk;\n    latestBybitAt = now;\n    return;\n  }\n",
+          )
+          replace_once("  ws.on('open', () => {\n    bybitReconnectAttempt = 0;\n", "  ws.on('open', () => {\n    bybitReconnectAttempt = 0;\n    orderbookUpdateId = null;\n")
+          replace_once("  const recentSequenceGap = sequenceGapAt !== null && now - sequenceGapAt < 60_000;\n", "  const recentSequenceGap = sequenceGapAt !== null;\n")
+          replace_once("  if (recentSequenceGap) blockers.push('a recent market-data sequence gap was detected');\n", "  if (recentSequenceGap) blockers.push('order-book resynchronization is pending after a sequence gap');\n")
+
+          path.write_text(text)
+
+          Path('src/btc/platform/bybit-sequence.ts').write_text('''export interface OrderbookSequenceDecision {
+  current: number | null;
+  accept: boolean;
+  reset: boolean;
+  gap: boolean;
+}
+
+export function assessOrderbookSequence(
+  previous: number | null,
+  messageType: unknown,
+  updateId: unknown,
+): OrderbookSequenceDecision {
+  const current = Number(updateId);
+  const valid = Number.isSafeInteger(current) && current > 0;
+  const snapshot = messageType === 'snapshot' || current === 1;
+
+  if (!valid) {
+    return { current: previous, accept: false, reset: false, gap: messageType !== 'snapshot' };
+  }
+  if (snapshot) {
+    return { current, accept: true, reset: true, gap: false };
+  }
+  if (previous === null) {
+    return { current: null, accept: false, reset: false, gap: true };
+  }
+  if (current <= previous) {
+    return { current: previous, accept: false, reset: false, gap: false };
+  }
+  if (current > previous + 1) {
+    return { current: null, accept: false, reset: false, gap: true };
+  }
+  return { current, accept: true, reset: false, gap: false };
+}
+''')
+
+          Path('src/btc/platform/bybit-sequence.test.ts').write_text('''import assert from 'node:assert/strict';
+import test from 'node:test';
+import { assessOrderbookSequence } from './bybit-sequence';
+
+test('snapshot establishes or replaces the local order-book sequence', () => {
+  assert.deepEqual(assessOrderbookSequence(null, 'snapshot', 8_000), {
+    current: 8_000, accept: true, reset: true, gap: false,
+  });
+  assert.deepEqual(assessOrderbookSequence(9_000, 'delta', 1), {
+    current: 1, accept: true, reset: true, gap: false,
+  });
+});
+
+test('contiguous order-book deltas are accepted', () => {
+  assert.deepEqual(assessOrderbookSequence(8_000, 'delta', 8_001), {
+    current: 8_001, accept: true, reset: false, gap: false,
+  });
+});
+
+test('duplicates and stale deltas are ignored without creating a false gap', () => {
+  assert.deepEqual(assessOrderbookSequence(8_001, 'delta', 8_001), {
+    current: 8_001, accept: false, reset: false, gap: false,
+  });
+  assert.deepEqual(assessOrderbookSequence(8_001, 'delta', 8_000), {
+    current: 8_001, accept: false, reset: false, gap: false,
+  });
+});
+
+test('a real order-book update-id jump requests resynchronization', () => {
+  assert.deepEqual(assessOrderbookSequence(8_001, 'delta', 8_004), {
+    current: null, accept: false, reset: false, gap: true,
+  });
+});
+
+test('a delta before the initial snapshot is rejected as unsafe', () => {
+  assert.deepEqual(assessOrderbookSequence(null, 'delta', 8_001), {
+    current: null, accept: false, reset: false, gap: true,
+  });
+});
+''')
+          PY
+
+      - name: Verify focused tests
+        run: |
+          npm ci
+          npm run build
+          node --test dist/btc/platform/bybit-sequence.test.js
+
+      - name: Commit source fix
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/btc/runtime.ts src/btc/platform/bybit-sequence.ts src/btc/platform/bybit-sequence.test.ts
+          git commit -m 'Fix Bybit order-book sequence gate'
+          git push origin HEAD:fix/btc-bybit-sequence-gate
