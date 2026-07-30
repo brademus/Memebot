@@ -107,7 +107,7 @@ test('research can approve a native profitable target before actionable expectan
 
 test('research uses the nearer maximum-realistic boundary when a raw strategy target overreaches it', () => {
   const research = solveResearchRiskPlan(context, candidate({
-    initialTarget: 100_600,
+    initialTarget: 102_000,
     maximumRealisticTarget: 101_500,
   }));
   assert.equal(research.approved, true, research.rejectionReasons.join('; '));
@@ -124,12 +124,15 @@ test('research rejects a native target that is not profitable after estimated co
 });
 
 test('research keeps strategy-specific leverage caps and liquidation safety', () => {
-  const research = solveResearchRiskPlan(context, candidate({ strategyLeverageCap: 12, initialTarget: 101_000, maximumRealisticTarget: 101_000 }));
+  const research = solveResearchRiskPlan(context, candidate({
+    strategyLeverageCap: 12,
+    initialTarget: 102_000,
+    maximumRealisticTarget: 102_000,
+  }));
   assert.equal(research.approved, true, research.rejectionReasons.join('; '));
   assert.ok(research.leverage <= 12);
   assert.ok(research.liquidationBufferPct > 0);
 });
-
 
 test('research rejects positive but sub-1.5R economics', () => {
   const research = solveResearchRiskPlan(context, candidate({
