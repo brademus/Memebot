@@ -31,6 +31,7 @@ let successfulConnections = 0;
 let reconnects = 0;
 let lastEntitlementCycleAt = 0;
 let entitlementCycles = 0;
+let staleAfterWorkingResets = 0;
 let lastSocketOpenAt: number | null = null;
 let lastMessageAt: number | null = null;
 let lastTradeAt: number | null = null;
@@ -114,6 +115,26 @@ export function tradeStreamModeFromHealth(
   return now - lastTradeEventAt <= staleMs ? 'full' : 'lite';
 }
 
+/**
+ * True once trade proof from the CURRENT connection is stale enough that it
+ * should stop counting as evidence of a live paid feed. This is the bridge that
+ * lets a feed which worked for hours and then died mid-session get caught by
+ * the same entitlement self-heal that already handled "never worked since
+ * boot" — without it, lastTradeAt stays frozen at its last real value forever,
+ * and the self-heal's `lastTradeAt === null` check can never fire again for the
+ * rest of the process's life (observed live 2026-07-30: full mode for hours,
+ * then 2+ hours silent with zero self-heal activity). Doubled vs the full/lite
+ * mode-flip threshold so a brief real-market lull never triggers a needless
+ * reconnect.
+ */
+export function shouldExpireTradeProof(
+  lastTradeEventAt: number | null,
+  now = Date.now(),
+  staleMs = TRADE_STREAM_STALE_MS,
+): boolean {
+  return lastTradeEventAt !== null && now - lastTradeEventAt > 2 * staleMs;
+}
+
 // A configured key is not proof that token-trade events are actually arriving. The
 // scoring pipeline must use strict wallet-level evidence only while that feed is live.
 // When the paid feed is silent or stale, aggregate Dexscreener evidence is used instead
@@ -148,6 +169,7 @@ export const pumpfunStreamDiag = () => {
       successfulConnections,
       reconnects,
       entitlementCycles,
+      staleAfterWorkingResets,
       lastSocketOpenAt: iso(lastSocketOpenAt),
       lastMessageAt: iso(lastMessageAt),
       lastSocketErrorAt: iso(lastSocketErrorAt),
@@ -342,6 +364,14 @@ export function startPumpfunMonitor(onNew: (ca: string) => void) {
     try {
       if (!ws || ws.readyState !== 1 || !tradeStreamConfigured) return;
       const now = Date.now();
+
+      // See shouldExpireTradeProof: bridges a mid-session stall into the same
+      // tested entitlement-cycle path below, instead of a parallel watchdog.
+      if (shouldExpireTradeProof(lastTradeAt, now)) {
+        lastTradeAt = null;
+        staleAfterWorkingResets++;
+      }
+
       const socketAgeMs = lastSocketOpenAt ? now - lastSocketOpenAt : 0;
       const paidSilent = createMessages > 0 && lastTradeAt === null;
       if (!paidSilent || socketAgeMs < 20 * 60_000) return;
