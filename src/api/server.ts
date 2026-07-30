@@ -26,6 +26,7 @@ import { momentumDiag } from '../ingest/momentum';
 import { socialDiag } from '../ingest/social';
 import { heliusHealth } from '../helius';
 import { getMissedWinners } from '../outcomes/missed';
+import { buildPaidServicesStatus } from './paid-services';
 import { addSmartWallet, removeSmartWallet, listSmartWallets } from '../db';
 import { latestSuggestion } from '../tuning/autotune';
 import { TokenRecord } from '../types';
@@ -102,6 +103,11 @@ export function startServer() {
     } catch (error) {
       res.status(500).json({ error: (error as Error).message });
     }
+  });
+
+  app.get('/api/paid-services', (_req, res) => {
+    try { res.json({ services: buildPaidServicesStatus(), checkedAt: new Date().toISOString() }); }
+    catch (error) { res.status(500).json({ services: [], error: (error as Error).message }); }
   });
 
   app.get('/api/missed', async (_req, res) => {

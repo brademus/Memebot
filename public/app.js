@@ -347,3 +347,24 @@ connect();
 refresh();
 setInterval(refresh, 10_000);
 go('home');
+
+
+// ---- Paid-service status lights (admin section) ----
+async function loadPaidServices() {
+  const host = document.getElementById('paidServices');
+  if (!host) return;
+  try {
+    const payload = await (await fetch('/api/paid-services')).json();
+    host.innerHTML = (payload.services || []).map(service => {
+      const color = service.status === 'green' ? '#22c55e' : '#ef4444';
+      const reason = service.reason
+        ? `<small style="display:block;opacity:.85;margin-top:2px">${service.reason}</small>` : '';
+      return `<div style="border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:8px 12px;min-width:200px;flex:1">
+        <b><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${color};margin-right:8px;vertical-align:baseline"></span>${service.name}</b>${reason}</div>`;
+    }).join('');
+  } catch (error) {
+    host.innerHTML = `<small>Paid-service status unavailable: ${error.message}</small>`;
+  }
+}
+loadPaidServices();
+setInterval(loadPaidServices, 30000);
