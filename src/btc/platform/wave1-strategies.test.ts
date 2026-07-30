@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { WAVE1_STRATEGIES, resetWave1StrategyStateForTests } from './wave1-strategies';
+import { solveResearchRiskPlan } from './research-risk';
 import { solveRiskPlan } from './risk';
 import { Candle, MarketContext, StrategyCandidate, StrategyDefinition, StrategyPerformance } from './types';
 
@@ -157,6 +158,18 @@ function actionablePlan(context: MarketContext, candidate: StrategyCandidate) {
   return solveRiskPlan(context, candidate, matureEvidence(candidate));
 }
 
+function assertResearchOnlyAtThisSetup(context: MarketContext, candidate: StrategyCandidate): void {
+  const research = solveResearchRiskPlan(context, candidate);
+  assert.equal(research.approved, true, research.rejectionReasons.join('; '));
+  assert.ok(research.estimatedRewardUsd > 0);
+  const actionable = actionablePlan(context, candidate);
+  assert.equal(actionable.approved, false);
+  assert.equal(actionable.expectancyEvidence?.ready, true);
+  assert.ok(actionable.rejectionReasons.some(reason =>
+    reason.includes('standard projected net ROI floor') || reason.includes('standard net reward-to-risk floor'),
+  ));
+}
+
 function seedObservations(count = 16): void {
   for (let index = 0; index < count; index++) {
     const context = baseContext({
@@ -187,7 +200,7 @@ test('Wave 1 registry contains five unique actionable 24/7 strategies', () => {
   }
 });
 
-test('adaptive trend rider emits a long pullback candidate in aligned rolling trend', () => {
+test('adaptive trend rider emits a valid research candidate that is filtered when this setup misses the standard tier', () => {
   resetWave1StrategyStateForTests();
   const context = baseContext();
   const prior = context.candles.fifteenMinute.at(-2)!;
@@ -203,14 +216,12 @@ test('adaptive trend rider emits a long pullback candidate in aligned rolling tr
   context.prices = { ...context.prices, last: 99_900, bid: 99_899, ask: 99_901, mark: 99_900, index: 99_900, consolidatedFair: 99_900 };
   const candidates = strategy('btc-adaptive-trend-rider').evaluate(context);
   assert.equal(candidates.length, 1);
-  const plan = actionablePlan(context, candidates[0]!);
-  assert.equal(plan.approved, true, plan.rejectionReasons.join('; '));
-  assert.equal(plan.expectancyEvidence?.ready, true);
+  assertResearchOnlyAtThisSetup(context, candidates[0]!);
   assert.equal(candidates[0].direction, 'long');
   assert.equal(candidates[0].setupType, 'adaptive_trend_pullback');
 });
 
-test('Donchian strategy emits on accepted rolling-channel breakout without compression requirement', () => {
+test('Donchian strategy emits a valid research candidate that is filtered when this setup misses the standard ROI floor', () => {
   resetWave1StrategyStateForTests();
   const context = baseContext({
     candles: {
@@ -222,13 +233,11 @@ test('Donchian strategy emits on accepted rolling-channel breakout without compr
   context.orderFlow.aggressiveSellUsd5m = 4_000_000;
   const candidates = strategy('btc-donchian-trend-breakout').evaluate(context);
   assert.equal(candidates.length, 1);
-  const plan = actionablePlan(context, candidates[0]!);
-  assert.equal(plan.approved, true, plan.rejectionReasons.join('; '));
-  assert.equal(plan.expectancyEvidence?.ready, true);
+  assertResearchOnlyAtThisSetup(context, candidates[0]!);
   assert.equal(candidates[0].direction, 'long');
 });
 
-test('funding crowding reversal requires rolling extreme plus price stall', () => {
+test('funding crowding reversal can qualify for an actionable tier after mature positive evidence', () => {
   resetWave1StrategyStateForTests();
   seedObservations();
   const context = baseContext({
@@ -255,10 +264,11 @@ test('funding crowding reversal requires rolling extreme plus price stall', () =
   const plan = actionablePlan(context, candidates[0]!);
   assert.equal(plan.approved, true, plan.rejectionReasons.join('; '));
   assert.equal(plan.expectancyEvidence?.ready, true);
+  assert.ok(plan.actionableTier === 'standard' || plan.actionableTier === 'a_plus');
   assert.equal(candidates[0].direction, 'short');
 });
 
-test('perpetual premium convergence emits after statistically rich perp begins reverting', () => {
+test('perpetual premium convergence can qualify for an actionable tier after mature positive evidence', () => {
   resetWave1StrategyStateForTests();
   seedObservations();
   const context = baseContext({
@@ -291,11 +301,12 @@ test('perpetual premium convergence emits after statistically rich perp begins r
   const plan = actionablePlan(context, candidates[0]!);
   assert.equal(plan.approved, true, plan.rejectionReasons.join('; '));
   assert.equal(plan.expectancyEvidence?.ready, true);
+  assert.ok(plan.actionableTier === 'standard' || plan.actionableTier === 'a_plus');
   assert.equal(candidates[0].direction, 'short');
   assert.equal(candidates[0].initialTarget, 100_000);
 });
 
-test('price-OI state machine identifies long position building', () => {
+test('price-OI state machine emits a valid research candidate that is filtered when this setup misses the standard tier', () => {
   resetWave1StrategyStateForTests();
   const context = baseContext({
     derivatives: {
@@ -310,9 +321,7 @@ test('price-OI state machine identifies long position building', () => {
   latest.close = 100_050;
   const candidates = strategy('btc-price-oi-state').evaluate(context);
   assert.equal(candidates.length, 1);
-  const plan = actionablePlan(context, candidates[0]!);
-  assert.equal(plan.approved, true, plan.rejectionReasons.join('; '));
-  assert.equal(plan.expectancyEvidence?.ready, true);
+  assertResearchOnlyAtThisSetup(context, candidates[0]!);
   assert.equal(candidates[0].direction, 'long');
   assert.equal(candidates[0].setupType, 'long_position_building');
 });
