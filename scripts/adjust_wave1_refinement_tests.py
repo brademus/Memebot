@@ -1,3 +1,4 @@
+# Adjust legacy Wave 1 fixtures to the new research economic floor.
 from pathlib import Path
 
 path = Path('src/btc/platform/wave1-strategies.test.ts')
