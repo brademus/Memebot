@@ -29,6 +29,7 @@ export const DEFAULT_EXPECTANCY_MIN_RESOLVED_CALLS = 30;
 export const DEFAULT_EXPECTANCY_MIN_AVERAGE_R = 0.1;
 export const DEFAULT_EXPECTANCY_MIN_PROFIT_FACTOR = 1.1;
 export const DEFAULT_RESEARCH_MAX_PLANNED_LOSS_USD = 20 / 3;
+export const DEFAULT_MAX_COST_TO_GROSS_RISK = 0.30;
 
 export const DEFAULT_PORTFOLIO_LIMITS: Readonly<PortfolioLimits> = Object.freeze({
   maxActiveActionableCalls: 3,
@@ -282,6 +283,7 @@ export function solveRiskPlan(
   const minimumNetRR = numberSetting('BTC_STANDARD_MIN_NET_RR', DEFAULT_STANDARD_MIN_NET_RR);
   const minimumNetRoiPct = numberSetting('BTC_STANDARD_MIN_NET_ROI_PCT', DEFAULT_STANDARD_MIN_NET_ROI_PCT);
   const maxPlannedLoss = numberSetting('BTC_MAX_PLANNED_LOSS_USD', DEFAULT_MAX_PLANNED_LOSS_USD);
+  const maximumCostToGrossRisk = numberSetting('BTC_MAX_COST_TO_GROSS_RISK', DEFAULT_MAX_COST_TO_GROSS_RISK);
   const targetDistancePct = priceMovePct(candidate.preferredEntry, targetPrice);
   const failures = new Set<string>();
 
@@ -295,12 +297,18 @@ export function solveRiskPlan(
     }
 
     const estimatedRewardUsd = notionalUsd * targetDistancePct - Math.max(0, costs.totalEstimatedUsd);
-    const estimatedNetRR = safeDiv(estimatedRewardUsd, estimatedRiskUsd, 0);
-    const estimatedTargetRoiPct = estimatedRewardUsd / PAPER_MARGIN_USD * 100;
     if (!(estimatedRewardUsd > 0)) {
       failures.add('native strategy target does not remain profitable after estimated costs');
       continue;
     }
+    const grossRiskUsd = notionalUsd * stopDistancePct;
+    const costToGrossRisk = safeDiv(Math.max(0, costs.totalEstimatedUsd), grossRiskUsd, Infinity);
+    if (!(grossRiskUsd > 0) || costToGrossRisk > maximumCostToGrossRisk) {
+      failures.add(`modeled round-trip friction exceeds ${(maximumCostToGrossRisk * 100).toFixed(0)}% of gross structural risk`);
+      continue;
+    }
+    const estimatedNetRR = safeDiv(estimatedRewardUsd, estimatedRiskUsd, 0);
+    const estimatedTargetRoiPct = estimatedRewardUsd / PAPER_MARGIN_USD * 100;
     if (estimatedTargetRoiPct < minimumNetRoiPct) {
       failures.add(`native strategy target is below the ${minimumNetRoiPct.toFixed(1)}% standard projected net ROI floor`);
       continue;
