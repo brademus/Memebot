@@ -39,17 +39,44 @@ test('helius red on stale success, gemini red carries recovery guidance when har
   assert.match(gem.reason!, /restore AI Studio prepaid credits/);
 });
 
-test('helius light goes red with the burn numbers when the daily budget is spent', () => {
+test('enhanced-only exhaustion stays GREEN with an informational note — RPC is unaffected', () => {
+  // This is the exact bug found live 2026-07-30: bundle.ts and deployer.ts
+  // (insider/bundle detection, the one proven edge) fail OPEN on a Helius
+  // error. A shared budget meant an expensive-category leak silenced cheap RPC
+  // for the rest of the day too, silently making every token look clean.
   const rows = buildPaidServicesStatus({
     pumpportal: { effectiveMode: 'full', messages: {} },
     helius: { configured: true, lastSuccessAt: new Date().toISOString() },
-    heliusBudget: { estimatedCreditsUsed: 30000, dailyBudgetCredits: 30000, estimatedCreditsRemaining: 0, byCategory: { enhanced_address_history: 22000, rpc: 8000 } },
+    heliusBudget: {
+      estimatedCreditsUsed: 30000, dailyBudgetCredits: 30000, estimatedCreditsRemaining: 0,
+      estimatedEnhancedCreditsUsed: 30000, estimatedRpcCreditsUsed: 8000,
+      dailyRpcBudgetCredits: 50000, estimatedRpcCreditsRemaining: 42000,
+      byCategory: { enhanced_address_history: 22000, enhanced_tx_parse: 8000, rpc: 8000 },
+    },
+    gemini: { configured: true, hardBlocked: false, lastSuccessAt: 'now' },
+  } as any);
+  const helius = rows.find(row => row.id === 'helius')!;
+  assert.equal(helius.status, 'green', 'RPC still works — insider/bundle detection must not go dark');
+  assert.match(helius.reason!, /Enhanced-API budget spent \(30000\/30000/);
+  assert.match(helius.reason!, /RPC unaffected/);
+  assert.match(String(helius.detail.topBurner), /enhanced_address_history/);
+});
+
+test('RPC exhaustion is genuinely red — that is the category insider detection depends on', () => {
+  const rows = buildPaidServicesStatus({
+    pumpportal: { effectiveMode: 'full', messages: {} },
+    helius: { configured: true, lastSuccessAt: new Date().toISOString() },
+    heliusBudget: {
+      estimatedCreditsUsed: 80000, dailyBudgetCredits: 30000, estimatedCreditsRemaining: 0,
+      estimatedEnhancedCreditsUsed: 30000, estimatedRpcCreditsUsed: 50000,
+      dailyRpcBudgetCredits: 50000, estimatedRpcCreditsRemaining: 0,
+      byCategory: { enhanced_address_history: 30000, rpc: 50000 },
+    },
     gemini: { configured: true, hardBlocked: false, lastSuccessAt: 'now' },
   } as any);
   const helius = rows.find(row => row.id === 'helius')!;
   assert.equal(helius.status, 'red');
-  assert.match(helius.reason!, /Daily credit budget spent \(30000\/30000/);
-  assert.match(String(helius.detail.topBurner), /enhanced_address_history/);
+  assert.match(helius.reason!, /RPC credit budget spent \(50000\/50000/);
 });
 
 test('request classification prices enhanced history at 100 and rpc at 1', async () => {

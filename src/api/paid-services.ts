@@ -82,16 +82,31 @@ export function buildPaidServicesStatus(overrides?: {
     ? new Date(helius.lastFailureAt).getTime() > new Date(helius.lastSuccessAt).getTime()
     : !!helius?.lastFailureAt;
   const heliusBudget = overrides?.heliusBudget ?? heliusFreeBudgetDiag();
-  const budgetSpent = heliusBudget && heliusBudget.estimatedCreditsRemaining === 0;
+  const rpcExhausted = heliusBudget && heliusBudget.estimatedRpcCreditsRemaining === 0;
+  const enhancedExhausted = heliusBudget && heliusBudget.estimatedCreditsRemaining === 0;
   let heliusReason: string | null = null;
-  if (!helius?.configured) heliusReason = 'No API key configured (HELIUS_API_KEY).';
-  else if (budgetSpent) heliusReason = `Daily credit budget spent (${heliusBudget.estimatedCreditsUsed}/${heliusBudget.dailyBudgetCredits} estimated) — Helius calls paused until UTC midnight.`;
-  else if (heliusFailedAfterSuccess && helius?.lastError) heliusReason = `Last call failed: ${String(helius.lastError)}`;
-  else if (heliusSuccessAgeMs > STALE_SUCCESS_MS) heliusReason = `No successful call in ${Math.round(heliusSuccessAgeMs / 60_000)} minutes.`;
+  let heliusRed = false;
+  if (!helius?.configured) { heliusReason = 'No API key configured (HELIUS_API_KEY).'; heliusRed = true; }
+  else if (rpcExhausted) {
+    // RPC is the cheap, essential category (mint/freeze/LP-lock don't use
+    // Helius at all, but bundle/deployer insider-detection does, and both FAIL
+    // OPEN on error) — exhausting it is a real "not working" state worth
+    // flagging in red, not just a cost-control pause.
+    heliusReason = `RPC credit budget spent (${heliusBudget.estimatedRpcCreditsUsed}/${heliusBudget.dailyRpcBudgetCredits} estimated) — Helius calls paused until UTC midnight.`;
+    heliusRed = true;
+  } else if (heliusFailedAfterSuccess && helius?.lastError) { heliusReason = `Last call failed: ${String(helius.lastError)}`; heliusRed = true; }
+  else if (heliusSuccessAgeMs > STALE_SUCCESS_MS) { heliusReason = `No successful call in ${Math.round(heliusSuccessAgeMs / 60_000)} minutes.`; heliusRed = true; }
+  else if (enhancedExhausted) {
+    // Core Helius (RPC) is healthy; only the expensive enrichment category
+    // (insider/bundle address-history lookups) is paused. Green stays accurate
+    // — nothing essential is down — but the note matters: less enrichment
+    // coverage today, worth knowing since insider-clean is the one proven edge.
+    heliusReason = `Enhanced-API budget spent (${heliusBudget.estimatedEnhancedCreditsUsed}/${heliusBudget.dailyBudgetCredits} estimated) — insider/bundle enrichment paused until UTC midnight; RPC unaffected.`;
+  }
   rows.push({
     id: 'helius',
     name: 'Helius (RPC + wallet data)',
-    status: heliusReason ? 'red' : 'green',
+    status: heliusRed ? 'red' : 'green',
     reason: heliusReason,
     detail: {
       lastSuccessAt: helius?.lastSuccessAt ?? null,
@@ -99,6 +114,9 @@ export function buildPaidServicesStatus(overrides?: {
       got429: helius?.got429 ?? null,
       estCreditsToday: heliusBudget?.estimatedCreditsUsed ?? null,
       dailyBudget: heliusBudget?.dailyBudgetCredits ?? null,
+      estEnhancedCreditsToday: heliusBudget?.estimatedEnhancedCreditsUsed ?? null,
+      estRpcCreditsToday: heliusBudget?.estimatedRpcCreditsUsed ?? null,
+      dailyRpcBudget: heliusBudget?.dailyRpcBudgetCredits ?? null,
       topBurner: (() => {
         const entries = Object.entries(heliusBudget?.byCategory || {});
         if (!entries.length) return null;
