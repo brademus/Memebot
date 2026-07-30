@@ -17,9 +17,12 @@
     const open = ['armed', 'open', 'partial'].includes(call.status);
     const direction = String(call.direction || '').toUpperCase();
     const pnlClass = Number(call.netPnlUsd) >= 0 ? 'btcPositive' : 'btcNegative';
-    const alertTier = String(call.features?.actionableTier || 'standard');
+    const rawAlertTier = call.features?.actionableTier;
+    const alertTier = rawAlertTier ? String(rawAlertTier) : 'legacy';
     const book = call.book === 'actionable'
-      ? alertTier === 'a_plus' ? 'A+ ACTIONABLE ALERT' : 'STANDARD ACTIONABLE ALERT'
+      ? alertTier === 'a_plus'
+        ? 'A+ ACTIONABLE ALERT'
+        : alertTier === 'standard' ? 'STANDARD ACTIONABLE ALERT' : 'LEGACY ACTIONABLE CALL'
       : 'STRATEGY RESEARCH';
     const supporting = Array.isArray(call.supportingStrategies) && call.supportingStrategies.length > 1
       ? `<p class="btcSupport">Supported by ${call.supportingStrategies.map(escapeHtml).join(' · ')}</p>` : '';
@@ -39,7 +42,7 @@
         <div class="metric"><small>Remaining</small><b>${number(Number(call.remainingFraction || 0) * 100, 0)}%</b></div>
         <div class="metric"><small>MFE / MAE</small><b>${number(call.maxFavorableR)}R / ${number(call.maxAdverseR)}R</b></div>
         <div class="metric"><small>Confidence</small><b>${number(call.confidence, 0)}</b></div>
-        <div class="metric"><small>Projected policy</small><b>${call.book === 'actionable' ? escapeHtml(alertTier === 'a_plus' ? 'A+ PREMIUM' : 'STANDARD') : 'RESEARCH'} · ${number(call.features?.estimatedTargetRoiPct, 1)}% / ${number(call.features?.estimatedNetRR)}R</b></div>
+        <div class="metric"><small>Projected policy</small><b>${call.book === 'actionable' ? escapeHtml(alertTier === 'a_plus' ? 'A+ PREMIUM' : alertTier === 'standard' ? 'STANDARD' : 'LEGACY PRE-POLICY') : 'RESEARCH'} · ${number(call.features?.estimatedTargetRoiPct, 1)}% / ${number(call.features?.estimatedNetRR)}R</b></div>
       </div>
       ${supporting}
       <p class="callReason">${escapeHtml(call.exitReason || (Array.isArray(call.rationale) ? call.rationale.join(' · ') : 'Paper call active.'))}</p>
