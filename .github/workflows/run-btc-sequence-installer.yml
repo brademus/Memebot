@@ -1,0 +1,32 @@
+name: Run BTC sequence installer
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  install:
+    if: github.event.head_commit.message == 'Run BTC sequence installer'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/btc-bybit-sequence-gate
+          fetch-depth: 0
+      - name: Apply patch
+        run: python3 tools/install-btc-sequence-fix.py
+      - name: Verify
+        run: |
+          npm ci
+          npm run build
+          node --test dist/btc/platform/bybit-sequence.test.js
+      - name: Commit and push
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/btc/runtime.ts src/btc/platform/bybit-sequence.ts src/btc/platform/bybit-sequence.test.ts
+          git commit -m 'Fix Bybit order-book sequence gate'
+          git push origin HEAD:fix/btc-bybit-sequence-gate
