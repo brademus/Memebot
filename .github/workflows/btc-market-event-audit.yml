@@ -5,13 +5,13 @@ on:
     branches:
       - research/btc-market-event-audit
     paths:
-      - scripts/btc-market-event-audit.mjs
+      - scripts/btc-market-event-audit*.mjs
       - .github/workflows/btc-market-event-audit.yml
   pull_request:
     branches:
       - main
     paths:
-      - scripts/btc-market-event-audit.mjs
+      - scripts/btc-market-event-audit*.mjs
       - .github/workflows/btc-market-event-audit.yml
   workflow_dispatch:
 
@@ -29,8 +29,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Compare live BTC trades with Bybit market path
-        run: node scripts/btc-market-event-audit.mjs
+      - name: Compare live BTC trades with Coinbase market path
+        run: node scripts/btc-market-event-audit-coinbase.mjs
       - name: Upload audit evidence
         uses: actions/upload-artifact@v4
         with:
