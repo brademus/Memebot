@@ -65,6 +65,9 @@ function markRemainingPosition(call: PaperCall, context: MarketContext, exit: nu
   call.currentR = currentR(call);
   call.maxFavorableR = Math.max(call.maxFavorableR, call.currentR);
   call.maxAdverseR = Math.min(call.maxAdverseR, call.currentR);
+  const grossMovePct = directionalMove(call.direction, call.entryPrice, exit) * 100;
+  call.features.grossMfePct = Math.max(Number(call.features.grossMfePct || 0), grossMovePct);
+  call.features.grossMaePct = Math.min(Number(call.features.grossMaePct || 0), grossMovePct);
   updatePnlAccountingFeatures(call, projectedExitCostsUsd);
 }
 
@@ -174,6 +177,23 @@ export function createPaperCall(
       projectedExitCostsUsd: 0,
       totalModeledCostsUsd: initialCosts,
       estimatedSpreadUsdIncludedInExecutablePrices: plan.costs.spreadUsd,
+      actualEntrySlippageBps: Math.abs(fill - plan.entryPrice) / Math.max(plan.entryPrice, 1) * 10_000,
+      costToGrossRiskPct: plan.notionalUsd * Math.abs(fill - plan.stopPrice) / Math.max(fill, 1) > 0
+        ? plan.costs.totalEstimatedUsd / (plan.notionalUsd * Math.abs(fill - plan.stopPrice) / Math.max(fill, 1)) * 100 : null,
+      entryRegimeDirection: context.regime.direction,
+      entryRegimeVolatility: context.regime.volatility,
+      entryRegimeLiquidity: context.regime.liquidity,
+      entryRegimePositioning: context.regime.positioning,
+      entryRegimeEvent: context.regime.event,
+      entryDirectionalScore: context.regime.directionalScore,
+      entryVolatilityPercentile: context.regime.volatilityPercentile,
+      entrySpreadBps: context.feed.spreadBps,
+      entryBookFragility: context.orderFlow.bookFragility,
+      entryDepthImbalance5Bps: context.orderFlow.depthImbalance5Bps,
+      entryBuyAbsorptionScore: context.orderFlow.buyAbsorptionScore ?? null,
+      entrySellAbsorptionScore: context.orderFlow.sellAbsorptionScore ?? null,
+      grossMfePct: 0,
+      grossMaePct: 0,
     },
   };
   return {

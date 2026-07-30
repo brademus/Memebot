@@ -158,22 +158,12 @@ function actionablePlan(context: MarketContext, candidate: StrategyCandidate) {
   return solveRiskPlan(context, candidate, matureEvidence(candidate));
 }
 
-function assertResearchOnlyAtThisSetup(context: MarketContext, candidate: StrategyCandidate): void {
-  const research = solveResearchRiskPlan(context, candidate);
-  assert.equal(research.approved, true, research.rejectionReasons.join('; '));
-  assert.ok(research.estimatedRewardUsd > 0);
-  const actionable = actionablePlan(context, candidate);
-  assert.equal(actionable.approved, false);
-  assert.equal(actionable.expectancyEvidence?.ready, true);
-  assert.ok(actionable.rejectionReasons.some(reason =>
-    reason.includes('standard projected net ROI floor') || reason.includes('standard net reward-to-risk floor'),
-  ));
-}
-
 function assertResearchQuarantined(context: MarketContext, candidate: StrategyCandidate): void {
   const research = solveResearchRiskPlan(context, candidate);
   assert.equal(research.approved, false);
-  assert.ok(research.rejectionReasons.some(reason => reason.includes('quality floor')));
+  assert.ok(research.rejectionReasons.some(reason =>
+    reason.includes('quality floor') || reason.includes('friction'),
+  ));
   const actionable = actionablePlan(context, candidate);
   assert.equal(actionable.approved, false);
 }
@@ -208,25 +198,55 @@ test('Wave 1 registry contains five unique actionable 24/7 strategies', () => {
   }
 });
 
-test('adaptive trend rider emits a valid research candidate that is filtered when this setup misses the standard tier', () => {
+test('adaptive trend rider emits after a deep pullback, completed reclaim and fresh stop trigger', () => {
   resetWave1StrategyStateForTests();
   const context = baseContext();
-  const prior = context.candles.fifteenMinute.at(-2)!;
-  prior.open = 99_760;
-  prior.close = 99_700;
-  prior.high = 99_850;
-  prior.low = 99_600;
-  const latest = context.candles.fifteenMinute.at(-1)!;
-  latest.open = 99_650;
-  latest.close = 99_900;
-  latest.high = 100_100;
-  latest.low = 99_500;
-  context.prices = { ...context.prices, last: 99_900, bid: 99_899, ask: 99_901, mark: 99_900, index: 99_900, consolidatedFair: 99_900 };
+  const series = context.candles.fifteenMinute;
+  const start = series.length - 12;
+  for (let index = start; index < series.length; index++) {
+    const offset = index - start;
+    const candle = series[index]!;
+    candle.open = 99_650 + offset * 20;
+    candle.close = candle.open + 8;
+    candle.high = candle.open + 45;
+    candle.low = candle.open - 45;
+    candle.volume = 200;
+    candle.buyVolume = 120;
+    candle.sellVolume = 80;
+  }
+  const swing = series.at(-6)!;
+  swing.open = 99_720;
+  swing.close = 99_730;
+  swing.high = 99_770;
+  swing.low = 99_350;
+  const prior = series.at(-2)!;
+  prior.open = 99_900;
+  prior.close = 99_820;
+  prior.high = 99_940;
+  prior.low = 99_790;
+  const latest = series.at(-1)!;
+  latest.open = 99_830;
+  latest.close = 99_980;
+  latest.high = 100_030;
+  latest.low = 99_800;
+  context.prices = {
+    ...context.prices,
+    last: 99_980,
+    bid: 99_979,
+    ask: 99_981,
+    mark: 99_980,
+    index: 99_980,
+    consolidatedFair: 99_980,
+  };
   const candidates = strategy('btc-adaptive-trend-rider').evaluate(context);
   assert.equal(candidates.length, 1);
-  assertResearchOnlyAtThisSetup(context, candidates[0]!);
+  const research = solveResearchRiskPlan(context, candidates[0]!);
+  assert.equal(research.approved, true, research.rejectionReasons.join('; '));
+  const plan = actionablePlan(context, candidates[0]!);
+  assert.equal(plan.approved, true, plan.rejectionReasons.join('; '));
   assert.equal(candidates[0].direction, 'long');
-  assert.equal(candidates[0].setupType, 'adaptive_trend_pullback');
+  assert.equal(candidates[0].setupType, 'deep_trend_pullback_reclaim');
+  assert.equal(candidates[0].entryMethod, 'stop');
 });
 
 test('Donchian signal is quarantined when native economics miss the research quality floor', () => {
@@ -283,17 +303,17 @@ test('perpetual premium convergence can qualify for an actionable tier after mat
     timestamp: Date.now() + 17 * 5 * 60_000,
     prices: {
       ...baseContext().prices,
-      mark: 101_000,
-      last: 101_000,
-      bid: 100_999,
-      ask: 101_001,
+      mark: 101_600,
+      last: 101_600,
+      bid: 101_599,
+      ask: 101_601,
       index: 100_000,
       consolidatedFair: 100_000,
     },
     derivatives: {
       ...baseContext().derivatives,
       fundingRate: 0.0003,
-      basisBps: 100,
+      basisBps: 160,
     },
     orderFlow: {
       ...baseContext().orderFlow,
@@ -302,8 +322,8 @@ test('perpetual premium convergence can qualify for an actionable tier after mat
     },
   });
   const latest = context.candles.fiveMinute.at(-1)!;
-  latest.open = 101_080;
-  latest.close = 100_950;
+  latest.open = 101_680;
+  latest.close = 101_550;
   const candidates = strategy('btc-perp-premium-convergence').evaluate(context);
   assert.equal(candidates.length, 1);
   const plan = actionablePlan(context, candidates[0]!);

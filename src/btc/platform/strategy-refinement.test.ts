@@ -8,13 +8,17 @@ function strategy(id: string) {
   return found;
 }
 
-test('failed first-iteration BTC strategies restart under refined versions and lower leverage caps', () => {
-  assert.equal(strategy('btc-momentum-retest').version, '2.1.0');
-  assert.equal(strategy('btc-momentum-retest').leverageCap, 18);
-  assert.equal(strategy('btc-compression-breakout').version, '1.1.0');
-  assert.equal(strategy('btc-compression-breakout').leverageCap, 20);
-  assert.equal(strategy('btc-orderflow-absorption').version, '0.3.0-shadow');
-  assert.equal(strategy('btc-orderflow-absorption').leverageCap, 15);
-  assert.equal(strategy('btc-cvd-divergence').version, '0.2.0-shadow');
-  assert.equal(strategy('btc-cvd-divergence').leverageCap, 12);
+test('failed BTC models restart under market-aligned versions and lower leverage caps', () => {
+  assert.equal(strategy('btc-momentum-retest').version, '3.0.0');
+  assert.equal(strategy('btc-momentum-retest').leverageCap, 10);
+  assert.equal(strategy('btc-compression-breakout').version, '2.0.0');
+  assert.equal(strategy('btc-compression-breakout').leverageCap, 10);
+  assert.equal(strategy('btc-orderflow-absorption').version, '0.4.0-shadow');
+  assert.equal(strategy('btc-orderflow-absorption').leverageCap, 8);
+  assert.equal(strategy('btc-cvd-divergence').version, '0.3.0-shadow');
+  assert.equal(strategy('btc-cvd-divergence').leverageCap, 8);
+  assert.equal(strategy('btc-adaptive-trend-rider').version, '2.0.0');
+  assert.equal(strategy('btc-adaptive-trend-rider').leverageCap, 10);
+  assert.equal(strategy('btc-perp-premium-convergence').version, '2.0.0');
+  assert.equal(strategy('btc-perp-premium-convergence').leverageCap, 12);
 });

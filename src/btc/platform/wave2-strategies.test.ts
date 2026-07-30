@@ -132,7 +132,7 @@ function assertShadowCandidatePassesRisk(context: MarketContext, id: string, sho
     assert.ok(plan.estimatedRiskUsd <= 20 / 3 + 1e-6);
     assert.ok(plan.liquidationBufferPct > 0);
   } else {
-    assert.ok(plan.rejectionReasons.some(reason => reason.includes('quality floor')));
+    assert.ok(plan.rejectionReasons.some(reason => reason.includes('quality floor') || reason.includes('friction')));
   }
   return candidates[0]!;
 }
@@ -174,31 +174,46 @@ test('liquidation-cascade exhaustion emits after forced long deleveraging is rec
   assert.equal(candidate.setupType, 'long_liquidation_exhaustion');
 });
 
-test('CVD divergence emits when price makes a lower low while aggressive delta turns positive', () => {
-  const context = baseContext();
-  const sample = candles(30, 60, 100_200, -4, 55, 100);
-  for (let index = 6; index < 18; index++) {
+test('CVD divergence compares cumulative delta at two confirmed price pivots before reclaim', () => {
+  const context = baseContext({
+    regime: { ...baseContext().regime, direction: 'range', directionalScore: 0 },
+  });
+  const sample = candles(45, 60, 100_000, 2, 60, 100);
+
+  for (let index = 0; index <= 15; index++) {
     sample[index]!.buyVolume = 30;
     sample[index]!.sellVolume = 70;
   }
-  for (let index = 18; index < 30; index++) {
-    sample[index]!.buyVolume = 75;
-    sample[index]!.sellVolume = 25;
-    sample[index]!.open = 99_700 + (index - 18) * 8;
-    sample[index]!.close = sample[index]!.open + 10;
-    sample[index]!.high = sample[index]!.close + 25;
-    sample[index]!.low = sample[index]!.open - 25;
+  for (let index = 16; index <= 35; index++) {
+    sample[index]!.buyVolume = 80;
+    sample[index]!.sellVolume = 20;
   }
-  sample[18]!.low = 99_300;
-  sample[29]!.open = 99_780;
-  sample[29]!.close = 99_900;
-  sample[29]!.high = 99_940;
-  sample[29]!.low = 99_740;
+  for (let index = 36; index < 45; index++) {
+    sample[index]!.buyVolume = 65;
+    sample[index]!.sellVolume = 35;
+  }
+
+  sample[15]!.low = 99_800;
+  sample[15]!.high = 100_045;
+  sample[15]!.open = 100_030;
+  sample[15]!.close = 100_035;
+
+  sample[35]!.low = 99_720;
+  sample[35]!.high = 100_085;
+  sample[35]!.open = 100_070;
+  sample[35]!.close = 100_075;
+
+  const latest = sample[44]!;
+  latest.open = 100_080;
+  latest.low = 100_060;
+  latest.close = 100_160;
+  latest.high = 100_190;
+
   context.candles.oneMinute = sample;
-  context.prices = { ...context.prices, last: 99_900, bid: 99_899, ask: 99_901, mark: 99_900 };
+  context.prices = { ...context.prices, last: 100_160, bid: 100_159, ask: 100_161, mark: 100_160 };
   const candidate = assertShadowCandidatePassesRisk(context, 'btc-cvd-divergence');
   assert.equal(candidate.direction, 'long');
-  assert.equal(candidate.setupType, 'confirmed_bullish_cvd_divergence');
+  assert.equal(candidate.setupType, 'pivot_bullish_cvd_divergence');
 });
 
 test('microprice signal remains observable but weak native economics are quarantined', () => {

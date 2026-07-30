@@ -4,14 +4,16 @@ import { candidate, complete, currentPrice, executionScore, observe, priorObserv
 
 export const perpetualPremiumConvergence: StrategyDefinition = {
   id: 'btc-perp-premium-convergence',
-  version: '1.0.0',
-  name: 'Perpetual-Premium Convergence',
-  description: 'Trades medium-duration normalization of an unusually rich or discounted perpetual against consolidated spot fair value.',
+  version: '2.0.0',
+  name: 'Friction-Aware Perpetual-Premium Convergence',
+  description: 'Trades only unusually large perpetual dislocations whose distance to consolidated fair value remains viable after fees, slippage and structural risk.',
   mode: 'actionable',
-  leverageCap: 25,
+  leverageCap: 12,
   evaluate(context): StrategyCandidate[] {
     observe(context);
-    if (!context.feed.healthy || !context.feed.derivativesHealthy || context.regime.liquidity === 'dislocated') return [];
+    if (!context.feed.healthy || !context.feed.derivativesHealthy
+      || !['deep', 'normal'].includes(context.regime.liquidity)
+      || context.regime.event !== 'normal' || context.orderFlow.bookFragility > 0.35) return [];
     const candles = complete(context.candles.fiveMinute);
     if (candles.length < 24) return [];
     const latest = candles.at(-1)!;
@@ -30,21 +32,29 @@ export const perpetualPremiumConvergence: StrategyDefinition = {
 
     let direction: BtcDirection | null = null;
     if (
-      premiumBps >= 80 && (premiumZ >= 1.7 || premiumBps >= 100)
-      && latest.close < latest.open && flow < 1 && (funding >= 0 || premiumBps >= 100)
+      premiumBps >= 150 && (premiumZ >= 2 || premiumBps >= 180)
+      && latest.close < latest.open && flow < 1 && funding >= 0
     ) direction = 'short';
     if (
-      premiumBps <= -80 && (premiumZ <= -1.7 || premiumBps <= -100)
-      && latest.close > latest.open && flow > 1 && (funding <= 0 || premiumBps <= -100)
+      premiumBps <= -150 && (premiumZ <= -2 || premiumBps <= -180)
+      && latest.close > latest.open && flow > 1 && funding <= 0
     ) direction = 'long';
     if (!direction) return [];
 
     const entry = currentPrice(context, direction);
     const convergenceDistance = Math.abs(entry - fair);
-    if (convergenceDistance <= entry * 0.008) return [];
-    const stopDistance = Math.max(entry * 0.00045, Math.min(convergenceDistance / 7.75, atr * 0.2));
+    if (convergenceDistance <= entry * 0.0145) return [];
+
+    // The old 4.5 bps stop was smaller than modeled round-trip friction. A
+    // convergence trade now gives the dislocation room to widen while keeping
+    // the stop below roughly one third of the distance back to fair value.
+    const stopDistance = Math.max(
+      entry * 0.0045,
+      Math.min(convergenceDistance / 3.5, atr * 1.5),
+    );
+    if (stopDistance >= convergenceDistance / 2.5) return [];
     const stop = direction === 'long' ? entry - stopDistance : entry + stopDistance;
-    const overshoot = convergenceDistance * 0.3;
+    const overshoot = convergenceDistance * 0.2;
     const extendedTarget = direction === 'long' ? fair + overshoot : fair - overshoot;
 
     return [candidate(context, {
@@ -53,28 +63,28 @@ export const perpetualPremiumConvergence: StrategyDefinition = {
       strategyName: this.name,
       mode: this.mode,
       direction,
-      setupType: direction === 'long' ? 'discount_normalization' : 'premium_normalization',
+      setupType: direction === 'long' ? 'deep_discount_normalization' : 'deep_premium_normalization',
       entryMethod: 'market',
       preferredEntry: entry,
-      entryZoneLow: direction === 'long' ? entry - stopDistance * 0.18 : entry - stopDistance * 0.08,
-      entryZoneHigh: direction === 'long' ? entry + stopDistance * 0.08 : entry + stopDistance * 0.18,
-      doNotChasePrice: direction === 'long' ? entry + stopDistance * 0.5 : entry - stopDistance * 0.5,
-      expiresAt: context.timestamp + 15 * 60_000,
+      entryZoneLow: direction === 'long' ? entry - stopDistance * 0.12 : entry - stopDistance * 0.05,
+      entryZoneHigh: direction === 'long' ? entry + stopDistance * 0.05 : entry + stopDistance * 0.12,
+      doNotChasePrice: direction === 'long' ? entry + stopDistance * 0.35 : entry - stopDistance * 0.35,
+      expiresAt: context.timestamp + 10 * 60_000,
       structuralStop: stop,
       initialTarget: fair,
       extendedTarget,
       maximumRealisticTarget: extendedTarget,
       strategyLeverageCap: this.leverageCap,
-      expectedHoldingMinutes: 180,
+      expectedHoldingMinutes: 240,
       exitModel: 'fixed',
-      signalScore: 60 + Math.min(22, Math.abs(premiumZ) * 7) + Math.min(14, Math.abs(premiumBps) * 0.55),
-      regimeScore: context.regime.event === 'normal' ? 88 : 68,
-      executionScore: executionScore(context, 32),
+      signalScore: 66 + Math.min(20, Math.abs(premiumZ) * 6) + Math.min(14, (Math.abs(premiumBps) - 150) * 0.18),
+      regimeScore: 90,
+      executionScore: executionScore(context, 36),
       rationale: [
-        `perpetual premium ${premiumBps.toFixed(1)} bps at z-score ${premiumZ.toFixed(2)}`,
+        `perpetual dislocation ${premiumBps.toFixed(1)} bps at z-score ${premiumZ.toFixed(2)}`,
         `consolidated fair value ${fair.toFixed(2)}`,
-        `funding ${(funding * 100).toFixed(4)}%`,
-        'price confirmation began moving toward fair value',
+        `structural stop is ${(stopDistance / entry * 10_000).toFixed(1)} bps versus ${(convergenceDistance / entry * 10_000).toFixed(1)} bps to fair`,
+        `funding ${(funding * 100).toFixed(4)}% and price confirmation align toward convergence`,
       ],
       features: {
         premiumBps,
