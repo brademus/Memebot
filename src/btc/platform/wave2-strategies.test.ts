@@ -118,16 +118,22 @@ function strategy(id: string): StrategyDefinition {
   return found;
 }
 
-function assertShadowCandidatePassesRisk(context: MarketContext, id: string) {
+function assertShadowCandidatePassesRisk(context: MarketContext, id: string, shouldApprove = true) {
   const candidates = strategy(id).evaluate(context);
   assert.equal(candidates.length, 1, `${id} did not emit`);
   assert.equal(candidates[0]!.mode, 'shadow');
   const plan = solveResearchRiskPlan(context, candidates[0]!);
-  assert.equal(plan.approved, true, `${id}: ${plan.rejectionReasons.join('; ')}`);
-  assert.ok(plan.leverage <= strategy(id).leverageCap);
-  assert.ok(plan.estimatedRewardUsd > 0);
-  assert.ok(plan.estimatedRiskUsd <= 20 / 3 + 1e-6);
-  assert.ok(plan.liquidationBufferPct > 0);
+  assert.equal(plan.approved, shouldApprove, `${id}: ${plan.rejectionReasons.join('; ')}`);
+  if (shouldApprove) {
+    assert.ok(plan.leverage <= strategy(id).leverageCap);
+    assert.ok(plan.estimatedRewardUsd > 0);
+    assert.ok(plan.estimatedNetRR >= 1.5);
+    assert.ok(plan.estimatedTargetRoiPct >= 4);
+    assert.ok(plan.estimatedRiskUsd <= 20 / 3 + 1e-6);
+    assert.ok(plan.liquidationBufferPct > 0);
+  } else {
+    assert.ok(plan.rejectionReasons.some(reason => reason.includes('quality floor')));
+  }
   return candidates[0]!;
 }
 
@@ -192,10 +198,10 @@ test('CVD divergence emits when price makes a lower low while aggressive delta t
   context.prices = { ...context.prices, last: 99_900, bid: 99_899, ask: 99_901, mark: 99_900 };
   const candidate = assertShadowCandidatePassesRisk(context, 'btc-cvd-divergence');
   assert.equal(candidate.direction, 'long');
-  assert.equal(candidate.setupType, 'bullish_cvd_divergence');
+  assert.equal(candidate.setupType, 'confirmed_bullish_cvd_divergence');
 });
 
-test('microprice scalper emits only when microprice, book depth and aggressive flow align', () => {
+test('microprice signal remains observable but weak native economics are quarantined', () => {
   const context = baseContext({
     orderFlow: {
       ...baseContext().orderFlow,
@@ -208,12 +214,12 @@ test('microprice scalper emits only when microprice, book depth and aggressive f
       asks: [{ price: 100_001, size: 20 }, { price: 100_002, size: 25 }],
     },
   });
-  const candidate = assertShadowCandidatePassesRisk(context, 'btc-microprice-orderbook-scalper');
+  const candidate = assertShadowCandidatePassesRisk(context, 'btc-microprice-orderbook-scalper', false);
   assert.equal(candidate.direction, 'long');
   assert.equal(candidate.setupType, 'positive_microprice_pressure');
 });
 
-test('ETH-led catch-up emits when ETH leads and BTC flow starts following', () => {
+test('ETH-led signal remains observable but weak native economics are quarantined', () => {
   const context = baseContext({
     crossAsset: {
       healthy: true,
@@ -233,7 +239,7 @@ test('ETH-led catch-up emits when ETH leads and BTC flow starts following', () =
   latest.high = 100_050;
   latest.low = 99_880;
   context.prices = { ...context.prices, last: 100_020, bid: 100_019, ask: 100_021, mark: 100_020 };
-  const candidate = assertShadowCandidatePassesRisk(context, 'btc-eth-led-catch-up');
+  const candidate = assertShadowCandidatePassesRisk(context, 'btc-eth-led-catch-up', false);
   assert.equal(candidate.direction, 'long');
   assert.equal(candidate.setupType, 'eth_up_btc_lag');
 });

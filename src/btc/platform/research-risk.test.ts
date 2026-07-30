@@ -76,9 +76,9 @@ function candidate(overrides: Partial<StrategyCandidate> = {}): StrategyCandidat
     doNotChasePrice: 100_050,
     expiresAt: context.timestamp + 60_000,
     structuralStop: 99_950,
-    initialTarget: 100_180,
+    initialTarget: 100_450,
     extendedTarget: 100_300,
-    maximumRealisticTarget: 100_180,
+    maximumRealisticTarget: 100_450,
     minimumRR: 3,
     strategyLeverageCap: 50,
     expectedHoldingMinutes: 30,
@@ -108,10 +108,10 @@ test('research can approve a native profitable target before actionable expectan
 test('research uses the nearer maximum-realistic boundary when a raw strategy target overreaches it', () => {
   const research = solveResearchRiskPlan(context, candidate({
     initialTarget: 100_600,
-    maximumRealisticTarget: 100_180,
+    maximumRealisticTarget: 100_450,
   }));
   assert.equal(research.approved, true, research.rejectionReasons.join('; '));
-  assert.equal(research.targetPrice, 100_180);
+  assert.equal(research.targetPrice, 100_450);
 });
 
 test('research rejects a native target that is not profitable after estimated costs', () => {
@@ -124,8 +124,26 @@ test('research rejects a native target that is not profitable after estimated co
 });
 
 test('research keeps strategy-specific leverage caps and liquidation safety', () => {
-  const research = solveResearchRiskPlan(context, candidate({ strategyLeverageCap: 12 }));
+  const research = solveResearchRiskPlan(context, candidate({ strategyLeverageCap: 12, initialTarget: 101_000, maximumRealisticTarget: 101_000 }));
   assert.equal(research.approved, true, research.rejectionReasons.join('; '));
   assert.ok(research.leverage <= 12);
   assert.ok(research.liquidationBufferPct > 0);
+});
+
+
+test('research rejects positive but sub-1.5R economics', () => {
+  const research = solveResearchRiskPlan(context, candidate({
+    initialTarget: 100_160,
+    maximumRealisticTarget: 100_160,
+  }));
+  assert.equal(research.approved, false);
+  assert.ok(research.rejectionReasons.some(reason => reason.includes('reward-to-risk quality floor')
+    || reason.includes('projected net ROI quality floor')));
+});
+
+test('approved research clears both economic quality floors', () => {
+  const research = solveResearchRiskPlan(context, candidate());
+  assert.equal(research.approved, true, research.rejectionReasons.join('; '));
+  assert.ok(research.estimatedNetRR >= 1.5);
+  assert.ok(research.estimatedTargetRoiPct >= 4);
 });
