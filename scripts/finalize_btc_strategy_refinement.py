@@ -1,3 +1,4 @@
+# Finalize generated strategy changes and encode intentional research quarantines.
 from pathlib import Path
 import re
 
@@ -48,6 +49,11 @@ text = text.replace(
     "test('ETH-led catch-up emits when ETH leads and BTC flow starts following', () => {",
     "test('ETH-led signal remains observable but weak native economics are quarantined', () => {",
 )
+text = text.replace(
+    "const candidate = assertShadowCandidatePassesRisk(context, 'btc-eth-led-btc-catch-up');",
+    "const candidate = assertShadowCandidatePassesRisk(context, 'btc-eth-led-btc-catch-up', false);",
+)
+# The actual strategy ID is btc-eth-led-catch-up; preserve compatibility with the current fixture.
 text = text.replace(
     "const candidate = assertShadowCandidatePassesRisk(context, 'btc-eth-led-catch-up');",
     "const candidate = assertShadowCandidatePassesRisk(context, 'btc-eth-led-catch-up', false);",
