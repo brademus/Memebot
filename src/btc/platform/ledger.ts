@@ -244,10 +244,14 @@ export async function strategyPerformance(strategies: readonly StrategyDefinitio
     COUNT(*) FILTER (WHERE status IN ('armed','open','partial'))::int active_calls,
     COUNT(*) FILTER (WHERE status='won')::int wins,
     COUNT(*) FILTER (WHERE status IN ('lost','liquidated'))::int losses,
-    COALESCE(SUM(net_pnl_usd),0) net_pnl,
-    AVG(result_r) FILTER (WHERE result_r IS NOT NULL) average_r,
-    COALESCE(SUM(net_pnl_usd) FILTER (WHERE net_pnl_usd>0),0) gross_profit,
-    ABS(COALESCE(SUM(net_pnl_usd) FILTER (WHERE net_pnl_usd<0),0)) gross_loss
+    COALESCE(SUM(net_pnl_usd) FILTER (WHERE status IN ('won','lost','liquidated')),0) net_pnl,
+    AVG(result_r) FILTER (WHERE status IN ('won','lost','liquidated') AND result_r IS NOT NULL) average_r,
+    COALESCE(SUM(net_pnl_usd) FILTER (
+      WHERE status IN ('won','lost','liquidated') AND net_pnl_usd>0
+    ),0) gross_profit,
+    ABS(COALESCE(SUM(net_pnl_usd) FILTER (
+      WHERE status IN ('won','lost','liquidated') AND net_pnl_usd<0
+    ),0)) gross_loss
    FROM btc_paper_calls WHERE book='research' GROUP BY strategy_id,strategy_version`);
   const rows = new Map(result.rows.map(row => [`${row.strategy_id}:${row.strategy_version}`, row]));
   return strategies.map(strategy => {

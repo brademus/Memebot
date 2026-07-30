@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import test from 'node:test';
 import { pool } from '../../db';
+import { strategyPerformance } from './ledger';
 
 test('BTC v2 schema enforces strategy identity, research isolation and actionable portfolio limits', async () => {
   const db = pool;
@@ -41,4 +42,50 @@ test('BTC v2 schema enforces strategy identity, research isolation and actionabl
     VALUES('action-1','entry_filled',now(),100000,'test event','{}')`);
   const event = await db.query(`SELECT call_id,event_type,reason FROM btc_call_events WHERE call_id='action-1'`);
   assert.deepEqual(event.rows, [{ call_id: 'action-1', event_type: 'entry_filled', reason: 'test event' }]);
+
+
+  const insertPerformanceCall = async (
+    id: string,
+    book: 'research' | 'actionable',
+    status: 'open' | 'won' | 'lost',
+    netPnlUsd: number,
+    resultR: number | null,
+  ) => db.query(`
+    INSERT INTO btc_paper_calls
+      (call_id,book,strategy_id,strategy_version,strategy_name,supporting_strategies,direction,status,
+       margin_usd,leverage,notional_usd,entry_price,current_price,stop_price,target_price,
+       liquidation_price,confidence,opened_at,closed_at,realized_pnl_usd,unrealized_pnl_usd,net_pnl_usd,
+       roi_pct,current_r,result_r,max_favorable_r,max_adverse_r,remaining_fraction,runner_activated,
+       fees_usd,funding_usd,entry_alert_at,simulated_fill_at,rationale,features)
+    VALUES($1,$2,'strategy-b','1.0.0','Strategy B','[]','long',$3,100,10,1000,
+      100000,100000,99900,100300,98000,80,now() - interval '1 minute',
+      CASE WHEN $3='open' THEN NULL ELSE now() END,
+      CASE WHEN $3='open' THEN 0 ELSE $4 END,
+      CASE WHEN $3='open' THEN $4 ELSE 0 END,
+      $4,$4,COALESCE($5::numeric,0),$5::numeric,1.5,-1,1,false,0,0,now(),now(),'[]','{}')`,
+  [id, book, status, netPnlUsd, resultR]);
+
+  await insertPerformanceCall('research-b-win', 'research', 'won', 12, 1.2);
+  await insertPerformanceCall('research-b-loss', 'research', 'lost', -4, -0.5);
+  await insertPerformanceCall('research-b-open', 'research', 'open', 500, null);
+  await db.query(`UPDATE btc_paper_calls SET status='won',closed_at=now(),realized_pnl_usd=1000,
+    unrealized_pnl_usd=0,net_pnl_usd=1000,roi_pct=1000,current_r=10,result_r=10
+    WHERE call_id='action-2'`);
+
+  const [performance] = await strategyPerformance([{
+    id: 'strategy-b',
+    version: '1.0.0',
+    name: 'Strategy B',
+    description: 'test',
+    mode: 'actionable' as const,
+    leverageCap: 25,
+    evaluate: () => [],
+  }]);
+  assert.equal(performance.totalCalls, 3, 'only research-book calls belong in research performance');
+  assert.equal(performance.activeCalls, 1);
+  assert.equal(performance.wins, 1);
+  assert.equal(performance.losses, 1);
+  assert.equal(performance.netPnlUsd, 8, 'open and actionable P&L must not affect promotion evidence');
+  assert.ok(Math.abs(Number(performance.averageR) - 0.35) < 1e-9);
+  assert.equal(performance.profitFactor, 3, 'profit factor must use resolved research calls only');
 });
