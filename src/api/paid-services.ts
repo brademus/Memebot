@@ -59,6 +59,19 @@ export function buildPaidServicesStatus(overrides?: {
       effectiveMode: pp?.effectiveMode ?? null,
       lastTradeAt: pp?.messages?.lastTradeAt ?? pp?.lastTradeAt ?? null,
       tradesReceived: pp?.messages?.tradesReceived ?? null,
+      // Diagnostic depth (2026-07-30): the earlier version hid exactly the
+      // fields needed to tell "still ramping up after a fresh boot" apart from
+      // "genuinely stuck" — both looked identical from the outside. These come
+      // straight from the same diag object, read-only, no behavior change.
+      connected: pp?.connected ?? null,
+      createsSinceBoot: pp?.messages?.creates ?? null,
+      socketOpenAt: pp?.connection?.lastSocketOpenAt ?? pp?.lastSocketOpenAt ?? null,
+      connectionAttempts: pp?.connection?.attempts ?? null,
+      reconnects: pp?.connection?.reconnects ?? null,
+      entitlementCycles: pp?.connection?.entitlementCycles ?? null,
+      staleAfterWorkingResets: pp?.connection?.staleAfterWorkingResets ?? null,
+      lastProtocolError: pp?.messages?.lastProtocolError ?? null,
+      lastSocketError: pp?.connection?.lastSocketError ?? null,
     },
   });
 
