@@ -1,0 +1,43 @@
+name: Apply BTC Market-Aligned V3
+
+on:
+  push:
+    branches:
+      - refine/btc-market-aligned-v3
+    paths:
+      - scripts/apply-btc-market-aligned-v3.py
+      - .github/workflows/apply-btc-market-aligned-v3.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout refinement branch
+        uses: actions/checkout@v4
+        with:
+          ref: refine/btc-market-aligned-v3
+          fetch-depth: 0
+      - name: Apply evidence-driven redesign
+        run: python3 scripts/apply-btc-market-aligned-v3.py
+      - name: Commit permanent redesign
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/btc
+          git commit -m "Rebuild BTC strategies around observed market failure modes"
+          git push origin HEAD:refine/btc-market-aligned-v3
+      - name: Install dependencies
+        run: npm ci
+      - name: TypeScript build
+        run: npm run build
+      - name: Focused BTC contracts
+        run: |
+          node --test dist/btc/platform/research-risk.test.js
+          node --test dist/btc/platform/strategy-refinement.test.js
+          node --test dist/btc/platform/wave1-strategies.test.js
+          node --test dist/btc/platform/wave2-strategies.test.js
