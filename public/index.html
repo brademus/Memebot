@@ -49,7 +49,7 @@
     <div class="decisionFlow" aria-label="Bitcoin bot decision flow"><span>REGIME</span><i>→</i><span>STRATEGIES</span><i>→</i><span>RISK</span><i>→</i><span>ENTRY</span><i>→</i><span>EXIT</span></div>
     <div class="focusTiles btcTiles">
       <button class="focusTile btcPrimary" data-go="btcCalls"><span class="tag">ACTIONABLE ALERT BOOK</span><strong id="nBtcCalls">0</strong><h2>Current Calls</h2><p>Portfolio-controlled long and short alerts with $100 isolated paper margin, dynamic leverage, stop, liquidation estimate, target, runner state, and live net P&amp;L.</p><span id="btcHomeStatus" class="btcStatus">Connecting to the BTC platform</span><b>Open current calls →</b></button>
-      <button class="focusTile" data-go="btcCalls"><span class="tag">ACTIVE NET P&amp;L</span><strong id="nBtcPnl">$0.00</strong><h2>Live Portfolio</h2><p>Executable-side unrealized P&amp;L plus realized partial exits, fees, estimated funding, and liquidation-aware risk.</p><b>Track live P&amp;L →</b></button>
+      <button class="focusTile" data-go="btcCalls"><span class="tag">ALL BTC NET P&amp;L</span><strong id="nBtcPnl">$0.00</strong><h2>Live Portfolio</h2><p>Actionable and research books combined, with gross movement, charged costs, projected closing costs, funding, and net P&amp;L kept auditable.</p><b>Track live P&amp;L →</b></button>
       <button class="focusTile" data-go="btcResults"><span class="tag">FULL ACCOUNTABILITY</span><strong id="nBtcRecord">0–0</strong><h2>Wins &amp; Losses</h2><p>Every completed actionable and research call, separated by strategy, leverage, direction, exit type, and result in R.</p><b>Audit results →</b></button>
       <button class="focusTile" data-go="btcStrategies"><span class="tag">PARALLEL RESEARCH</span><strong id="nBtcStrategies">7</strong><h2>Strategies</h2><p>Five actionable strategies and two shadow microstructure strategies, each versioned and measured independently.</p><b>Compare strategies →</b></button>
       <button class="focusTile adminTile" data-go="btcAdmin"><span class="tag">BTC OPERATIONS</span><strong>ADMIN</strong><h2>System State</h2><p>Reference venue, feed quality, regime, portfolio limits, risk contract, recent candidates, and paper-only execution status.</p><b>Open BTC admin →</b></button>
@@ -77,15 +77,19 @@
     <div class="title"><div><p>BTC ACTIONABLE PORTFOLIO</p><h1>Current Calls <span id="btcCallCount">0</span></h1></div><small>Each alert uses a standardized hypothetical $100 isolated margin. Leverage is solved from the technical stop and capped at 50x; no money or exchange account is connected.</small></div>
     <div class="stats btcOverviewStats">
       <div class="stat"><small>Mark price</small><b id="btcPrice">—</b></div>
-      <div class="stat"><small>Active net P&amp;L</small><b id="btcActivePnl">$0.00</b></div>
-      <div class="stat"><small>Realized P&amp;L</small><b id="btcRealizedPnl">$0.00</b></div>
-      <div class="stat"><small>Active notional</small><b id="btcNotional">$0</b></div>
-      <div class="stat"><small>Weighted leverage</small><b id="btcLeverage">0x</b></div>
+      <div class="stat"><small>All active net</small><b id="btcActivePnl">$0.00</b></div>
+      <div class="stat"><small>All realized net</small><b id="btcRealizedPnl">$0.00</b></div>
+      <div class="stat"><small>Actionable net</small><b id="btcActionablePnl">$0.00</b></div>
+      <div class="stat"><small>Research net</small><b id="btcResearchPnl">$0.00</b></div>
+      <div class="stat"><small>All BTC net</small><b id="btcTotalPnl">$0.00</b></div>
+      <div class="stat"><small>Return on deployed margin</small><b id="btcNormalizedReturn">0.00%</b></div>
+      <div class="stat"><small>Actionable notional</small><b id="btcNotional">$0</b></div>
+      <div class="stat"><small>Actionable leverage</small><b id="btcLeverage">0x</b></div>
       <div class="stat"><small>Engine</small><b id="btcEngine">Connecting</b></div>
       <div class="stat"><small>Feed</small><b id="btcFeed">Checking</b></div>
       <div class="stat"><small>Regime</small><b id="btcRegime">—</b></div>
     </div>
-    <div id="btcCallList" class="callGrid"><div class="btcEmpty"><div><strong>Connecting to BTC.</strong><p>The platform only publishes an actionable alert after a strategy, execution-quality, leverage, liquidation, net +20%, 3R, portfolio, and entry-zone check all pass.</p></div></div></div>
+    <div id="btcCallList" class="callGrid"><div class="btcEmpty"><div><strong>Connecting to BTC.</strong><p>The platform only publishes an actionable alert after its strategy evidence, execution quality, leverage, liquidation, tiered net-return, portfolio, and entry-zone checks pass.</p></div></div></div>
     <div class="toolPanel btcSetupPanel"><div class="toolPanelHead"><h2>Latest strategy candidates</h2></div><pre id="btcSetup">Loading candidate state…</pre></div>
   </section>
 

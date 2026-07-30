@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import test from 'node:test';
 import { pool } from '../../db';
-import { strategyPerformance } from './ledger';
+import { pnlLedgerSummary, strategyPerformance } from './ledger';
 
 test('BTC v2 schema enforces strategy identity, research isolation and actionable portfolio limits', async () => {
   const db = pool;
@@ -88,4 +88,12 @@ test('BTC v2 schema enforces strategy identity, research isolation and actionabl
   assert.equal(performance.netPnlUsd, 8, 'open and actionable P&L must not affect promotion evidence');
   assert.ok(Math.abs(Number(performance.averageR) - 0.35) < 1e-9);
   assert.equal(performance.profitFactor, 3, 'profit factor must use resolved research calls only');
+
+  const pnl = await pnlLedgerSummary();
+  assert.equal(pnl.actionableResolvedCalls, 1);
+  assert.equal(pnl.actionableRealizedPnlUsd, 1000);
+  assert.equal(pnl.researchResolvedCalls, 2);
+  assert.equal(pnl.researchRealizedPnlUsd, 8);
+  assert.equal(pnl.actionableResolvedMarginUsd, 100);
+  assert.equal(pnl.researchResolvedMarginUsd, 200);
 });

@@ -26,6 +26,10 @@
       : 'STRATEGY RESEARCH';
     const supporting = Array.isArray(call.supportingStrategies) && call.supportingStrategies.length > 1
       ? `<p class="btcSupport">Supported by ${call.supportingStrategies.map(escapeHtml).join(' · ')}</p>` : '';
+    const projectedExitCosts = Number(call.features?.projectedExitCostsUsd || 0);
+    const grossPnl = Number.isFinite(Number(call.features?.grossPnlUsd))
+      ? Number(call.features.grossPnlUsd)
+      : Number(call.netPnlUsd || 0) + Number(call.feesUsd || 0) + projectedExitCosts - Number(call.fundingUsd || 0);
     return `<article class="callCard btcCallCard ${open ? 'open' : ''}">
       <div class="callHead"><span class="state ${call.direction === 'long' ? 'trigger' : 'dying'}">${escapeHtml(direction)}</span><small>${escapeHtml(book)} · ${escapeHtml(title(call.status))}</small></div>
       <h2>${escapeHtml(call.strategyName || call.strategyId)} <span>${escapeHtml(call.leverage)}x</span></h2>
@@ -36,9 +40,12 @@
         <div class="metric"><small>Stop</small><b>${money(call.trailingStopPrice ?? call.stopPrice)}</b></div>
         <div class="metric"><small>Liquidation</small><b>${money(call.liquidationPrice)}</b></div>
         <div class="metric"><small>Target</small><b>${money(call.targetPrice)}</b></div>
+        <div class="metric"><small>Gross P&amp;L</small><b class="${Number(grossPnl) >= 0 ? 'btcPositive' : 'btcNegative'}">${money(grossPnl)}</b></div>
+        <div class="metric"><small>Charged costs</small><b>${money(call.feesUsd)}</b></div>
+        <div class="metric"><small>Projected exit costs</small><b>${money(projectedExitCosts)}</b></div>
+        <div class="metric"><small>Funding</small><b>${money(call.fundingUsd)}</b></div>
         <div class="metric"><small>Net P&amp;L</small><b class="${pnlClass}">${money(call.netPnlUsd)}</b></div>
         <div class="metric"><small>ROI / R</small><b class="${pnlClass}">${percent(call.roiPct)} · ${number(call.resultR ?? call.currentR)}R</b></div>
-        <div class="metric"><small>Fees / funding</small><b>${money(call.feesUsd)} / ${money(call.fundingUsd)}</b></div>
         <div class="metric"><small>Remaining</small><b>${number(Number(call.remainingFraction || 0) * 100, 0)}%</b></div>
         <div class="metric"><small>MFE / MAE</small><b>${number(call.maxFavorableR)}R / ${number(call.maxAdverseR)}R</b></div>
         <div class="metric"><small>Confidence</small><b>${number(call.confidence, 0)}</b></div>
@@ -108,8 +115,10 @@
 
     if (byId('nBtcCalls')) byId('nBtcCalls').textContent = String(actionable.length);
     if (byId('btcCallCount')) byId('btcCallCount').textContent = String(actionable.length);
-    if (byId('nBtcPnl')) byId('nBtcPnl').textContent = money(portfolio.activePnlUsd || 0);
-    if (byId('nBtcRecord')) byId('nBtcRecord').textContent = `${winners.length}–${losers.length}`;
+    if (byId('nBtcPnl')) byId('nBtcPnl').textContent = money(portfolio.totalNetPnlUsd || 0);
+    const allWins = Number(portfolio.actionableWins || 0) + Number(portfolio.researchWins || 0);
+    const allLosses = Number(portfolio.actionableLosses || 0) + Number(portfolio.researchLosses || 0);
+    if (byId('nBtcRecord')) byId('nBtcRecord').textContent = `${allWins}–${allLosses}`;
     if (byId('nBtcStrategies')) byId('nBtcStrategies').textContent = String(strategies.length);
     if (byId('btcStrategyCount')) byId('btcStrategyCount').textContent = String(strategies.length);
     if (byId('btcEngine')) byId('btcEngine').textContent = title(btc.engineState);
@@ -118,6 +127,10 @@
     if (byId('btcRegime')) byId('btcRegime').textContent = btc.regime ? `${title(btc.regime.direction)} / ${title(btc.regime.volatility)}` : '—';
     if (byId('btcActivePnl')) byId('btcActivePnl').textContent = money(portfolio.activePnlUsd || 0);
     if (byId('btcRealizedPnl')) byId('btcRealizedPnl').textContent = money(portfolio.realizedPnlUsd || 0);
+    if (byId('btcActionablePnl')) byId('btcActionablePnl').textContent = money(portfolio.actionableTotalNetPnlUsd || 0);
+    if (byId('btcResearchPnl')) byId('btcResearchPnl').textContent = money(portfolio.researchTotalNetPnlUsd || 0);
+    if (byId('btcTotalPnl')) byId('btcTotalPnl').textContent = money(portfolio.totalNetPnlUsd || 0);
+    if (byId('btcNormalizedReturn')) byId('btcNormalizedReturn').textContent = percent(portfolio.normalizedReturnPct || 0);
     if (byId('btcNotional')) byId('btcNotional').textContent = compactMoney(portfolio.activeNotionalUsd || 0);
     if (byId('btcLeverage')) byId('btcLeverage').textContent = `${number(portfolio.weightedLeverage || 0, 1)}x`;
     if (byId('btcHomeStatus')) {
@@ -138,14 +151,16 @@
     if (byId('btcLoserCount')) byId('btcLoserCount').textContent = String(losers.length);
     if (byId('btcWinnerList')) byId('btcWinnerList').innerHTML = winners.length ? winners.map(resultRow).join('') : '<div class="empty">No completed BTC winners yet.</div>';
     if (byId('btcLoserList')) byId('btcLoserList').innerHTML = losers.length ? losers.map(resultRow).join('') : '<div class="empty">No completed BTC losses yet.</div>';
-    const decided = winners.length + losers.length;
+    const decided = allWins + allLosses;
     if (byId('btcResultStats')) byId('btcResultStats').innerHTML = [
-      stat('Decided calls', String(decided)),
-      stat('Win rate', decided ? `${number(winners.length / decided * 100, 1)}%` : '—'),
-      stat('Actionable realized', money(portfolio.realizedPnlUsd || 0)),
-      stat('Total net P&L', money(portfolio.totalNetPnlUsd || 0)),
+      stat('Resolved calls', String(Number(portfolio.actionableResolvedCalls || 0) + Number(portfolio.researchResolvedCalls || 0))),
+      stat('Win rate', decided ? `${number(allWins / decided * 100, 1)}%` : '—'),
+      stat('Actionable net', money(portfolio.actionableTotalNetPnlUsd || 0)),
+      stat('Research net', money(portfolio.researchTotalNetPnlUsd || 0)),
+      stat('All BTC net', money(portfolio.totalNetPnlUsd || 0)),
+      stat('Return on deployed margin', percent(portfolio.normalizedReturnPct || 0)),
+      stat('Capital deployed', money(portfolio.totalCapitalDeployedUsd || 0)),
       stat('Calls today', String(portfolio.callsToday || 0)),
-      stat('Hypothetical equity', money(portfolio.hypotheticalEquityUsd || 100)),
     ].join('');
 
     if (byId('btcStrategyList')) byId('btcStrategyList').innerHTML = strategies.length

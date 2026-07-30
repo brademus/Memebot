@@ -10,6 +10,7 @@ import {
   markCandidateDecision,
   persistCandidate,
   persistRiskDecision,
+  pnlLedgerSummary,
   registerStrategies,
   strategyPerformance,
   updateCall,
@@ -69,6 +70,12 @@ export class BtcMultiStrategyEngine {
   private armed = new Map<string, ArmedCandidate>();
   private latestCandidates: StrategyCandidate[] = [];
   private performance: StrategyPerformance[] = [];
+  private pnlHistory: Awaited<ReturnType<typeof pnlLedgerSummary>> = {
+    actionableResolvedCalls: 0, researchResolvedCalls: 0,
+    actionableWins: 0, actionableLosses: 0, researchWins: 0, researchLosses: 0,
+    actionableRealizedPnlUsd: 0, researchRealizedPnlUsd: 0,
+    actionableResolvedMarginUsd: 0, researchResolvedMarginUsd: 0,
+  };
   private initialized = false;
   private lastPerformanceAt = 0;
   private lastContext: MarketContext | null = null;
@@ -83,6 +90,7 @@ export class BtcMultiStrategyEngine {
     this.activeCalls = await loadActiveCalls();
     this.recentCalls = await loadRecentCalls();
     this.performance = await strategyPerformance(BTC_STRATEGIES);
+    this.pnlHistory = await pnlLedgerSummary();
     const day = await actionableDayStats();
     this.callsToday = day.callsToday;
     this.realizedPnlToday = day.realizedPnlToday;
@@ -98,6 +106,17 @@ export class BtcMultiStrategyEngine {
       this.recentCalls = [event.call, ...this.recentCalls.filter(call => call.id !== event.call.id)].slice(0, 300);
       if (event.call.book === 'actionable') {
         this.realizedPnlToday += event.call.netPnlUsd;
+        this.pnlHistory.actionableResolvedCalls++;
+        this.pnlHistory.actionableRealizedPnlUsd += event.call.netPnlUsd;
+        this.pnlHistory.actionableResolvedMarginUsd += event.call.marginUsd;
+        if (event.call.status === 'won') this.pnlHistory.actionableWins++;
+        if (event.call.status === 'lost' || event.call.status === 'liquidated') this.pnlHistory.actionableLosses++;
+      } else {
+        this.pnlHistory.researchResolvedCalls++;
+        this.pnlHistory.researchRealizedPnlUsd += event.call.netPnlUsd;
+        this.pnlHistory.researchResolvedMarginUsd += event.call.marginUsd;
+        if (event.call.status === 'won') this.pnlHistory.researchWins++;
+        if (event.call.status === 'lost' || event.call.status === 'liquidated') this.pnlHistory.researchLosses++;
       }
     }
   }
@@ -301,6 +320,7 @@ export class BtcMultiStrategyEngine {
     await this.fillArmed(context);
     if (context.timestamp - this.lastPerformanceAt >= 60_000) {
       this.performance = await strategyPerformance(BTC_STRATEGIES);
+      this.pnlHistory = await pnlLedgerSummary();
       const day = await actionableDayStats();
       this.callsToday = day.callsToday;
       this.realizedPnlToday = day.realizedPnlToday;
@@ -312,12 +332,25 @@ export class BtcMultiStrategyEngine {
     const context = this.lastContext;
     const active = this.activeCalls.filter(call => activeStates.has(call.status));
     const actionable = active.filter(call => call.book === 'actionable');
+    const research = active.filter(call => call.book === 'research');
     const completed = this.recentCalls.filter(call => terminalStates.has(call.status));
-    const activePnlUsd = actionable.reduce((sum, call) => sum + call.netPnlUsd, 0);
-    const realizedPnlUsd = completed.filter(call => call.book === 'actionable').reduce((sum, call) => sum + call.netPnlUsd, 0);
-    const activeMarginUsd = actionable.reduce((sum, call) => sum + call.marginUsd * call.remainingFraction, 0);
+    const actionableActivePnlUsd = actionable.reduce((sum, call) => sum + call.netPnlUsd, 0);
+    const researchActivePnlUsd = research.reduce((sum, call) => sum + call.netPnlUsd, 0);
+    const actionableRealizedPnlUsd = this.pnlHistory.actionableRealizedPnlUsd;
+    const researchRealizedPnlUsd = this.pnlHistory.researchRealizedPnlUsd;
+    const activePnlUsd = actionableActivePnlUsd + researchActivePnlUsd;
+    const realizedPnlUsd = actionableRealizedPnlUsd + researchRealizedPnlUsd;
+    const actionableTotalNetPnlUsd = actionableActivePnlUsd + actionableRealizedPnlUsd;
+    const researchTotalNetPnlUsd = researchActivePnlUsd + researchRealizedPnlUsd;
+    const totalNetPnlUsd = actionableTotalNetPnlUsd + researchTotalNetPnlUsd;
+    const actionableActiveMarginUsd = actionable.reduce((sum, call) => sum + call.marginUsd * call.remainingFraction, 0);
+    const researchActiveMarginUsd = research.reduce((sum, call) => sum + call.marginUsd * call.remainingFraction, 0);
+    const activeMarginUsd = actionableActiveMarginUsd + researchActiveMarginUsd;
     const activeNotionalUsd = actionable.reduce((sum, call) => sum + call.notionalUsd * call.remainingFraction, 0);
-    const weightedLeverage = activeMarginUsd ? activeNotionalUsd / activeMarginUsd : 0;
+    const weightedLeverage = actionableActiveMarginUsd ? activeNotionalUsd / actionableActiveMarginUsd : 0;
+    const totalCapitalDeployedUsd = this.pnlHistory.actionableResolvedMarginUsd
+      + this.pnlHistory.researchResolvedMarginUsd + activeMarginUsd;
+    const normalizedReturnPct = totalCapitalDeployedUsd ? totalNetPnlUsd / totalCapitalDeployedUsd * 100 : 0;
     const winners = completed.filter(call => call.status === 'won');
     const losers = completed.filter(call => call.status === 'lost' || call.status === 'liquidated');
     const emptyFeed = {
@@ -339,12 +372,30 @@ export class BtcMultiStrategyEngine {
       portfolio: {
         activePnlUsd,
         realizedPnlUsd,
-        totalNetPnlUsd: activePnlUsd + realizedPnlUsd,
-        hypotheticalEquityUsd: 100 + activePnlUsd + realizedPnlUsd,
+        totalNetPnlUsd,
+        hypotheticalEquityUsd: totalCapitalDeployedUsd + totalNetPnlUsd,
+        markedValueUsd: totalCapitalDeployedUsd + totalNetPnlUsd,
+        totalCapitalDeployedUsd,
+        normalizedReturnPct,
+        actionableActivePnlUsd,
+        actionableRealizedPnlUsd,
+        actionableTotalNetPnlUsd,
+        researchActivePnlUsd,
+        researchRealizedPnlUsd,
+        researchTotalNetPnlUsd,
+        actionableWins: this.pnlHistory.actionableWins,
+        actionableLosses: this.pnlHistory.actionableLosses,
+        researchWins: this.pnlHistory.researchWins,
+        researchLosses: this.pnlHistory.researchLosses,
+        actionableResolvedCalls: this.pnlHistory.actionableResolvedCalls,
+        researchResolvedCalls: this.pnlHistory.researchResolvedCalls,
         activeMarginUsd,
+        actionableActiveMarginUsd,
+        researchActiveMarginUsd,
         activeNotionalUsd,
         weightedLeverage,
         activeCalls: actionable.length,
+        researchActiveCalls: research.length,
         callsToday: this.callsToday,
       },
       activeCalls: active,
