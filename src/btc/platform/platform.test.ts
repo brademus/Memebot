@@ -71,14 +71,14 @@ function candidate(overrides: Partial<StrategyCandidate> = {}): StrategyCandidat
     createdAt: context.timestamp,
     entryMethod: 'retest',
     preferredEntry: 100_000,
-    entryZoneLow: 99_990,
-    entryZoneHigh: 100_010,
-    doNotChasePrice: 100_050,
+    entryZoneLow: 99_950,
+    entryZoneHigh: 100_050,
+    doNotChasePrice: 100_150,
     expiresAt: context.timestamp + 60_000,
-    structuralStop: 99_950,
-    initialTarget: 100_600,
-    extendedTarget: 101_000,
-    maximumRealisticTarget: 102_000,
+    structuralStop: 99_500,
+    initialTarget: 101_600,
+    extendedTarget: 102_500,
+    maximumRealisticTarget: 103_000,
     minimumRR: 3,
     strategyLeverageCap: 50,
     expectedHoldingMinutes: 60,
@@ -124,7 +124,7 @@ test('BTC strategy registry contains seventeen unique versioned strategies', () 
 test('standard actionable policy uses native target, 6% projected ROI, 2.25R and a $6 loss budget', () => {
   const plan = solveRiskPlan(context, candidate(), evidence());
   assert.equal(plan.approved, true, plan.rejectionReasons.join('; '));
-  assert.equal(plan.targetPrice, 100_600);
+  assert.equal(plan.targetPrice, 101_600);
   assert.equal(plan.actionableTier, 'standard');
   assert.ok(plan.leverage >= 1 && plan.leverage <= 50);
   assert.ok(plan.estimatedTargetRoiPct >= 6);
@@ -135,7 +135,7 @@ test('standard actionable policy uses native target, 6% projected ROI, 2.25R and
 });
 
 test('A+ policy preserves the 20% projected ROI and 3R premium threshold', () => {
-  const plan = solveRiskPlan(context, candidate({ initialTarget: 100_900 }), evidence());
+  const plan = solveRiskPlan(context, candidate({ initialTarget: 103_000 }), evidence());
   assert.equal(plan.approved, true, plan.rejectionReasons.join('; '));
   assert.equal(plan.actionableTier, 'a_plus');
   assert.ok(plan.estimatedTargetRoiPct >= 20);
@@ -174,7 +174,7 @@ test('risk solver rejects an invalid structural stop beyond the maximum allowed 
 });
 
 test('strategy-specific leverage cap is enforced independently of the platform ceiling', () => {
-  const plan = solveRiskPlan(context, candidate({ strategyLeverageCap: 12, initialTarget: 101_000 }), evidence());
+  const plan = solveRiskPlan(context, candidate({ strategyLeverageCap: 6, initialTarget: 102_000 }), evidence());
   assert.equal(plan.approved, true, plan.rejectionReasons.join('; '));
-  assert.ok(plan.leverage <= 12);
+  assert.ok(plan.leverage <= 6);
 });
