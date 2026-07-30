@@ -87,8 +87,14 @@ async function sendTelegram(text: string): Promise<DeliveryResult> {
 }
 
 function entryText(call: PaperCall): string {
+  const tier = String(call.features.actionableTier || 'standard');
+  const title = tier === 'a_plus'
+    ? `🔥 BTC A+ ${call.direction.toUpperCase()} ALERT`
+    : `🚨 BTC STANDARD ${call.direction.toUpperCase()} ALERT`;
+  const resolved = Number(call.features.expectancyResolvedCalls || 0);
+  const required = Number(call.features.expectancyRequiredResolvedCalls || 0);
   return [
-    `🚨 BTC ${call.direction.toUpperCase()} ALERT`,
+    title,
     `${call.strategyName} · ${call.strategyVersion}`,
     `Entry: ${money(call.entryPrice)}`,
     `Leverage: ${call.leverage}x isolated paper`,
@@ -98,6 +104,7 @@ function entryText(call: PaperCall): string {
     `Target: ${money(call.targetPrice)}${call.extendedTargetPrice ? ` · Runner: ${money(call.extendedTargetPrice)}` : ''}`,
     `Projected target ROI: ${Number(call.features.estimatedTargetRoiPct || 0).toFixed(1)}%`,
     `Projected net R:R: ${Number(call.features.estimatedNetRR || 0).toFixed(2)}R`,
+    `Research evidence: ${resolved}/${required} resolved · ${Number(call.features.expectancyAverageR || 0).toFixed(2)} avg R`,
     `Confidence: ${call.confidence}`,
     `Paper only — no exchange order was placed.`,
   ].join('\n');

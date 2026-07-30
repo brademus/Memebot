@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { solveRiskPlan } from './risk';
+import { solveResearchRiskPlan } from './research-risk';
 import { WAVE2_STRATEGIES } from './wave2-strategies';
 import { Candle, CrossAssetState, MarketContext, StrategyDefinition } from './types';
 
@@ -122,11 +122,12 @@ function assertShadowCandidatePassesRisk(context: MarketContext, id: string) {
   const candidates = strategy(id).evaluate(context);
   assert.equal(candidates.length, 1, `${id} did not emit`);
   assert.equal(candidates[0]!.mode, 'shadow');
-  const plan = solveRiskPlan(context, candidates[0]!);
+  const plan = solveResearchRiskPlan(context, candidates[0]!);
   assert.equal(plan.approved, true, `${id}: ${plan.rejectionReasons.join('; ')}`);
   assert.ok(plan.leverage <= strategy(id).leverageCap);
-  assert.ok(plan.estimatedRewardUsd >= 20);
-  assert.ok(plan.estimatedNetRR >= 3);
+  assert.ok(plan.estimatedRewardUsd > 0);
+  assert.ok(plan.estimatedRiskUsd <= 20 / 3 + 1e-6);
+  assert.ok(plan.liquidationBufferPct > 0);
   return candidates[0]!;
 }
 

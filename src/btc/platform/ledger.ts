@@ -87,7 +87,11 @@ export async function persistRiskDecision(
     plan.marginUsd, plan.leverage, plan.notionalUsd, plan.entryPrice || null, plan.stopPrice || null,
     plan.targetPrice || null, plan.extendedTargetPrice, plan.liquidationPrice || null,
     plan.liquidationBufferPct, plan.estimatedRiskUsd, plan.estimatedRewardUsd, plan.estimatedNetRR,
-    plan.estimatedTargetRoiPct, JSON.stringify(plan.costs),
+    plan.estimatedTargetRoiPct, JSON.stringify({
+      ...plan.costs,
+      actionableTier: plan.actionableTier ?? null,
+      expectancyEvidence: plan.expectancyEvidence ?? null,
+    }),
   ]);
   await pool.query(`UPDATE btc_signal_candidates SET decision_status=$2,decision_reason=$3,decided_at=now()
     WHERE candidate_id=$1`, [candidate.id, plan.approved && extraReasons.length === 0 ? 'approved' : 'rejected', reasons.join('; ') || null]);

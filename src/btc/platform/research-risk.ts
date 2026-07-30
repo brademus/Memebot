@@ -7,7 +7,7 @@ import {
 import { clamp, safeDiv } from './indicators';
 import {
   DEFAULT_COST_MODEL,
-  DEFAULT_MAX_PLANNED_LOSS_USD,
+  DEFAULT_RESEARCH_MAX_PLANNED_LOSS_USD,
   PAPER_MARGIN_USD,
   PLATFORM_MAX_LEVERAGE,
   CostModelConfig,
@@ -114,7 +114,7 @@ function rejected(candidate: StrategyCandidate, reasons: string[]): RiskPlan {
 
 /**
  * Research calls preserve the strategy's native realistic target instead of
- * forcing the actionable +$20 and 3R contract. Feed, confidence, structural
+ * forcing actionable evidence maturity, standard ROI, or standard R gates. Feed, confidence, structural
  * loss, cost, and liquidation protections remain mandatory.
  */
 export function solveResearchRiskPlan(
@@ -144,7 +144,7 @@ export function solveResearchRiskPlan(
     candidate.strategyLeverageCap,
     Number(process.env.BTC_MAX_LEVERAGE || PLATFORM_MAX_LEVERAGE),
   ));
-  const maxPlannedLoss = Number(process.env.BTC_MAX_PLANNED_LOSS_USD || DEFAULT_MAX_PLANNED_LOSS_USD);
+  const maxPlannedLoss = Number(process.env.BTC_RESEARCH_MAX_PLANNED_LOSS_USD || DEFAULT_RESEARCH_MAX_PLANNED_LOSS_USD);
   const targetDistancePct = priceMovePct(candidate.preferredEntry, targetPrice);
   const failures = new Set<string>();
 

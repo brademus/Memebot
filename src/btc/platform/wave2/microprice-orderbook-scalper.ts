@@ -4,7 +4,7 @@ import { candidate, currentPrice, directionalFlow, executionScore, targetFromRis
 
 export const micropriceOrderBookScalper: StrategyDefinition = {
   id: 'btc-microprice-orderbook-scalper',
-  version: '0.1.0-shadow',
+  version: '0.2.0-shadow',
   name: 'Microprice and Order-Book Imbalance Scalper',
   description: 'Researches very short-lived microprice pressure when top-of-book, five-basis-point depth and aggressive flow agree.',
   mode: 'shadow',
@@ -37,8 +37,11 @@ export const micropriceOrderBookScalper: StrategyDefinition = {
     const entry = currentPrice(context, direction);
     const stopDistance = Math.max(spread * 5, entry * 0.00035);
     const stop = direction === 'long' ? entry - stopDistance : entry + stopDistance;
-    const initialTarget = targetFromRisk(entry, stop, direction, 3.4);
-    const extendedTarget = targetFromRisk(entry, stop, direction, 6);
+    // Version 0.2.0 raises the native target above the modeled taker-fee,
+    // spread and slippage floor. The earlier 3.4R target could be negative
+    // after costs even when the price forecast was correct.
+    const initialTarget = targetFromRisk(entry, stop, direction, 5);
+    const extendedTarget = targetFromRisk(entry, stop, direction, 7.5);
     const maximumMove = Math.max(entry * 0.009, spread * 60);
 
     return [candidate(context, {
@@ -69,6 +72,7 @@ export const micropriceOrderBookScalper: StrategyDefinition = {
         `microprice edge ${micropriceEdgeBps.toFixed(3)} bps`,
         `top-book imbalance ${topImbalance.toFixed(2)} and 5-bps depth imbalance ${depthImbalance.toFixed(2)}`,
         `one-minute aggressive-flow ratio ${flow.toFixed(2)}`,
+        'native target is cost-covering under the shared paper execution model',
         'shadow-only because sub-minute signal decay and notification latency require direct measurement',
       ],
       features: {
@@ -84,6 +88,7 @@ export const micropriceOrderBookScalper: StrategyDefinition = {
         flowRatio: flow,
         spread,
         bookFragility: context.orderFlow.bookFragility,
+        nativeTargetRiskMultiple: 5,
       },
     })];
   },

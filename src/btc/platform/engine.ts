@@ -220,12 +220,20 @@ export class BtcMultiStrategyEngine {
       actionablePlan: RiskPlan;
       researchPlan: RiskPlan;
     }> = [];
+    const evidenceByVersion = new Map(this.performance.map(item => [
+      `${item.strategyId}:${item.strategyVersion}`,
+      item,
+    ]));
     for (const candidate of candidates) {
       const inserted = await persistCandidate(candidate);
       if (!inserted) continue;
       fresh.push({
         candidate,
-        actionablePlan: solveRiskPlan(context, candidate),
+        actionablePlan: solveRiskPlan(
+          context,
+          candidate,
+          evidenceByVersion.get(`${candidate.strategyId}:${candidate.strategyVersion}`) || null,
+        ),
         researchPlan: solveResearchRiskPlan(context, candidate),
       });
     }
