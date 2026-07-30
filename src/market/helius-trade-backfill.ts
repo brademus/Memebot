@@ -4,13 +4,28 @@ import { getStreamMode } from '../ingest/pumpfun';
 import { activeTokens } from '../store';
 import { TokenRecord, TradeEvent } from '../types';
 import { recordTradeEvent } from './trade-events';
+import { openTimedEntryCasAll } from '../paper/open-positions-cache';
 
 const WINDOW_MS = 5 * 60_000;
-const POLL_INTERVAL_MS = 30_000;
-// The fallback consumes the Enhanced API budget. At the safe 2 RPS default,
-// 24 tokens per 30-second sweep uses at most 0.8 RPS and leaves capacity for
-// bundle, entity-graph, wallet-quality, and foreground requests.
-const MAX_TOKENS_PER_SWEEP = 24;
+const POLL_INTERVAL_MS = 60_000;
+// COST DISCIPLINE (2026-07-30): each backfill call is an enhanced request
+// (~100 estimated credits). The original 24-tokens-per-30s design burned
+// 4,800 credits/minute — it emptied the new 30k/day budget in six minutes and
+// spent the entire PumpPortal outage torching the account. The fallback now
+// exists ONLY to protect open positions during a genuine, sustained outage:
+// full mode polls nothing (the paid stream + dexscreener cover marks; enhanced
+// credits are reserved for insider/bundle edge checks), lite mode polls open
+// timed-entry positions first, six per minute, and nothing runs during the
+// boot transient or until lite has persisted for five continuous minutes.
+const MAX_TOKENS_PER_SWEEP = 6;
+const BOOT_GRACE_MS = 10 * 60_000;
+const SUSTAINED_LITE_MS = 5 * 60_000;
+const bootAt = Date.now();
+let liteSince: number | null = null;
+setInterval(() => {
+  if (getStreamMode() === 'lite') { if (liteSince === null) liteSince = Date.now(); }
+  else liteSince = null;
+}, 15_000).unref?.();
 const lastPoll = new Map<string, number>();
 let running = false;
 let started = false;
@@ -47,7 +62,7 @@ export function startHeliusTradeBackfill() {
     diag.lastError = (error as Error).message;
     console.error('[helius-trades]', diag.lastError);
   });
-  const initial = setTimeout(run, 18_000);
+  const initial = setTimeout(run, BOOT_GRACE_MS);
   initial.unref();
   const timer = setInterval(run, POLL_INTERVAL_MS);
   timer.unref();
@@ -60,18 +75,22 @@ async function sweep() {
   diag.lastError = null;
   try {
     const now = Date.now();
-    // Do not require a high score here. In lite mode the missing trade sequence is
-    // itself what suppresses organic/buy-pressure score components. Polling only high
-    // scores creates a circular starvation condition.
+    // Enhanced polling is justified ONLY during a sustained outage, past the boot
+    // transient. Full mode: the paid stream carries trade sequence; poll nothing.
+    if (now - bootAt < BOOT_GRACE_MS) return;
+    if (getStreamMode() !== 'lite' || liteSince === null || now - liteSince < SUSTAINED_LITE_MS) return;
+    const openPositions = new Set(openTimedEntryCasAll());
     const candidates = activeTokens()
       .filter(token => token.dex === 'pumpfun' && token.priceUsd > 0 && (token.curveSol > 0 || token.vol5m > 0))
       .filter(token => {
         const last = lastPoll.get(token.ca) || 0;
-        if (now - last < POLL_INTERVAL_MS - 1_000) return false;
-        const latest = token.recentTrades[token.recentTrades.length - 1]?.at || 0;
-        return getStreamMode() === 'lite' || now - latest > 75_000;
+        return now - last >= POLL_INTERVAL_MS - 1_000;
       })
-      .sort((left, right) => (right.score + Math.log1p(right.vol5m)) - (left.score + Math.log1p(left.vol5m)))
+      .sort((left, right) => {
+        const openPriority = Number(openPositions.has(right.ca)) - Number(openPositions.has(left.ca));
+        if (openPriority) return openPriority;
+        return (right.score + Math.log1p(right.vol5m)) - (left.score + Math.log1p(left.vol5m));
+      })
       .slice(0, MAX_TOKENS_PER_SWEEP);
 
     // Small batches avoid constructing a large promise burst before the shared
