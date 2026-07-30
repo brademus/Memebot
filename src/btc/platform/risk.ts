@@ -42,6 +42,11 @@ function priceMovePct(entry: number, exit: number): number {
   return entry > 0 ? Math.abs(exit - entry) / entry : Infinity;
 }
 
+export function stopIsDirectional(entry: number, stop: number, direction: BtcDirection): boolean {
+  if (!(entry > 0 && stop > 0)) return false;
+  return direction === 'long' ? stop < entry : stop > entry;
+}
+
 function directionalTarget(entry: number, movePct: number, direction: BtcDirection): number {
   return direction === 'long' ? entry * (1 + movePct) : entry * (1 - movePct);
 }
@@ -153,6 +158,9 @@ export function solveRiskPlan(
   if (candidateConfidence(candidate) < 68) initialReasons.push('combined candidate confidence is below 68');
   if (candidate.expiresAt <= context.timestamp) initialReasons.push('candidate expired before risk approval');
   const stopDistancePct = priceMovePct(candidate.preferredEntry, candidate.structuralStop);
+  if (!stopIsDirectional(candidate.preferredEntry, candidate.structuralStop, candidate.direction)) {
+    initialReasons.push('structural stop is on the wrong side of entry');
+  }
   if (!(stopDistancePct > 0 && stopDistancePct < 0.05)) initialReasons.push('structural stop distance is invalid');
   if (initialReasons.length) return genericReject([...new Set(initialReasons)]);
 

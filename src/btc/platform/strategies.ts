@@ -373,7 +373,7 @@ const derivativesSqueeze: StrategyDefinition = {
 
 const orderFlowAbsorption: StrategyDefinition = {
   id: 'btc-orderflow-absorption',
-  version: '0.1.0-shadow',
+  version: '0.2.0-shadow',
   name: 'Order-Flow Absorption Continuation',
   description: 'Shadow-only microstructure model using aggressive flow, replenishment proxies and multi-level depth imbalance.',
   mode: 'shadow',
@@ -394,7 +394,11 @@ const orderFlowAbsorption: StrategyDefinition = {
     if (!latest) return [];
     const atr = averageTrueRange(candles, 20);
     const entry = currentPrice(context, direction);
-    const stop = direction === 'long' ? latest.low - atr * 0.2 : latest.high + atr * 0.2;
+    const rawStop = direction === 'long' ? latest.low - atr * 0.2 : latest.high + atr * 0.2;
+    const minimumStopDistance = Math.max(atr * 0.35, entry * 0.00035);
+    const stop = direction === 'long'
+      ? Math.min(rawStop, entry - minimumStopDistance)
+      : Math.max(rawStop, entry + minimumStopDistance);
     const initialTarget = targetFromRisk(entry, stop, direction, 3.1);
     return [candidate(context, {
       strategyId: this.id, strategyVersion: this.version, strategyName: this.name, mode: this.mode,
@@ -415,7 +419,15 @@ const orderFlowAbsorption: StrategyDefinition = {
         `one-minute aggressive-flow ratio ${flow.toFixed(2)}`,
         'shadow-only until alert-latency and event-level fills are validated',
       ],
-      features: { absorption, depth, flow, bookFragility: context.orderFlow.bookFragility, atr },
+      features: {
+        absorption,
+        depth,
+        flow,
+        bookFragility: context.orderFlow.bookFragility,
+        atr,
+        rawStop,
+        minimumStopDistance,
+      },
     })];
   },
 };
