@@ -81,7 +81,7 @@ addition = marker + """
       CASE WHEN $3='open' THEN NULL ELSE now() END,
       CASE WHEN $3='open' THEN 0 ELSE $4 END,
       CASE WHEN $3='open' THEN $4 ELSE 0 END,
-      $4,$4,COALESCE($5,0),$5,1.5,-1,1,false,0,0,now(),now(),'[]','{}')`,
+      $4,$4,COALESCE($5::numeric,0),$5::numeric,1.5,-1,1,false,0,0,now(),now(),'[]','{}')`,
   [id, book, status, netPnlUsd, resultR]);
 
   await insertPerformanceCall('research-b-win', 'research', 'won', 12, 1.2);
