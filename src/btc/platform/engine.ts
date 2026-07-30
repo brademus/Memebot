@@ -15,6 +15,7 @@ import {
   updateCall,
 } from './ledger';
 import { assessPortfolioAdmission, DEFAULT_PORTFOLIO_LIMITS, solveRiskPlan } from './risk';
+import { solveResearchRiskPlan } from './research-risk';
 import { BTC_STRATEGIES } from './strategy-registry';
 import {
   CallBook,
@@ -214,21 +215,36 @@ export class BtcMultiStrategyEngine {
       }
     });
     this.latestCandidates = candidates.slice(0, 30);
-    const fresh: Array<{ candidate: StrategyCandidate; plan: RiskPlan }> = [];
+    const fresh: Array<{
+      candidate: StrategyCandidate;
+      actionablePlan: RiskPlan;
+      researchPlan: RiskPlan;
+    }> = [];
     for (const candidate of candidates) {
       const inserted = await persistCandidate(candidate);
       if (!inserted) continue;
-      const plan = solveRiskPlan(context, candidate);
-      fresh.push({ candidate, plan });
+      fresh.push({
+        candidate,
+        actionablePlan: solveRiskPlan(context, candidate),
+        researchPlan: solveResearchRiskPlan(context, candidate),
+      });
     }
 
-    const actionable = this.selectActionable(fresh);
+    const actionable = this.selectActionable(fresh.map(item => ({
+      candidate: item.candidate,
+      plan: item.actionablePlan,
+    })));
     const selectedIds = new Set(actionable.map(item => item.candidate.id));
     for (const item of fresh.filter(item => item.candidate.mode === 'actionable' && !selectedIds.has(item.candidate.id))) {
-      await persistRiskDecision(item.candidate, 'actionable', item.plan, ['not selected by duplicate/conflict coordinator']);
+      await persistRiskDecision(
+        item.candidate,
+        'actionable',
+        item.actionablePlan,
+        ['not selected by duplicate/conflict coordinator'],
+      );
     }
     for (const item of actionable) await this.armActionable(item.candidate, item.plan, item.supporting);
-    for (const item of fresh) await this.armResearch(item.candidate, item.plan);
+    for (const item of fresh) await this.armResearch(item.candidate, item.researchPlan);
   }
 
   private async fillArmed(context: MarketContext): Promise<void> {
