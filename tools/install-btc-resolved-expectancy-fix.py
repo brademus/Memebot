@@ -87,7 +87,9 @@ addition = marker + """
   await insertPerformanceCall('research-b-win', 'research', 'won', 12, 1.2);
   await insertPerformanceCall('research-b-loss', 'research', 'lost', -4, -0.5);
   await insertPerformanceCall('research-b-open', 'research', 'open', 500, null);
-  await insertPerformanceCall('action-b-legacy-win', 'actionable', 'won', 1000, 10);
+  await db.query(`UPDATE btc_paper_calls SET status='won',closed_at=now(),realized_pnl_usd=1000,
+    unrealized_pnl_usd=0,net_pnl_usd=1000,roi_pct=1000,current_r=10,result_r=10
+    WHERE call_id='action-2'`);
 
   const [performance] = await strategyPerformance([{
     id: 'strategy-b',
