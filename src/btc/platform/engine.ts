@@ -56,6 +56,11 @@ function canFill(context: MarketContext, armed: ArmedCandidate): boolean {
   if (candidate.direction === 'long' && price > candidate.doNotChasePrice) return false;
   if (candidate.direction === 'short' && price < candidate.doNotChasePrice) return false;
   if (candidate.entryMethod === 'market') return true;
+  if (candidate.entryMethod === 'stop') {
+    return candidate.direction === 'long'
+      ? price >= candidate.preferredEntry && price <= candidate.doNotChasePrice
+      : price <= candidate.preferredEntry && price >= candidate.doNotChasePrice;
+  }
   return price >= candidate.entryZoneLow && price <= candidate.entryZoneHigh;
 }
 
@@ -156,20 +161,34 @@ export class BtcMultiStrategyEngine {
     return candidate.createdAt - recent.openedAt < cooldownMinutes * 60_000;
   }
 
-  private async armResearch(candidate: StrategyCandidate, plan: RiskPlan): Promise<void> {
-    if (!plan.approved) return;
+  private hasResearchExposure(): boolean {
+    const active = this.activeCalls.some(call => call.book === 'research' && activeStates.has(call.status));
+    const armed = [...this.armed.values()].some(item => item.book === 'research');
+    return active || armed;
+  }
+
+  private async armResearch(candidate: StrategyCandidate, plan: RiskPlan): Promise<boolean> {
+    if (!plan.approved) {
+      await persistRiskDecision(candidate, 'research', plan, plan.rejectionReasons);
+      return false;
+    }
+    if (this.hasResearchExposure()) {
+      await persistRiskDecision(candidate, 'research', plan, ['global research exposure is already active or armed']);
+      return false;
+    }
     if (this.strategyHasActiveResearch(candidate.strategyId)) {
       await persistRiskDecision(candidate, 'research', plan, ['research strategy already has an active call']);
-      return;
+      return false;
     }
     if (this.strategyCooldownActive(candidate)) {
       await persistRiskDecision(candidate, 'research', plan, ['strategy cooldown is active']);
-      return;
+      return false;
     }
     await persistRiskDecision(candidate, 'research', plan);
     this.armed.set(`research:${candidate.id}`, {
       candidate, plan, book: 'research', supportingStrategies: [candidate.strategyId], armedAt: candidate.createdAt,
     });
+    return true;
   }
 
   private selectActionable(candidates: Array<{ candidate: StrategyCandidate; plan: RiskPlan }>): Array<{ candidate: StrategyCandidate; plan: RiskPlan; supporting: string[] }> {
@@ -271,7 +290,26 @@ export class BtcMultiStrategyEngine {
       );
     }
     for (const item of actionable) await this.armActionable(item.candidate, item.plan, item.supporting);
-    for (const item of fresh) await this.armResearch(item.candidate, item.researchPlan);
+
+    const actionableCandidateIds = new Set(actionable.map(item => item.candidate.id));
+    const researchPool = fresh
+      .filter(item => !actionableCandidateIds.has(item.candidate.id))
+      .filter(item => item.candidate.mode === 'shadow' || !item.actionablePlan.approved)
+      .sort((a, b) => combinedConfidence(b.candidate) - combinedConfidence(a.candidate));
+    let selectedResearch = false;
+    for (const item of researchPool) {
+      if (!item.researchPlan.approved) {
+        await persistRiskDecision(item.candidate, 'research', item.researchPlan, item.researchPlan.rejectionReasons);
+        continue;
+      }
+      if (!selectedResearch && !this.hasResearchExposure()) {
+        selectedResearch = await this.armResearch(item.candidate, item.researchPlan);
+        if (selectedResearch) continue;
+      }
+      await persistRiskDecision(item.candidate, 'research', item.researchPlan, [
+        'not selected by global research event coordinator; correlated market exposure already selected',
+      ]);
+    }
   }
 
   private async fillArmed(context: MarketContext): Promise<void> {
@@ -286,9 +324,25 @@ export class BtcMultiStrategyEngine {
         this.armed.delete(key);
         continue;
       }
+      const fillPrice = executableEntry(context, armed.candidate);
+      const repricedCandidate: StrategyCandidate = { ...armed.candidate, preferredEntry: fillPrice };
+      const evidence = this.performance.find(item => item.strategyId === repricedCandidate.strategyId
+        && item.strategyVersion === repricedCandidate.strategyVersion) || null;
+      const repricedPlan = armed.book === 'research'
+        ? solveResearchRiskPlan(context, repricedCandidate)
+        : solveRiskPlan(context, repricedCandidate, evidence);
+      if (!repricedPlan.approved) {
+        this.armed.delete(key);
+        await persistRiskDecision(repricedCandidate, armed.book, repricedPlan, [
+          ...repricedPlan.rejectionReasons,
+          'actual executable fill failed risk revalidation',
+        ]);
+        await markCandidateDecision(armed.candidate.id, 'cancelled', 'actual executable fill failed risk revalidation');
+        continue;
+      }
       const { call, event } = createPaperCall(
-        armed.candidate,
-        armed.plan,
+        repricedCandidate,
+        repricedPlan,
         context,
         armed.book,
         armed.supportingStrategies,

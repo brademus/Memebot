@@ -7,6 +7,7 @@ import {
 import { clamp, safeDiv } from './indicators';
 import {
   DEFAULT_COST_MODEL,
+  DEFAULT_MAX_COST_TO_GROSS_RISK,
   DEFAULT_RESEARCH_MAX_PLANNED_LOSS_USD,
   PAPER_MARGIN_USD,
   PLATFORM_MAX_LEVERAGE,
@@ -156,6 +157,7 @@ export function solveResearchRiskPlan(
   const maxPlannedLoss = numberSetting('BTC_RESEARCH_MAX_PLANNED_LOSS_USD', DEFAULT_RESEARCH_MAX_PLANNED_LOSS_USD);
   const minimumNetRoiPct = numberSetting('BTC_RESEARCH_MIN_NET_ROI_PCT', DEFAULT_RESEARCH_MIN_NET_ROI_PCT);
   const minimumNetRR = numberSetting('BTC_RESEARCH_MIN_NET_RR', DEFAULT_RESEARCH_MIN_NET_RR);
+  const maximumCostToGrossRisk = numberSetting('BTC_MAX_COST_TO_GROSS_RISK', DEFAULT_MAX_COST_TO_GROSS_RISK);
   const targetDistancePct = priceMovePct(candidate.preferredEntry, targetPrice);
   const failures = new Set<string>();
 
@@ -171,6 +173,12 @@ export function solveResearchRiskPlan(
     const estimatedRewardUsd = notionalUsd * targetDistancePct - Math.max(0, costs.totalEstimatedUsd);
     if (!(estimatedRewardUsd > 0)) {
       failures.add('native strategy target does not remain profitable after estimated costs');
+      continue;
+    }
+    const grossRiskUsd = notionalUsd * stopDistancePct;
+    const costToGrossRisk = safeDiv(Math.max(0, costs.totalEstimatedUsd), grossRiskUsd, Infinity);
+    if (!(grossRiskUsd > 0) || costToGrossRisk > maximumCostToGrossRisk) {
+      failures.add(`modeled round-trip friction exceeds ${(maximumCostToGrossRisk * 100).toFixed(0)}% of gross structural risk`);
       continue;
     }
     const estimatedNetRR = safeDiv(estimatedRewardUsd, estimatedRiskUsd, 0);

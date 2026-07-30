@@ -68,8 +68,7 @@ let predictedFundingRate = 0;
 let nextFundingAt: number | null = null;
 let openInterest = 0;
 let openInterestValue = 0;
-let openInterestBaseline = 0;
-let openInterestBaselineAt = 0;
+const openInterestObservations: Array<{ at: number; value: number }> = [];
 let evaluation = Promise.resolve();
 let pingTimer: NodeJS.Timeout | null = null;
 let evaluationTimer: NodeJS.Timeout | null = null;
@@ -101,6 +100,28 @@ function prune(): void {
   while (trades.length && trades[0].at < cutoff) trades.shift();
   while (liquidations.length && liquidations[0].at < cutoff) liquidations.shift();
   while (ethObservations.length && ethObservations[0].at < crossAssetCutoff) ethObservations.shift();
+  const oiCutoff = Date.now() - 90 * 60_000;
+  while (openInterestObservations.length && openInterestObservations[0].at < oiCutoff) openInterestObservations.shift();
+}
+
+function recordOpenInterest(value: number, at = Date.now()): void {
+  if (!(value > 0 && Number.isFinite(at))) return;
+  const latest = openInterestObservations.at(-1);
+  if (latest && at - latest.at < 5_000) {
+    latest.at = at;
+    latest.value = value;
+  } else {
+    openInterestObservations.push({ at, value });
+  }
+  const cutoff = at - 90 * 60_000;
+  while (openInterestObservations.length && openInterestObservations[0].at < cutoff) openInterestObservations.shift();
+}
+
+function rollingOpenInterestChangePct(minutes = 15, now = Date.now()): number {
+  const target = now - minutes * 60_000;
+  const baseline = [...openInterestObservations].reverse().find(item => item.at <= target)
+    || openInterestObservations[0];
+  return baseline?.value > 0 && openInterest > 0 ? (openInterest / baseline.value - 1) * 100 : 0;
 }
 
 function updateCandle(interval: number, price: number, size: number, at: number, direction: BtcDirection): void {
@@ -187,12 +208,9 @@ function parseBybit(raw: WebSocket.RawData): void {
     nextFundingAt = numeric(row.nextFundingTime) ?? nextFundingAt;
     const nextOi = numeric(row.openInterest) ?? openInterest;
     const nextOiValue = numeric(row.openInterestValue) ?? openInterestValue;
-    if (!openInterestBaseline || now - openInterestBaselineAt > 15 * 60_000) {
-      openInterestBaseline = nextOi;
-      openInterestBaselineAt = now;
-    }
     openInterest = nextOi;
     openInterestValue = nextOiValue;
+    recordOpenInterest(nextOi, now);
     latestBybitAt = now;
     return;
   }
@@ -484,14 +502,17 @@ function sortedLevels(map: Map<number, number>, direction: 'bids' | 'asks', coun
     .map(([price, size]) => ({ price, size }));
 }
 
-function flowSince(milliseconds: number, source: 'perp' | 'spot' | 'all' = 'all'): { buy: number; sell: number; movePct: number } {
+function flowSince(milliseconds: number, source: 'perp' | 'spot' | 'all' = 'all'): {
+  buy: number; sell: number; movePct: number; signedMovePct: number;
+} {
   const cutoff = Date.now() - milliseconds;
   const sample = trades.filter(trade => trade.at >= cutoff && (source === 'all' || trade.source === source));
   const buy = sample.filter(trade => trade.direction === 'long').reduce((sum, trade) => sum + trade.usd, 0);
   const sell = sample.filter(trade => trade.direction === 'short').reduce((sum, trade) => sum + trade.usd, 0);
   const first = sample[0]?.price || 0;
   const final = sample.at(-1)?.price || first;
-  return { buy, sell, movePct: first > 0 ? Math.abs(final - first) / first * 100 : 0 };
+  const signedMovePct = first > 0 ? (final / first - 1) * 100 : 0;
+  return { buy, sell, movePct: Math.abs(signedMovePct), signedMovePct };
 }
 
 function orderFlowState(): OrderFlowState {
@@ -510,9 +531,28 @@ function orderFlowState(): OrderFlowState {
   const depthImbalance5Bps = safeDiv(bidDepth - askDepth, bidDepth + askDepth, 0);
   const totalDepth = bidDepth + askDepth;
   const bookFragility = clamp(1 - safeDiv(totalDepth, Math.max(five.buy + five.sell, 1), 0), 0, 1);
-  const flowImbalance = Math.abs(safeDiv(one.buy - one.sell, one.buy + one.sell, 0));
+  const signedFlowImbalance = safeDiv(one.buy - one.sell, one.buy + one.sell, 0);
+  const flowImbalance = Math.abs(signedFlowImbalance);
   const expectedMove = safeDiv(flowImbalance * (one.buy + one.sell), Math.max(totalDepth, 1), 0);
-  const absorptionScore = clamp(flowImbalance * 0.55 + (one.movePct < 0.04 ? 0.3 : 0) + (expectedMove > 1 && one.movePct < 0.08 ? 0.25 : 0), 0, 1);
+  const buyPressure = Math.max(0, signedFlowImbalance);
+  const sellPressure = Math.max(0, -signedFlowImbalance);
+  const buyAbsorptionScore = clamp(
+    buyPressure * 0.45
+      + (buyPressure >= 0.2 && one.signedMovePct <= 0.015 ? 0.25 : 0)
+      + (buyPressure >= 0.2 && one.signedMovePct < 0 ? 0.2 : 0)
+      + Math.max(0, -depthImbalance5Bps) * 0.15,
+    0,
+    1,
+  );
+  const sellAbsorptionScore = clamp(
+    sellPressure * 0.45
+      + (sellPressure >= 0.2 && one.signedMovePct >= -0.015 ? 0.25 : 0)
+      + (sellPressure >= 0.2 && one.signedMovePct > 0 ? 0.2 : 0)
+      + Math.max(0, depthImbalance5Bps) * 0.15,
+    0,
+    1,
+  );
+  const absorptionScore = Math.max(buyAbsorptionScore, sellAbsorptionScore);
   return {
     aggressiveBuyUsd1m: one.buy,
     aggressiveSellUsd1m: one.sell,
@@ -522,6 +562,9 @@ function orderFlowState(): OrderFlowState {
     depthImbalance5Bps,
     bookFragility,
     absorptionScore,
+    signedMovePct1m: one.signedMovePct,
+    buyAbsorptionScore,
+    sellAbsorptionScore,
     bids: bidLevels,
     asks: askLevels,
   };
@@ -580,7 +623,7 @@ function buildContext(): MarketContext | null {
   const now = Date.now();
   const longLiquidationUsd5m = liquidations.filter(item => item.at >= now - 5 * 60_000 && item.side === 'long').reduce((sum, item) => sum + item.usd, 0);
   const shortLiquidationUsd5m = liquidations.filter(item => item.at >= now - 5 * 60_000 && item.side === 'short').reduce((sum, item) => sum + item.usd, 0);
-  const openInterestChangePct = openInterestBaseline > 0 ? (openInterest / openInterestBaseline - 1) * 100 : 0;
+  const openInterestChangePct = rollingOpenInterestChangePct(15, now);
   const base = {
     timestamp: now,
     prices: {

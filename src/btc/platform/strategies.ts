@@ -106,137 +106,145 @@ function directionAllowed(context: MarketContext, direction: BtcDirection): bool
 
 const momentumRetest: StrategyDefinition = {
   id: 'btc-momentum-retest',
-  version: '2.1.0',
-  name: 'Confirmed Momentum Retest',
-  description: 'Requires a completed high-volume impulse, a separate controlled pullback candle, directional reclaim and live flow confirmation.',
+  version: '3.0.0',
+  name: 'Three-Stage Momentum Continuation',
+  description: 'Waits for impulse, meaningful lower-volume pullback, structural reclaim, then a fresh stop trigger instead of buying the completed candle.',
   mode: 'actionable',
-  leverageCap: 18,
+  leverageCap: 10,
   evaluate(context): StrategyCandidate[] {
     if (!context.feed.healthy || context.regime.volatility === 'compressed' || context.regime.volatility === 'extreme'
       || context.regime.liquidity === 'dislocated') return [];
     const candles = complete(context.candles.fifteenMinute);
-    if (candles.length < 36) return [];
-    const impulse = candles.at(-2)!;
-    const retest = candles.at(-1)!;
-    const baseline = candles.slice(-34, -2);
-    const volumeRatio = safeDiv(impulse.volume, median(baseline.map(candle => candle.volume)), 0);
-    const atr = averageTrueRange(candles.slice(0, -1), 14);
+    if (candles.length < 50) return [];
+    const impulse = candles.at(-3)!;
+    const pullback = candles.at(-2)!;
+    const confirmation = candles.at(-1)!;
+    const baseline = candles.slice(-35, -3);
+    const atr = averageTrueRange(candles.slice(0, -2), 14);
     const range = impulse.high - impulse.low;
+    if (!(atr > 0 && range > 0)) return [];
+    const volumeRatio = safeDiv(impulse.volume, median(baseline.map(candle => candle.volume)), 0);
     const rangeRatio = safeDiv(range, atr, 0);
     const closeLocation = safeDiv(impulse.close - impulse.low, range, 0.5);
-    const direction: BtcDirection | null = impulse.close > impulse.open && closeLocation >= 0.78 ? 'long'
-      : impulse.close < impulse.open && closeLocation <= 0.22 ? 'short' : null;
-    if (!direction || !directionAllowed(context, direction) || volumeRatio < 1.6 || rangeRatio < 1.35 || !(atr > 0)) return [];
+    const direction: BtcDirection | null = impulse.close > impulse.open && closeLocation >= 0.8 ? 'long'
+      : impulse.close < impulse.open && closeLocation <= 0.2 ? 'short' : null;
+    if (!direction || !directionAllowed(context, direction) || volumeRatio < 1.5 || rangeRatio < 1.25) return [];
+
+    const retracement = direction === 'long'
+      ? safeDiv(impulse.high - pullback.low, range, 0)
+      : safeDiv(pullback.high - impulse.low, range, 0);
+    const pullbackVolumeRatio = safeDiv(pullback.volume, impulse.volume, 1);
+    if (retracement < 0.35 || retracement > 0.68 || pullbackVolumeRatio > 0.82) return [];
+    const confirmationValid = direction === 'long'
+      ? confirmation.close > pullback.high && confirmation.close > confirmation.open
+      : confirmation.close < pullback.low && confirmation.close < confirmation.open;
+    if (!confirmationValid) return [];
 
     const flow = direction === 'long'
       ? safeDiv(context.orderFlow.aggressiveBuyUsd5m, context.orderFlow.aggressiveSellUsd5m, 0)
       : safeDiv(context.orderFlow.aggressiveSellUsd5m, context.orderFlow.aggressiveBuyUsd5m, 0);
-    if (flow < 1.25) return [];
-    const touched = direction === 'long'
-      ? retest.low <= impulse.low + range * 0.62 && retest.low >= impulse.low - atr * 0.2
-      : retest.high >= impulse.high - range * 0.62 && retest.high <= impulse.high + atr * 0.2;
-    const reclaimed = direction === 'long'
-      ? retest.close >= impulse.low + range * 0.58 && retest.close > retest.open && retest.close > impulse.open
-      : retest.close <= impulse.high - range * 0.58 && retest.close < retest.open && retest.close < impulse.open;
-    if (!touched || !reclaimed) return [];
+    if (flow < 1.15) return [];
+    const preImpulsePosition = rangePosition(candles.slice(0, -3), 32, impulse.open);
+    if ((direction === 'long' && preImpulsePosition > 0.9) || (direction === 'short' && preImpulsePosition < 0.1)) return [];
 
-    const entry = currentPrice(context, direction);
+    const entry = direction === 'long' ? confirmation.high + atr * 0.04 : confirmation.low - atr * 0.04;
     const stop = direction === 'long'
-      ? Math.min(impulse.low, retest.low) - atr * 0.22
-      : Math.max(impulse.high, retest.high) + atr * 0.22;
-    const initialTarget = targetFromRisk(entry, stop, direction, 3.8);
-    const extended = targetFromRisk(entry, stop, direction, 5.5);
-    const signalScore = 64 + (volumeRatio - 1.6) * 14 + (rangeRatio - 1.35) * 12 + Math.max(0, flow - 1.25) * 12;
-    const regimeScore = 70 + Math.abs(context.regime.directionalScore) * 0.25;
-    const executionScore = 92 - (context.feed.spreadBps || 0) * 3 - context.orderFlow.bookFragility * 30;
+      ? Math.min(impulse.low, pullback.low) - atr * 0.18
+      : Math.max(impulse.high, pullback.high) + atr * 0.18;
+    const initialTarget = targetFromRisk(entry, stop, direction, 3.4);
+    const extended = targetFromRisk(entry, stop, direction, 5.2);
     return [candidate(context, {
       strategyId: this.id, strategyVersion: this.version, strategyName: this.name, mode: this.mode,
-      direction, setupType: 'confirmed_impulse_retest', entryMethod: 'retest', preferredEntry: entry,
-      entryZoneLow: entry - atr * 0.1,
-      entryZoneHigh: entry + atr * 0.1,
-      doNotChasePrice: direction === 'long' ? entry + atr * 0.35 : entry - atr * 0.35,
-      expiresAt: context.timestamp + 12 * 60_000, structuralStop: stop, initialTarget,
-      extendedTarget: extended, maximumRealisticTarget: direction === 'long' ? entry + atr * 10 : entry - atr * 10,
+      direction, setupType: 'impulse_pullback_reclaim_trigger', entryMethod: 'stop', preferredEntry: entry,
+      entryZoneLow: entry - atr * 0.02, entryZoneHigh: entry + atr * 0.02,
+      doNotChasePrice: direction === 'long' ? entry + atr * 0.25 : entry - atr * 0.25,
+      expiresAt: context.timestamp + 25 * 60_000, structuralStop: stop, initialTarget,
+      extendedTarget: extended, maximumRealisticTarget: direction === 'long' ? entry + atr * 12 : entry - atr * 12,
       strategyLeverageCap: this.leverageCap, expectedHoldingMinutes: 240, exitModel: 'partial_runner',
-      signalScore, regimeScore, executionScore,
+      signalScore: 68 + (volumeRatio - 1.5) * 12 + (rangeRatio - 1.25) * 10 + Math.max(0, flow - 1.15) * 10,
+      regimeScore: 74 + Math.abs(context.regime.directionalScore) * 0.2,
+      executionScore: 92 - (context.feed.spreadBps || 0) * 3 - context.orderFlow.bookFragility * 30,
       rationale: [
-        `${direction} higher-timeframe regime`,
-        `completed 15m impulse volume ${volumeRatio.toFixed(2)}x baseline`,
-        `separate retest candle reclaimed directional structure`,
+        `${direction} impulse completed before a ${retracement.toFixed(2)} retracement`,
+        `pullback volume was ${pullbackVolumeRatio.toFixed(2)} of impulse volume`,
+        'separate reclaim candle completed; next continuation break is required',
         `directional five-minute flow ratio ${flow.toFixed(2)}`,
       ],
-      features: { volumeRatio, rangeRatio, closeLocation, flowRatio: flow, atr, directionalScore: context.regime.directionalScore,
-        retestLow: retest.low, retestHigh: retest.high, retestClose: retest.close },
+      features: { volumeRatio, rangeRatio, closeLocation, retracement, pullbackVolumeRatio, flowRatio: flow,
+        atr, preImpulsePosition, triggerPrice: entry },
     })];
   },
 };
 
 const compressionBreakout: StrategyDefinition = {
   id: 'btc-compression-breakout',
-  version: '1.1.0',
-  name: 'Confirmed Compression Breakout',
-  description: 'Requires mature compression, a high-participation breakout and a second candle that retests and holds the range boundary.',
+  version: '2.0.0',
+  name: 'Retest-Triggered Compression Breakout',
+  description: 'Requires pre-break compression, bounded acceptance, an actual boundary retest, and a new stop trigger after the retest.',
   mode: 'actionable',
-  leverageCap: 20,
+  leverageCap: 10,
   evaluate(context): StrategyCandidate[] {
     if (!context.feed.healthy || context.regime.liquidity === 'dislocated' || context.regime.volatility === 'extreme') return [];
     const candles = complete(context.candles.fiveMinute);
-    if (candles.length < 52) return [];
+    if (candles.length < 55) return [];
     const breakout = candles.at(-2)!;
-    const confirmation = candles.at(-1)!;
-    const prior = candles.slice(-39, -2);
+    const retest = candles.at(-1)!;
+    const prior = candles.slice(-42, -2);
     const boundarySample = prior.slice(-24);
     const rangeHigh = Math.max(...boundarySample.map(candle => candle.high));
     const rangeLow = Math.min(...boundarySample.map(candle => candle.low));
     const range = rangeHigh - rangeLow;
+    const atr = averageTrueRange(candles.slice(0, -1), 14);
     const compression = compressionScore(candles.slice(0, -2));
     const volumeRatio = safeDiv(breakout.volume, median(prior.slice(-32).map(candle => candle.volume)), 0);
+    if (!(range > 0 && atr > 0) || range < atr * 1.8) return [];
     const direction: BtcDirection | null = breakout.close > rangeHigh && breakout.open <= rangeHigh ? 'long'
       : breakout.close < rangeLow && breakout.open >= rangeLow ? 'short' : null;
-    if (!direction || compression < 0.7 || volumeRatio < 1.5 || !(range > 0)) return [];
+    if (!direction || compression < 0.72 || volumeRatio < 1.7) return [];
     if ((direction === 'long' && context.regime.direction === 'strong_bear')
       || (direction === 'short' && context.regime.direction === 'strong_bull')) return [];
 
     const acceptance = direction === 'long'
       ? safeDiv(breakout.close - rangeHigh, range, 0)
       : safeDiv(rangeLow - breakout.close, range, 0);
-    const held = direction === 'long'
-      ? confirmation.low <= rangeHigh + range * 0.1 && confirmation.close >= rangeHigh + range * 0.03
-        && confirmation.close > confirmation.open
-      : confirmation.high >= rangeLow - range * 0.1 && confirmation.close <= rangeLow - range * 0.03
-        && confirmation.close < confirmation.open;
+    if (acceptance < 0.06 || acceptance > 0.35) return [];
+    const touchedAndHeld = direction === 'long'
+      ? retest.low <= rangeHigh + range * 0.03 && retest.low >= rangeHigh - range * 0.15
+        && retest.close > rangeHigh && retest.close > retest.open
+      : retest.high >= rangeLow - range * 0.03 && retest.high <= rangeLow + range * 0.15
+        && retest.close < rangeLow && retest.close < retest.open;
+    if (!touchedAndHeld) return [];
     const alignedDepth = direction === 'long' ? context.orderFlow.depthImbalance5Bps : -context.orderFlow.depthImbalance5Bps;
     const flow = direction === 'long'
       ? safeDiv(context.orderFlow.aggressiveBuyUsd5m, context.orderFlow.aggressiveSellUsd5m, 0)
       : safeDiv(context.orderFlow.aggressiveSellUsd5m, context.orderFlow.aggressiveBuyUsd5m, 0);
-    if (acceptance < 0.08 || !held || alignedDepth < 0.15 || flow < 1.2) return [];
+    if (alignedDepth < 0.05 || flow < 1.1) return [];
 
-    const entry = currentPrice(context, direction);
+    const entry = direction === 'long' ? retest.high + atr * 0.03 : retest.low - atr * 0.03;
     const stop = direction === 'long'
-      ? Math.min(rangeHigh - range * 0.22, confirmation.low - range * 0.04)
-      : Math.max(rangeLow + range * 0.22, confirmation.high + range * 0.04);
-    const initialTarget = targetFromRisk(entry, stop, direction, 4);
-    const extended = targetFromRisk(entry, stop, direction, 6);
+      ? Math.min(rangeHigh - range * 0.2, retest.low - atr * 0.08)
+      : Math.max(rangeLow + range * 0.2, retest.high + atr * 0.08);
+    const initialTarget = targetFromRisk(entry, stop, direction, 3.5);
+    const extended = targetFromRisk(entry, stop, direction, 5.5);
     return [candidate(context, {
       strategyId: this.id, strategyVersion: this.version, strategyName: this.name, mode: this.mode,
-      direction, setupType: 'confirmed_compression_acceptance', entryMethod: 'retest', preferredEntry: entry,
-      entryZoneLow: entry - range * 0.04,
-      entryZoneHigh: entry + range * 0.04,
-      doNotChasePrice: direction === 'long' ? entry + range * 0.18 : entry - range * 0.18,
-      expiresAt: context.timestamp + 15 * 60_000, structuralStop: stop, initialTarget,
-      extendedTarget: extended, maximumRealisticTarget: direction === 'long' ? entry + range * 2.8 : entry - range * 2.8,
+      direction, setupType: 'compression_break_retest_trigger', entryMethod: 'stop', preferredEntry: entry,
+      entryZoneLow: entry - atr * 0.02, entryZoneHigh: entry + atr * 0.02,
+      doNotChasePrice: direction === 'long' ? entry + atr * 0.22 : entry - atr * 0.22,
+      expiresAt: context.timestamp + 20 * 60_000, structuralStop: stop, initialTarget,
+      extendedTarget: extended, maximumRealisticTarget: direction === 'long' ? entry + range * 3.2 : entry - range * 3.2,
       strategyLeverageCap: this.leverageCap, expectedHoldingMinutes: 180, exitModel: 'partial_runner',
-      signalScore: 66 + compression * 15 + (volumeRatio - 1.5) * 14 + alignedDepth * 14 + Math.max(0, flow - 1.2) * 8,
-      regimeScore: context.regime.volatility === 'compressed' ? 94 : 78,
-      executionScore: 90 - (context.feed.spreadBps || 0) * 3 - context.orderFlow.bookFragility * 25,
+      signalScore: 70 + compression * 12 + (volumeRatio - 1.7) * 12 + alignedDepth * 10 + Math.max(0, flow - 1.1) * 8,
+      regimeScore: context.regime.volatility === 'compressed' ? 94 : 80,
+      executionScore: 92 - (context.feed.spreadBps || 0) * 3 - context.orderFlow.bookFragility * 28,
       rationale: [
-        `five-minute compression score ${compression.toFixed(2)}`,
+        `pre-break compression score ${compression.toFixed(2)}`,
         `${direction} breakout accepted ${(acceptance * 100).toFixed(1)}% beyond the range`,
-        `second candle retested and held the boundary`,
-        `breakout volume ${volumeRatio.toFixed(2)}x baseline with depth ${alignedDepth.toFixed(2)}`,
+        'completed candle touched and held the broken boundary',
+        'a new continuation break is required before entry',
       ],
       features: { compression, volumeRatio, acceptance, rangeHigh, rangeLow, alignedDepth, flowRatio: flow,
-        confirmationClose: confirmation.close },
+        atr, triggerPrice: entry, retestClose: retest.close },
     })];
   },
 };
@@ -406,26 +414,25 @@ const derivativesSqueeze: StrategyDefinition = {
 
 const orderFlowAbsorption: StrategyDefinition = {
   id: 'btc-orderflow-absorption',
-  version: '0.3.0-shadow',
-  name: 'Confirmed Order-Flow Absorption',
-  description: 'Research-only continuation model requiring stable depth, extreme absorption, persistent aggressive flow and a completed price break before a retest entry.',
+  version: '0.4.0-shadow',
+  name: 'Trapped-Aggressor Absorption Reversal',
+  description: 'Treats heavy aggressive flow that fails to move price as trapped pressure and enters only after price breaks the opposite way.',
   mode: 'shadow',
-  leverageCap: 15,
+  leverageCap: 8,
   evaluate(context): StrategyCandidate[] {
     if (!context.feed.healthy || !context.feed.derivativesHealthy
       || !['deep', 'normal'].includes(context.regime.liquidity)
-      || context.regime.event !== 'normal' || context.orderFlow.bookFragility > 0.3) return [];
-    const absorption = context.orderFlow.absorptionScore;
+      || context.regime.event !== 'normal' || context.orderFlow.bookFragility > 0.2
+      || Math.abs(context.regime.directionalScore) > 35) return [];
+    const buyAbsorption = context.orderFlow.buyAbsorptionScore ?? 0;
+    const sellAbsorption = context.orderFlow.sellAbsorptionScore ?? 0;
     const depth = context.orderFlow.depthImbalance5Bps;
-    const buy = context.orderFlow.aggressiveBuyUsd1m;
-    const sell = context.orderFlow.aggressiveSellUsd1m;
-    const flow = safeDiv(buy, sell, 1);
+    const totalFlow = context.orderFlow.aggressiveBuyUsd1m + context.orderFlow.aggressiveSellUsd1m;
+    if (totalFlow < 500_000) return [];
     let direction: BtcDirection | null = null;
-    if (absorption >= 0.8 && depth >= 0.5 && flow >= 2) direction = 'long';
-    if (absorption >= 0.8 && depth <= -0.5 && flow <= 0.5) direction = 'short';
+    if (buyAbsorption >= 0.65 && depth <= -0.15) direction = 'short';
+    if (sellAbsorption >= 0.65 && depth >= 0.15) direction = 'long';
     if (!direction) return [];
-    if ((direction === 'long' && ['bear', 'strong_bear'].includes(context.regime.direction))
-      || (direction === 'short' && ['bull', 'strong_bull'].includes(context.regime.direction))) return [];
 
     const candles = complete(context.candles.oneMinute);
     const latest = candles.at(-1);
@@ -433,37 +440,36 @@ const orderFlowAbsorption: StrategyDefinition = {
     if (!latest || !previous) return [];
     const atr = averageTrueRange(candles, 20);
     if (!(atr > 0)) return [];
-    const confirmed = direction === 'long'
-      ? latest.close > previous.high && latest.close > latest.open && latest.close >= latest.high - (latest.high - latest.low) * 0.35
-      : latest.close < previous.low && latest.close < latest.open && latest.close <= latest.low + (latest.high - latest.low) * 0.35;
-    if (!confirmed) return [];
+    const reversalBreak = direction === 'long'
+      ? latest.close > previous.high && latest.close > latest.open
+      : latest.close < previous.low && latest.close < latest.open;
+    if (!reversalBreak) return [];
 
-    const entry = direction === 'long' ? previous.high : previous.low;
+    const entry = direction === 'long' ? latest.high + atr * 0.04 : latest.low - atr * 0.04;
     const stop = direction === 'long'
-      ? Math.min(previous.low, latest.low) - atr * 0.25
-      : Math.max(previous.high, latest.high) + atr * 0.25;
-    const initialTarget = targetFromRisk(entry, stop, direction, 4.5);
+      ? Math.min(previous.low, latest.low) - atr * 0.22
+      : Math.max(previous.high, latest.high) + atr * 0.22;
+    const initialTarget = targetFromRisk(entry, stop, direction, 3.6);
     return [candidate(context, {
       strategyId: this.id, strategyVersion: this.version, strategyName: this.name, mode: this.mode,
-      direction, setupType: 'confirmed_absorption_break_retest', entryMethod: 'retest', preferredEntry: entry,
-      entryZoneLow: entry - atr * 0.12,
-      entryZoneHigh: entry + atr * 0.12,
-      doNotChasePrice: direction === 'long' ? entry + atr * 0.45 : entry - atr * 0.45,
-      expiresAt: context.timestamp + 6 * 60_000, structuralStop: stop, initialTarget,
-      extendedTarget: targetFromRisk(entry, stop, direction, 6.5),
-      maximumRealisticTarget: direction === 'long' ? entry + atr * 14 : entry - atr * 14,
+      direction, setupType: 'trapped_aggressor_reversal_trigger', entryMethod: 'stop', preferredEntry: entry,
+      entryZoneLow: entry - atr * 0.02, entryZoneHigh: entry + atr * 0.02,
+      doNotChasePrice: direction === 'long' ? entry + atr * 0.2 : entry - atr * 0.2,
+      expiresAt: context.timestamp + 5 * 60_000, structuralStop: stop, initialTarget,
+      extendedTarget: targetFromRisk(entry, stop, direction, 5.5),
+      maximumRealisticTarget: direction === 'long' ? entry + atr * 12 : entry - atr * 12,
       strategyLeverageCap: this.leverageCap, expectedHoldingMinutes: 45, exitModel: 'partial_runner',
-      signalScore: 65 + absorption * 20 + Math.min(12, Math.abs(depth) * 15) + Math.min(10, Math.abs(Math.log(Math.max(flow, 0.01))) * 6),
-      regimeScore: context.regime.direction === 'range' ? 78 : 84,
-      executionScore: 94 - context.orderFlow.bookFragility * 45 - (context.feed.spreadBps || 0) * 5,
+      signalScore: 72 + Math.max(buyAbsorption, sellAbsorption) * 18 + Math.abs(depth) * 10,
+      regimeScore: context.regime.direction === 'range' ? 94 : 80,
+      executionScore: 96 - context.orderFlow.bookFragility * 55 - (context.feed.spreadBps || 0) * 5,
       rationale: [
-        `absorption score ${absorption.toFixed(2)}`,
-        `stable five-basis-point depth imbalance ${depth.toFixed(2)}`,
-        `one-minute aggressive-flow ratio ${flow.toFixed(2)}`,
-        'completed one-minute price break must retest before entry',
+        `${direction === 'short' ? 'buy' : 'sell'} aggressors failed to produce directional price progress`,
+        `directional absorption score ${Math.max(buyAbsorption, sellAbsorption).toFixed(2)}`,
+        `opposing depth imbalance ${depth.toFixed(2)}`,
+        'price broke opposite the trapped aggressive side; a fresh trigger is still required',
       ],
-      features: { absorption, depth, flow, bookFragility: context.orderFlow.bookFragility, atr,
-        confirmationClose: latest.close, retestLevel: entry },
+      features: { buyAbsorption, sellAbsorption, depth, totalFlow, signedMovePct1m: context.orderFlow.signedMovePct1m ?? 0,
+        atr, triggerPrice: entry },
     })];
   },
 };

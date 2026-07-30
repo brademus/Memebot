@@ -71,6 +71,9 @@ export interface OrderFlowState {
   depthImbalance5Bps: number;
   bookFragility: number;
   absorptionScore: number;
+  signedMovePct1m?: number;
+  buyAbsorptionScore?: number;
+  sellAbsorptionScore?: number;
   bids: BookLevel[];
   asks: BookLevel[];
 }
