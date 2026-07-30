@@ -45,9 +45,9 @@ replace_exact(
 )
 replace_exact(
     'public/btc-dashboard.js',
-    """        <div class=\"metric\"><small>Projected policy</small><b>${call.book === 'actionable' ? escapeHtml(alertTier === 'a_plus' ? 'A+ PREMIUM' : 'STANDARD') : 'RESEARCH'} · ${number(call.features?.estimatedTargetRoiPct, 1)}% / ${number(call.features?.estimatedNetRR)}R</b></div>
+    """        <div class="metric"><small>Projected policy</small><b>${call.book === 'actionable' ? escapeHtml(alertTier === 'a_plus' ? 'A+ PREMIUM' : 'STANDARD') : 'RESEARCH'} · ${number(call.features?.estimatedTargetRoiPct, 1)}% / ${number(call.features?.estimatedNetRR)}R</b></div>
 """,
-    """        <div class=\"metric\"><small>Projected policy</small><b>${call.book === 'actionable' ? escapeHtml(alertTier === 'a_plus' ? 'A+ PREMIUM' : alertTier === 'standard' ? 'STANDARD' : 'LEGACY PRE-POLICY') : 'RESEARCH'} · ${number(call.features?.estimatedTargetRoiPct, 1)}% / ${number(call.features?.estimatedNetRR)}R</b></div>
+    """        <div class="metric"><small>Projected policy</small><b>${call.book === 'actionable' ? escapeHtml(alertTier === 'a_plus' ? 'A+ PREMIUM' : alertTier === 'standard' ? 'STANDARD' : 'LEGACY PRE-POLICY') : 'RESEARCH'} · ${number(call.features?.estimatedTargetRoiPct, 1)}% / ${number(call.features?.estimatedNetRR)}R</b></div>
 """,
 )
 
@@ -81,7 +81,7 @@ addition = marker + """
       CASE WHEN $3='open' THEN NULL ELSE now() END,
       CASE WHEN $3='open' THEN 0 ELSE $4 END,
       CASE WHEN $3='open' THEN $4 ELSE 0 END,
-      $4,$4,$5,$5,1.5,-1,1,false,0,0,now(),now(),'[]','{}')`,
+      $4,$4,COALESCE($5,0),$5,1.5,-1,1,false,0,0,now(),now(),'[]','{}')`,
   [id, book, status, netPnlUsd, resultR]);
 
   await insertPerformanceCall('research-b-win', 'research', 'won', 12, 1.2);
