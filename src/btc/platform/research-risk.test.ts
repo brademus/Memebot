@@ -91,7 +91,7 @@ function candidate(overrides: Partial<StrategyCandidate> = {}): StrategyCandidat
   };
 }
 
-test('research can approve a native profitable target that the actionable +$20 and 3R contract rejects', () => {
+test('research can approve a native profitable target before actionable expectancy maturity', () => {
   const setup = candidate();
   const actionable = solveRiskPlan(context, setup);
   const research = solveResearchRiskPlan(context, setup);
@@ -101,6 +101,7 @@ test('research can approve a native profitable target that the actionable +$20 a
   assert.ok(research.estimatedRewardUsd < 20);
   assert.ok(research.leverage >= 1 && research.leverage <= 50);
   assert.ok(research.estimatedRiskUsd <= 20 / 3 + 1e-6);
+  assert.ok(actionable.rejectionReasons.some(reason => reason.includes('expectancy')));
   assert.ok(research.liquidationBufferPct > 0);
 });
 

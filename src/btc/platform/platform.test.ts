@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { solveRiskPlan } from './risk';
 import { BTC_STRATEGIES } from './strategy-registry';
-import { MarketContext, StrategyCandidate } from './types';
+import { MarketContext, StrategyCandidate, StrategyPerformance } from './types';
 
 const context: MarketContext = {
   timestamp: Date.now(),
@@ -91,6 +91,25 @@ function candidate(overrides: Partial<StrategyCandidate> = {}): StrategyCandidat
   };
 }
 
+function evidence(overrides: Partial<StrategyPerformance> = {}): StrategyPerformance {
+  return {
+    strategyId: 'test-strategy',
+    strategyVersion: '1.0.0',
+    strategyName: 'Test Strategy',
+    mode: 'actionable',
+    leverageCap: 50,
+    activeCalls: 0,
+    totalCalls: 40,
+    wins: 22,
+    losses: 18,
+    winRatePct: 55,
+    netPnlUsd: 80,
+    averageR: 0.25,
+    profitFactor: 1.3,
+    ...overrides,
+  };
+}
+
 test('BTC strategy registry contains seventeen unique versioned strategies', () => {
   assert.equal(BTC_STRATEGIES.length, 17);
   assert.equal(new Set(BTC_STRATEGIES.map(strategy => strategy.id)).size, 17);
@@ -102,24 +121,60 @@ test('BTC strategy registry contains seventeen unique versioned strategies', () 
   }
 });
 
-test('risk solver never exceeds 50x and clears net target and reward-to-risk gates', () => {
-  const plan = solveRiskPlan(context, candidate());
+test('standard actionable policy uses native target, 6% projected ROI, 2.25R and a $6 loss budget', () => {
+  const plan = solveRiskPlan(context, candidate(), evidence());
   assert.equal(plan.approved, true, plan.rejectionReasons.join('; '));
+  assert.equal(plan.targetPrice, 100_600);
+  assert.equal(plan.actionableTier, 'standard');
   assert.ok(plan.leverage >= 1 && plan.leverage <= 50);
-  assert.ok(plan.estimatedRewardUsd >= 20);
-  assert.ok(plan.estimatedNetRR >= 3);
-  assert.ok(plan.estimatedRiskUsd <= 20 / 3 + 1e-6);
+  assert.ok(plan.estimatedTargetRoiPct >= 6);
+  assert.ok(plan.estimatedNetRR >= 2.25);
+  assert.ok(plan.estimatedRiskUsd <= 6 + 1e-6);
   assert.ok(plan.liquidationBufferPct > 0);
+  assert.equal(plan.expectancyEvidence?.ready, true);
+});
+
+test('A+ policy preserves the 20% projected ROI and 3R premium threshold', () => {
+  const plan = solveRiskPlan(context, candidate({ initialTarget: 100_900 }), evidence());
+  assert.equal(plan.approved, true, plan.rejectionReasons.join('; '));
+  assert.equal(plan.actionableTier, 'a_plus');
+  assert.ok(plan.estimatedTargetRoiPct >= 20);
+  assert.ok(plan.estimatedNetRR >= 3);
+});
+
+test('actionable policy rejects an exact strategy version without mature positive expectancy', () => {
+  const plan = solveRiskPlan(context, candidate(), evidence({
+    totalCalls: 29,
+    wins: 16,
+    losses: 13,
+    netPnlUsd: 20,
+    averageR: 0.2,
+    profitFactor: 1.2,
+  }));
+  assert.equal(plan.approved, false);
+  assert.ok(plan.rejectionReasons.some(reason => reason.includes('30 resolved calls')));
+});
+
+test('actionable policy rejects negative demonstrated expectancy even with enough samples', () => {
+  const plan = solveRiskPlan(context, candidate(), evidence({
+    wins: 18,
+    losses: 22,
+    netPnlUsd: -5,
+    averageR: -0.02,
+    profitFactor: 0.95,
+  }));
+  assert.equal(plan.approved, false);
+  assert.ok(plan.rejectionReasons.some(reason => reason.includes('net P&L is not positive')));
 });
 
 test('risk solver rejects an invalid structural stop beyond the maximum allowed setup distance', () => {
-  const plan = solveRiskPlan(context, candidate({ structuralStop: 90_000, maximumRealisticTarget: 140_000 }));
+  const plan = solveRiskPlan(context, candidate({ structuralStop: 90_000, maximumRealisticTarget: 140_000 }), evidence());
   assert.equal(plan.approved, false);
   assert.ok(plan.rejectionReasons.some(reason => reason.includes('structural stop distance')));
 });
 
 test('strategy-specific leverage cap is enforced independently of the platform ceiling', () => {
-  const plan = solveRiskPlan(context, candidate({ strategyLeverageCap: 12 }));
+  const plan = solveRiskPlan(context, candidate({ strategyLeverageCap: 12, initialTarget: 101_000 }), evidence());
   assert.equal(plan.approved, true, plan.rejectionReasons.join('; '));
   assert.ok(plan.leverage <= 12);
 });

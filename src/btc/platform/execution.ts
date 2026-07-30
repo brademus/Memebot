@@ -138,6 +138,12 @@ export function createPaperCall(
       estimatedRewardUsd: plan.estimatedRewardUsd,
       estimatedNetRR: plan.estimatedNetRR,
       estimatedTargetRoiPct: plan.estimatedTargetRoiPct,
+      actionableTier: plan.actionableTier ?? null,
+      expectancyReady: plan.expectancyEvidence?.ready ?? false,
+      expectancyResolvedCalls: plan.expectancyEvidence?.resolvedCalls ?? 0,
+      expectancyRequiredResolvedCalls: plan.expectancyEvidence?.requiredResolvedCalls ?? 0,
+      expectancyAverageR: plan.expectancyEvidence?.averageR ?? null,
+      expectancyProfitFactor: plan.expectancyEvidence?.profitFactor ?? null,
       strategyLeverageCap: candidate.strategyLeverageCap,
     },
   };

@@ -17,7 +17,10 @@
     const open = ['armed', 'open', 'partial'].includes(call.status);
     const direction = String(call.direction || '').toUpperCase();
     const pnlClass = Number(call.netPnlUsd) >= 0 ? 'btcPositive' : 'btcNegative';
-    const book = call.book === 'actionable' ? 'ACTIONABLE ALERT' : 'STRATEGY RESEARCH';
+    const alertTier = String(call.features?.actionableTier || 'standard');
+    const book = call.book === 'actionable'
+      ? alertTier === 'a_plus' ? 'A+ ACTIONABLE ALERT' : 'STANDARD ACTIONABLE ALERT'
+      : 'STRATEGY RESEARCH';
     const supporting = Array.isArray(call.supportingStrategies) && call.supportingStrategies.length > 1
       ? `<p class="btcSupport">Supported by ${call.supportingStrategies.map(escapeHtml).join(' · ')}</p>` : '';
     return `<article class="callCard btcCallCard ${open ? 'open' : ''}">
@@ -36,6 +39,7 @@
         <div class="metric"><small>Remaining</small><b>${number(Number(call.remainingFraction || 0) * 100, 0)}%</b></div>
         <div class="metric"><small>MFE / MAE</small><b>${number(call.maxFavorableR)}R / ${number(call.maxAdverseR)}R</b></div>
         <div class="metric"><small>Confidence</small><b>${number(call.confidence, 0)}</b></div>
+        <div class="metric"><small>Projected policy</small><b>${call.book === 'actionable' ? escapeHtml(alertTier === 'a_plus' ? 'A+ PREMIUM' : 'STANDARD') : 'RESEARCH'} · ${number(call.features?.estimatedTargetRoiPct, 1)}% / ${number(call.features?.estimatedNetRR)}R</b></div>
       </div>
       ${supporting}
       <p class="callReason">${escapeHtml(call.exitReason || (Array.isArray(call.rationale) ? call.rationale.join(' · ') : 'Paper call active.'))}</p>
@@ -55,8 +59,18 @@
   function strategyCard(strategy) {
     const decided = Number(strategy.wins || 0) + Number(strategy.losses || 0);
     const positive = Number(strategy.netPnlUsd) >= 0;
+    const profitFactorReady = strategy.profitFactor == null
+      ? Number(strategy.wins || 0) > 0 && Number(strategy.losses || 0) === 0
+      : Number(strategy.profitFactor) >= 1.1;
+    const evidenceReady = decided >= 30
+      && Number(strategy.netPnlUsd) > 0
+      && Number(strategy.averageR) >= 0.1
+      && profitFactorReady;
+    const modeLabel = strategy.mode === 'actionable'
+      ? evidenceReady ? 'ALERT READY' : `RESEARCH ${decided}/30`
+      : 'SHADOW';
     return `<article class="btcStrategyCard">
-      <div class="callHead"><span class="state ${strategy.mode === 'actionable' ? 'trigger' : 'watching'}">${escapeHtml(String(strategy.mode || '').toUpperCase())}</span><small>CAP ${escapeHtml(strategy.leverageCap)}x</small></div>
+      <div class="callHead"><span class="state ${evidenceReady ? 'trigger' : 'watching'}">${escapeHtml(modeLabel)}</span><small>CAP ${escapeHtml(strategy.leverageCap)}x</small></div>
       <h2>${escapeHtml(strategy.strategyName)}</h2>
       <small>${escapeHtml(strategy.strategyId)} · ${escapeHtml(strategy.strategyVersion)}</small>
       <div class="metrics btcMetrics">
@@ -67,6 +81,7 @@
         <div class="metric"><small>Net P&amp;L</small><b class="${positive ? 'btcPositive' : 'btcNegative'}">${money(strategy.netPnlUsd)}</b></div>
         <div class="metric"><small>Average R</small><b>${strategy.averageR == null ? '—' : number(strategy.averageR) + 'R'}</b></div>
         <div class="metric"><small>Profit factor</small><b>${strategy.profitFactor == null ? '—' : number(strategy.profitFactor)}</b></div>
+        <div class="metric"><small>Actionable evidence</small><b>${strategy.mode === 'actionable' ? evidenceReady ? 'READY' : `${decided}/30` : 'SHADOW ONLY'}</b></div>
       </div>
     </article>`;
   }
@@ -169,8 +184,21 @@
       platformContract: {
         marginPerCallUsd: 100,
         maxLeverage: 50,
-        actionableMinimumNetTargetUsd: 20,
-        actionableMinimumNetRR: 3,
+        standardTargetPolicy: 'strategy_native_realistic_target',
+        standardMinimumProjectedNetRoiPct: 6,
+        standardMinimumNetRR: 2.25,
+        standardMaximumPlannedLossUsd: 6,
+        actionableExpectancyGate: {
+          minimumResolvedResearchCallsPerVersion: 30,
+          minimumAverageR: 0.10,
+          minimumProfitFactor: 1.10,
+          positiveNetPnlRequired: true,
+        },
+        aPlusMinimumProjectedNetRoiPct: 20,
+        aPlusMinimumNetRR: 3,
+        aPlusMinimumConfidence: 82,
+        aPlusMinimumExecutionScore: 80,
+        aPlusMaximumSpreadBps: 2,
         researchTargetPolicy: 'strategy_native_realistic_target',
         researchMinimumNetRewardUsd: 'positive_after_estimated_costs',
         researchForcedMinimumNetRR: false,

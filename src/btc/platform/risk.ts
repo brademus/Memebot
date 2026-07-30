@@ -1,18 +1,34 @@
 import {
+  ActionableAlertTier,
   BtcDirection,
   MarketContext,
   PaperCall,
   PortfolioLimits,
   RiskPlan,
   StrategyCandidate,
+  StrategyExpectancyEvidence,
+  StrategyPerformance,
   TradingCosts,
 } from './types';
 import { clamp, safeDiv } from './indicators';
 
 export const PAPER_MARGIN_USD = 100;
 export const PLATFORM_MAX_LEVERAGE = 50;
-export const DEFAULT_MIN_NET_TARGET_USD = 20;
-export const DEFAULT_MAX_PLANNED_LOSS_USD = DEFAULT_MIN_NET_TARGET_USD / 3;
+
+export const DEFAULT_STANDARD_MIN_NET_ROI_PCT = 6;
+export const DEFAULT_STANDARD_MIN_NET_RR = 2.25;
+export const DEFAULT_MAX_PLANNED_LOSS_USD = 6;
+
+export const DEFAULT_A_PLUS_MIN_NET_ROI_PCT = 20;
+export const DEFAULT_A_PLUS_MIN_NET_RR = 3;
+export const DEFAULT_A_PLUS_MIN_CONFIDENCE = 82;
+export const DEFAULT_A_PLUS_MIN_EXECUTION_SCORE = 80;
+export const DEFAULT_A_PLUS_MAX_SPREAD_BPS = 2;
+
+export const DEFAULT_EXPECTANCY_MIN_RESOLVED_CALLS = 30;
+export const DEFAULT_EXPECTANCY_MIN_AVERAGE_R = 0.1;
+export const DEFAULT_EXPECTANCY_MIN_PROFIT_FACTOR = 1.1;
+export const DEFAULT_RESEARCH_MAX_PLANNED_LOSS_USD = 20 / 3;
 
 export const DEFAULT_PORTFOLIO_LIMITS: Readonly<PortfolioLimits> = Object.freeze({
   maxActiveActionableCalls: 3,
@@ -38,6 +54,11 @@ export const DEFAULT_COST_MODEL: Readonly<CostModelConfig> = Object.freeze({
   liquidationFeeBufferRate: 0.001,
 });
 
+function numberSetting(name: string, fallback: number): number {
+  const parsed = Number(process.env[name]);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function priceMovePct(entry: number, exit: number): number {
   return entry > 0 ? Math.abs(exit - entry) / entry : Infinity;
 }
@@ -47,17 +68,16 @@ export function stopIsDirectional(entry: number, stop: number, direction: BtcDir
   return direction === 'long' ? stop < entry : stop > entry;
 }
 
-function directionalTarget(entry: number, movePct: number, direction: BtcDirection): number {
-  return direction === 'long' ? entry * (1 + movePct) : entry * (1 - movePct);
+function nativeRealisticTarget(candidate: StrategyCandidate): number {
+  return candidate.direction === 'long'
+    ? Math.min(candidate.initialTarget, candidate.maximumRealisticTarget)
+    : Math.max(candidate.initialTarget, candidate.maximumRealisticTarget);
 }
 
-function isTargetWithinReality(candidate: StrategyCandidate, target: number): boolean {
-  if (candidate.direction === 'long') return target <= candidate.maximumRealisticTarget && target > candidate.preferredEntry;
-  return target >= candidate.maximumRealisticTarget && target < candidate.preferredEntry;
-}
-
-function fartherTarget(direction: BtcDirection, first: number, second: number): number {
-  return direction === 'long' ? Math.max(first, second) : Math.min(first, second);
+function targetIsDirectional(candidate: StrategyCandidate, target: number): boolean {
+  return candidate.direction === 'long'
+    ? target > candidate.preferredEntry
+    : target < candidate.preferredEntry;
 }
 
 function estimateCosts(
@@ -124,20 +144,106 @@ function candidateConfidence(candidate: StrategyCandidate): number {
   );
 }
 
+export function assessStrategyExpectancy(
+  performance: StrategyPerformance | null,
+): StrategyExpectancyEvidence {
+  const requiredResolvedCalls = Math.max(1, Math.floor(numberSetting(
+    'BTC_EXPECTANCY_MIN_RESOLVED_CALLS',
+    DEFAULT_EXPECTANCY_MIN_RESOLVED_CALLS,
+  )));
+  const minimumAverageR = numberSetting('BTC_EXPECTANCY_MIN_AVERAGE_R', DEFAULT_EXPECTANCY_MIN_AVERAGE_R);
+  const minimumProfitFactor = numberSetting(
+    'BTC_EXPECTANCY_MIN_PROFIT_FACTOR',
+    DEFAULT_EXPECTANCY_MIN_PROFIT_FACTOR,
+  );
+  const resolvedCalls = performance ? performance.wins + performance.losses : 0;
+  const averageR = performance?.averageR ?? null;
+  const profitFactor = performance?.profitFactor ?? null;
+  const noObservedLosses = !!performance && performance.wins > 0 && performance.losses === 0;
+  const profitFactorPass = profitFactor !== null
+    ? profitFactor >= minimumProfitFactor
+    : noObservedLosses;
+  const ready = !!performance
+    && resolvedCalls >= requiredResolvedCalls
+    && performance.netPnlUsd > 0
+    && averageR !== null
+    && averageR >= minimumAverageR
+    && profitFactorPass;
+  return {
+    resolvedCalls,
+    requiredResolvedCalls,
+    netPnlUsd: performance?.netPnlUsd ?? 0,
+    averageR,
+    profitFactor,
+    minimumAverageR,
+    minimumProfitFactor,
+    ready,
+  };
+}
+
+function expectancyRejectionReasons(
+  performance: StrategyPerformance | null,
+  evidence: StrategyExpectancyEvidence,
+): string[] {
+  if (!performance) return ['version-specific research expectancy is unavailable'];
+  const reasons: string[] = [];
+  if (evidence.resolvedCalls < evidence.requiredResolvedCalls) {
+    reasons.push(`research expectancy needs ${evidence.requiredResolvedCalls} resolved calls; ${evidence.resolvedCalls} are available`);
+  }
+  if (!(evidence.netPnlUsd > 0)) reasons.push('version-specific research net P&L is not positive');
+  if (evidence.averageR === null || evidence.averageR < evidence.minimumAverageR) {
+    reasons.push(`version-specific average R is below ${evidence.minimumAverageR.toFixed(2)}R`);
+  }
+  const noObservedLosses = performance.wins > 0 && performance.losses === 0;
+  if (!noObservedLosses && (evidence.profitFactor === null || evidence.profitFactor < evidence.minimumProfitFactor)) {
+    reasons.push(`version-specific profit factor is below ${evidence.minimumProfitFactor.toFixed(2)}`);
+  }
+  return reasons;
+}
+
+function qualifiesForAPlus(
+  context: MarketContext,
+  candidate: StrategyCandidate,
+  estimatedTargetRoiPct: number,
+  estimatedNetRR: number,
+): boolean {
+  const minimumRoiPct = numberSetting('BTC_A_PLUS_MIN_NET_ROI_PCT', DEFAULT_A_PLUS_MIN_NET_ROI_PCT);
+  const minimumNetRR = numberSetting('BTC_A_PLUS_MIN_NET_RR', DEFAULT_A_PLUS_MIN_NET_RR);
+  const minimumConfidence = numberSetting('BTC_A_PLUS_MIN_CONFIDENCE', DEFAULT_A_PLUS_MIN_CONFIDENCE);
+  const minimumExecution = numberSetting(
+    'BTC_A_PLUS_MIN_EXECUTION_SCORE',
+    DEFAULT_A_PLUS_MIN_EXECUTION_SCORE,
+  );
+  const maximumSpreadBps = numberSetting('BTC_A_PLUS_MAX_SPREAD_BPS', DEFAULT_A_PLUS_MAX_SPREAD_BPS);
+  const liquidMarket = context.regime.liquidity === 'deep' || context.regime.liquidity === 'normal';
+  return estimatedTargetRoiPct >= minimumRoiPct
+    && estimatedNetRR >= minimumNetRR
+    && candidateConfidence(candidate) >= minimumConfidence
+    && candidate.scores.execution >= minimumExecution
+    && candidate.scores.data >= 90
+    && liquidMarket
+    && context.regime.event === 'normal'
+    && context.feed.spreadBps !== null
+    && context.feed.spreadBps <= maximumSpreadBps;
+}
+
 export function solveRiskPlan(
   context: MarketContext,
   candidate: StrategyCandidate,
+  performance: StrategyPerformance | null = null,
   config: CostModelConfig = DEFAULT_COST_MODEL,
 ): RiskPlan {
+  const targetPrice = nativeRealisticTarget(candidate);
+  const expectancyEvidence = assessStrategyExpectancy(performance);
   const genericReject = (reasons: string[]): RiskPlan => ({
     approved: false,
-    rejectionReasons: reasons,
+    rejectionReasons: [...new Set(reasons)],
     marginUsd: PAPER_MARGIN_USD,
     leverage: 0,
     notionalUsd: 0,
     entryPrice: candidate.preferredEntry,
     stopPrice: candidate.structuralStop,
-    targetPrice: candidate.initialTarget,
+    targetPrice,
     extendedTargetPrice: candidate.extendedTarget,
     liquidationPrice: 0,
     liquidationBufferPct: 0,
@@ -145,6 +251,8 @@ export function solveRiskPlan(
     estimatedRewardUsd: 0,
     estimatedNetRR: 0,
     estimatedTargetRoiPct: 0,
+    actionableTier: null,
+    expectancyEvidence,
     costs: {
       entryFeeUsd: 0, exitFeeUsd: 0, entrySlippageUsd: 0, exitSlippageUsd: 0,
       spreadUsd: 0, expectedFundingUsd: 0, totalEstimatedUsd: 0,
@@ -162,43 +270,43 @@ export function solveRiskPlan(
     initialReasons.push('structural stop is on the wrong side of entry');
   }
   if (!(stopDistancePct > 0 && stopDistancePct < 0.05)) initialReasons.push('structural stop distance is invalid');
-  if (initialReasons.length) return genericReject([...new Set(initialReasons)]);
+  if (!targetIsDirectional(candidate, targetPrice)) initialReasons.push('strategy native realistic target is not directional');
+  if (!expectancyEvidence.ready) initialReasons.push(...expectancyRejectionReasons(performance, expectancyEvidence));
+  if (initialReasons.length) return genericReject(initialReasons);
 
   const cap = Math.max(1, Math.min(
     PLATFORM_MAX_LEVERAGE,
     candidate.strategyLeverageCap,
-    Number(process.env.BTC_MAX_LEVERAGE || PLATFORM_MAX_LEVERAGE),
+    numberSetting('BTC_MAX_LEVERAGE', PLATFORM_MAX_LEVERAGE),
   ));
-  const minRR = Math.max(3, candidate.minimumRR);
-  const maxPlannedLoss = Number(process.env.BTC_MAX_PLANNED_LOSS_USD || DEFAULT_MAX_PLANNED_LOSS_USD);
-  const minNetTarget = Number(process.env.BTC_MIN_NET_TARGET_USD || DEFAULT_MIN_NET_TARGET_USD);
+  const minimumNetRR = numberSetting('BTC_STANDARD_MIN_NET_RR', DEFAULT_STANDARD_MIN_NET_RR);
+  const minimumNetRoiPct = numberSetting('BTC_STANDARD_MIN_NET_ROI_PCT', DEFAULT_STANDARD_MIN_NET_ROI_PCT);
+  const maxPlannedLoss = numberSetting('BTC_MAX_PLANNED_LOSS_USD', DEFAULT_MAX_PLANNED_LOSS_USD);
+  const targetDistancePct = priceMovePct(candidate.preferredEntry, targetPrice);
   const failures = new Set<string>();
 
   for (let leverage = Math.floor(cap); leverage >= 1; leverage--) {
     const notionalUsd = PAPER_MARGIN_USD * leverage;
     const costs = estimateCosts(context, candidate, leverage, candidate.entryMethod, config);
-    const grossRiskUsd = notionalUsd * stopDistancePct;
-    const estimatedRiskUsd = grossRiskUsd + Math.max(0, costs.totalEstimatedUsd);
+    const estimatedRiskUsd = notionalUsd * stopDistancePct + Math.max(0, costs.totalEstimatedUsd);
     if (estimatedRiskUsd > maxPlannedLoss + 1e-9) {
-      failures.add('structural stop exceeds the planned $6.67 net-loss budget at available leverage');
+      failures.add(`structural stop exceeds the planned $${maxPlannedLoss.toFixed(2)} net-loss budget at available leverage`);
       continue;
     }
 
-    const requiredNetReward = Math.max(minNetTarget, estimatedRiskUsd * minRR);
-    const requiredGrossReward = requiredNetReward + Math.max(0, costs.totalEstimatedUsd);
-    const requiredMovePct = safeDiv(requiredGrossReward, notionalUsd, Infinity);
-    const requiredTarget = directionalTarget(candidate.preferredEntry, requiredMovePct, candidate.direction);
-    const targetPrice = fartherTarget(candidate.direction, candidate.initialTarget, requiredTarget);
-    if (!isTargetWithinReality(candidate, targetPrice)) {
-      failures.add('the net +20% and 3R target lies beyond the strategy realistic-target boundary');
-      continue;
-    }
-
-    const targetDistancePct = priceMovePct(candidate.preferredEntry, targetPrice);
     const estimatedRewardUsd = notionalUsd * targetDistancePct - Math.max(0, costs.totalEstimatedUsd);
-    const netRR = safeDiv(estimatedRewardUsd, estimatedRiskUsd, 0);
-    if (estimatedRewardUsd < minNetTarget || netRR < minRR) {
-      failures.add('estimated net reward does not clear both +$20 and 3R');
+    const estimatedNetRR = safeDiv(estimatedRewardUsd, estimatedRiskUsd, 0);
+    const estimatedTargetRoiPct = estimatedRewardUsd / PAPER_MARGIN_USD * 100;
+    if (!(estimatedRewardUsd > 0)) {
+      failures.add('native strategy target does not remain profitable after estimated costs');
+      continue;
+    }
+    if (estimatedTargetRoiPct < minimumNetRoiPct) {
+      failures.add(`native strategy target is below the ${minimumNetRoiPct.toFixed(1)}% standard projected net ROI floor`);
+      continue;
+    }
+    if (estimatedNetRR < minimumNetRR) {
+      failures.add(`native strategy target is below the ${minimumNetRR.toFixed(2)}R standard net reward-to-risk floor`);
       continue;
     }
 
@@ -208,6 +316,12 @@ export function solveRiskPlan(
       continue;
     }
     const liquidationBufferPct = Math.abs(candidate.structuralStop - liquidationPrice) / candidate.preferredEntry * 100;
+    const actionableTier: ActionableAlertTier = qualifiesForAPlus(
+      context,
+      candidate,
+      estimatedTargetRoiPct,
+      estimatedNetRR,
+    ) ? 'a_plus' : 'standard';
 
     return {
       approved: true,
@@ -223,13 +337,17 @@ export function solveRiskPlan(
       liquidationBufferPct,
       estimatedRiskUsd,
       estimatedRewardUsd,
-      estimatedNetRR: netRR,
-      estimatedTargetRoiPct: estimatedRewardUsd / PAPER_MARGIN_USD * 100,
+      estimatedNetRR,
+      estimatedTargetRoiPct,
+      actionableTier,
+      expectancyEvidence,
       costs,
     };
   }
 
-  return genericReject(failures.size ? [...failures] : ['no leverage from 1x to the strategy cap satisfies the risk contract']);
+  return genericReject(failures.size
+    ? [...failures]
+    : ['no leverage from 1x to the strategy cap satisfies the tiered actionable risk contract']);
 }
 
 export interface PortfolioAssessment {

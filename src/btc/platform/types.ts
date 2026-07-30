@@ -1,5 +1,6 @@
 export type BtcDirection = 'long' | 'short';
 export type StrategyMode = 'actionable' | 'shadow';
+export type ActionableAlertTier = 'standard' | 'a_plus';
 export type EntryMethod = 'market' | 'limit' | 'stop' | 'retest';
 export type ExitModel = 'fixed' | 'partial_runner';
 export type CallBook = 'research' | 'actionable';
@@ -169,6 +170,17 @@ export interface TradingCosts {
   totalEstimatedUsd: number;
 }
 
+export interface StrategyExpectancyEvidence {
+  resolvedCalls: number;
+  requiredResolvedCalls: number;
+  netPnlUsd: number;
+  averageR: number | null;
+  profitFactor: number | null;
+  minimumAverageR: number;
+  minimumProfitFactor: number;
+  ready: boolean;
+}
+
 export interface RiskPlan {
   approved: boolean;
   rejectionReasons: string[];
@@ -185,6 +197,8 @@ export interface RiskPlan {
   estimatedRewardUsd: number;
   estimatedNetRR: number;
   estimatedTargetRoiPct: number;
+  actionableTier?: ActionableAlertTier | null;
+  expectancyEvidence?: StrategyExpectancyEvidence | null;
   costs: TradingCosts;
 }
 
