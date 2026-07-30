@@ -1,0 +1,42 @@
+name: Adjust Wave 1 refinement tests
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  adjust:
+    if: github.head_ref == 'refine/btc-strategy-phase1'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Adjust tests
+        run: python3 scripts/adjust_wave1_refinement_tests.py
+      - name: Verify Wave 1 and full manifest
+        run: |
+          npm run build
+          node --test dist/btc/platform/wave1-strategies.test.js
+          npm test
+          node --check public/btc-dashboard.js
+      - name: Commit adjustment
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/btc/platform/wave1-strategies.test.ts
+          if git diff --cached --quiet; then
+            echo "No changes"
+          else
+            git commit -m "Require weak Wave 1 research setups to abstain"
+            git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          fi
