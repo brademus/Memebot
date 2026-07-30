@@ -1,0 +1,55 @@
+name: Install BTC resolved expectancy fix
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  install:
+    if: github.event.head_commit.message == 'Run BTC resolved expectancy installer'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: memebot_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d memebot_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/memebot_test
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/btc-resolved-research-expectancy
+          fetch-depth: 0
+
+      - name: Apply resolved-only expectancy fix
+        run: python3 tools/install-btc-resolved-expectancy-fix.py
+
+      - name: Verify focused contracts
+        run: |
+          npm ci
+          npm run build
+          node --test dist/btc/platform/platform.test.js
+          node --test dist/btc/platform/platform.integration.test.js
+          node --check public/btc-dashboard.js
+
+      - name: Commit permanent changes
+        run: |
+          rm tools/install-btc-resolved-expectancy-fix.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/btc/platform/ledger.ts src/btc/platform/platform.integration.test.ts public/btc-dashboard.js tools/install-btc-resolved-expectancy-fix.py
+          git commit -m 'Use resolved research results for BTC promotion evidence'
+          git push origin HEAD:fix/btc-resolved-research-expectancy
