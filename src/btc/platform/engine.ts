@@ -337,7 +337,7 @@ export class BtcMultiStrategyEngine {
           ...repricedPlan.rejectionReasons,
           'actual executable fill failed risk revalidation',
         ]);
-        await markCandidateDecision(armed.candidate.id, 'cancelled', 'actual executable fill failed risk revalidation');
+        await markCandidateDecision(armed.candidate.id, 'missed', 'actual executable fill failed risk revalidation');
         continue;
       }
       const { call, event } = createPaperCall(
