@@ -1,0 +1,47 @@
+name: Finalize CVD Fixture
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/finalize-cvd-fixture.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout clean branch
+        uses: actions/checkout@v4
+        with:
+          ref: refine/btc-market-aligned-v3-clean
+          fetch-depth: 0
+      - name: Finalize synthetic ATR and remove workflow
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/btc/platform/wave2-strategies.test.ts')
+          text = path.read_text()
+          old = "const sample = candles(45, 60, 100_000, 2, 50, 100);"
+          new = "const sample = candles(45, 60, 100_000, 2, 60, 100);"
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one CVD ATR fixture match, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/finalize-cvd-fixture.yml
+          git add src/btc/platform/wave2-strategies.test.ts
+          git commit -m "Finalize economically valid pivot CVD fixture"
+          git push origin HEAD:refine/btc-market-aligned-v3-clean
+      - name: Install dependencies
+        run: npm ci
+      - name: Build and test Wave 2
+        run: |
+          npm run build
+          node --test dist/btc/platform/wave2-strategies.test.js
