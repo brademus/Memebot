@@ -12,6 +12,7 @@ import {
   PLATFORM_MAX_LEVERAGE,
   CostModelConfig,
   estimateLiquidationPrice,
+  stopIsDirectional,
 } from './risk';
 
 function priceMovePct(entry: number, exit: number): number {
@@ -129,6 +130,9 @@ export function solveResearchRiskPlan(
   if (candidate.expiresAt <= context.timestamp) reasons.push('candidate expired before research risk approval');
 
   const stopDistancePct = priceMovePct(candidate.preferredEntry, candidate.structuralStop);
+  if (!stopIsDirectional(candidate.preferredEntry, candidate.structuralStop, candidate.direction)) {
+    reasons.push('structural stop is on the wrong side of entry');
+  }
   if (!(stopDistancePct > 0 && stopDistancePct < 0.05)) reasons.push('structural stop distance is invalid');
 
   const targetPrice = nativeRealisticTarget(candidate);
