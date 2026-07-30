@@ -170,6 +170,14 @@ function assertResearchOnlyAtThisSetup(context: MarketContext, candidate: Strate
   ));
 }
 
+function assertResearchQuarantined(context: MarketContext, candidate: StrategyCandidate): void {
+  const research = solveResearchRiskPlan(context, candidate);
+  assert.equal(research.approved, false);
+  assert.ok(research.rejectionReasons.some(reason => reason.includes('quality floor')));
+  const actionable = actionablePlan(context, candidate);
+  assert.equal(actionable.approved, false);
+}
+
 function seedObservations(count = 16): void {
   for (let index = 0; index < count; index++) {
     const context = baseContext({
@@ -221,7 +229,7 @@ test('adaptive trend rider emits a valid research candidate that is filtered whe
   assert.equal(candidates[0].setupType, 'adaptive_trend_pullback');
 });
 
-test('Donchian strategy emits a valid research candidate that is filtered when this setup misses the standard ROI floor', () => {
+test('Donchian signal is quarantined when native economics miss the research quality floor', () => {
   resetWave1StrategyStateForTests();
   const context = baseContext({
     candles: {
@@ -233,7 +241,7 @@ test('Donchian strategy emits a valid research candidate that is filtered when t
   context.orderFlow.aggressiveSellUsd5m = 4_000_000;
   const candidates = strategy('btc-donchian-trend-breakout').evaluate(context);
   assert.equal(candidates.length, 1);
-  assertResearchOnlyAtThisSetup(context, candidates[0]!);
+  assertResearchQuarantined(context, candidates[0]!);
   assert.equal(candidates[0].direction, 'long');
 });
 
@@ -306,7 +314,7 @@ test('perpetual premium convergence can qualify for an actionable tier after mat
   assert.equal(candidates[0].initialTarget, 100_000);
 });
 
-test('price-OI state machine emits a valid research candidate that is filtered when this setup misses the standard tier', () => {
+test('price-OI signal is quarantined when native economics miss the research quality floor', () => {
   resetWave1StrategyStateForTests();
   const context = baseContext({
     derivatives: {
@@ -321,7 +329,7 @@ test('price-OI state machine emits a valid research candidate that is filtered w
   latest.close = 100_050;
   const candidates = strategy('btc-price-oi-state').evaluate(context);
   assert.equal(candidates.length, 1);
-  assertResearchOnlyAtThisSetup(context, candidates[0]!);
+  assertResearchQuarantined(context, candidates[0]!);
   assert.equal(candidates[0].direction, 'long');
   assert.equal(candidates[0].setupType, 'long_position_building');
 });

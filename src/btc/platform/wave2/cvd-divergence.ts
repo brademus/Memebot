@@ -4,18 +4,19 @@ import { candleDelta, candidate, complete, currentPrice, directionalFlow, execut
 
 export const cvdDivergence: StrategyDefinition = {
   id: 'btc-cvd-divergence',
-  version: '0.1.0-shadow',
-  name: 'CVD Divergence',
-  description: 'Researches price extremes that are not confirmed by live aggressive-volume delta and then reclaim short-term structure.',
+  version: '0.2.0-shadow',
+  name: 'Confirmed CVD Divergence',
+  description: 'Researches a meaningful price extreme against reversing aggressive delta only after a completed structural reclaim.',
   mode: 'shadow',
-  leverageCap: 20,
+  leverageCap: 12,
   evaluate(context): StrategyCandidate[] {
-    if (!context.feed.healthy || context.regime.liquidity === 'dislocated') return [];
+    if (!context.feed.healthy || !['deep', 'normal'].includes(context.regime.liquidity)
+      || context.regime.event !== 'normal' || context.orderFlow.bookFragility > 0.4) return [];
     const candles = complete(context.candles.oneMinute);
     if (candles.length < 30) return [];
-    const sample = candles.slice(-24);
-    const first = sample.slice(0, 12);
-    const second = sample.slice(12);
+    const sample = candles.slice(-30);
+    const first = sample.slice(0, 15);
+    const second = sample.slice(15);
     const firstVolume = first.reduce((sum, candle) => sum + candle.buyVolume + candle.sellVolume, 0);
     const secondVolume = second.reduce((sum, candle) => sum + candle.buyVolume + candle.sellVolume, 0);
     if (firstVolume <= 0 || secondVolume <= 0) return [];
@@ -30,22 +31,25 @@ export const cvdDivergence: StrategyDefinition = {
     const secondHigh = Math.max(...second.map(candle => candle.high));
     const latest = second.at(-1)!;
     const previous = second.at(-2)!;
-    const bullish = secondLow < firstLow && secondDelta > 0 && deltaDivergence >= 0.06
-      && latest.close > latest.open && latest.close > previous.close;
-    const bearish = secondHigh > firstHigh && secondDelta < 0 && deltaDivergence <= -0.06
-      && latest.close < latest.open && latest.close < previous.close;
+    const atr = averageTrueRange(candles, 20);
+    if (!(atr > 0)) return [];
+
+    const bullish = secondLow <= firstLow - atr * 0.25 && firstDelta < 0 && secondDelta > 0
+      && deltaDivergence >= 0.1 && latest.close > previous.high && latest.close > latest.open
+      && !['bear', 'strong_bear'].includes(context.regime.direction);
+    const bearish = secondHigh >= firstHigh + atr * 0.25 && firstDelta > 0 && secondDelta < 0
+      && deltaDivergence <= -0.1 && latest.close < previous.low && latest.close < latest.open
+      && !['bull', 'strong_bull'].includes(context.regime.direction);
     const direction: BtcDirection | null = bullish ? 'long' : bearish ? 'short' : null;
     if (!direction) return [];
 
     const flow = directionalFlow(context, direction, 'one');
-    if (flow < 1.03) return [];
-    const atr = averageTrueRange(candles, 20);
-    if (!(atr > 0)) return [];
+    if (flow < 1.35) return [];
     const entry = currentPrice(context, direction);
     const divergenceExtreme = direction === 'long' ? secondLow : secondHigh;
-    const stop = direction === 'long' ? divergenceExtreme - atr * 0.15 : divergenceExtreme + atr * 0.15;
-    const initialTarget = targetFromRisk(entry, stop, direction, 3.4);
-    const extendedTarget = targetFromRisk(entry, stop, direction, 5.2);
+    const stop = direction === 'long' ? divergenceExtreme - atr * 0.25 : divergenceExtreme + atr * 0.25;
+    const initialTarget = targetFromRisk(entry, stop, direction, 4.2);
+    const extendedTarget = targetFromRisk(entry, stop, direction, 6.2);
 
     return [candidate(context, {
       strategyId: this.id,
@@ -53,43 +57,31 @@ export const cvdDivergence: StrategyDefinition = {
       strategyName: this.name,
       mode: this.mode,
       direction,
-      setupType: direction === 'long' ? 'bullish_cvd_divergence' : 'bearish_cvd_divergence',
+      setupType: direction === 'long' ? 'confirmed_bullish_cvd_divergence' : 'confirmed_bearish_cvd_divergence',
       entryMethod: 'retest',
       preferredEntry: entry,
-      entryZoneLow: direction === 'long' ? entry - atr * 0.18 : entry - atr * 0.06,
-      entryZoneHigh: direction === 'long' ? entry + atr * 0.06 : entry + atr * 0.18,
-      doNotChasePrice: direction === 'long' ? entry + atr * 0.55 : entry - atr * 0.55,
-      expiresAt: context.timestamp + 18 * 60_000,
+      entryZoneLow: entry - atr * 0.08,
+      entryZoneHigh: entry + atr * 0.08,
+      doNotChasePrice: direction === 'long' ? entry + atr * 0.35 : entry - atr * 0.35,
+      expiresAt: context.timestamp + 8 * 60_000,
       structuralStop: stop,
       initialTarget,
       extendedTarget,
-      maximumRealisticTarget: direction === 'long'
-        ? entry + Math.max(atr * 18, entry * 0.05)
-        : entry - Math.max(atr * 18, entry * 0.05),
+      maximumRealisticTarget: direction === 'long' ? entry + atr * 16 : entry - atr * 16,
       strategyLeverageCap: this.leverageCap,
       expectedHoldingMinutes: 75,
       exitModel: 'partial_runner',
-      signalScore: 70 + Math.min(18, Math.abs(deltaDivergence) * 120) + Math.max(0, flow - 1) * 12,
-      regimeScore: context.regime.direction === 'range' ? 88 : 76,
-      executionScore: executionScore(context, 30),
+      signalScore: 74 + Math.min(16, Math.abs(deltaDivergence) * 90) + Math.max(0, flow - 1.35) * 10,
+      regimeScore: context.regime.direction === 'range' ? 92 : 80,
+      executionScore: executionScore(context, 38),
       rationale: [
-        `${direction} price extreme diverged from live cumulative aggressive-volume delta`,
+        `${direction} price extreme materially diverged from aggressive-volume delta`,
         `first-half delta ${firstDelta.toFixed(4)} versus second-half ${secondDelta.toFixed(4)}`,
-        `normalized delta divergence ${(deltaDivergence * 100).toFixed(2)}%`,
-        `one-minute confirming flow ratio ${flow.toFixed(2)}`,
+        `normalized delta reversal ${(deltaDivergence * 100).toFixed(2)}%`,
+        `completed structural reclaim with flow ratio ${flow.toFixed(2)}`,
       ],
-      features: {
-        firstDelta,
-        secondDelta,
-        deltaDivergence,
-        firstLow,
-        secondLow,
-        firstHigh,
-        secondHigh,
-        flowRatio: flow,
-        totalObservedVolume: totalVolume,
-        atr,
-      },
+      features: { firstDelta, secondDelta, deltaDivergence, firstLow, secondLow, firstHigh, secondHigh,
+        flowRatio: flow, totalObservedVolume: totalVolume, atr, reclaimClose: latest.close },
     })];
   },
 };

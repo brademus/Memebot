@@ -15,6 +15,14 @@ import {
   stopIsDirectional,
 } from './risk';
 
+export const DEFAULT_RESEARCH_MIN_NET_ROI_PCT = 4;
+export const DEFAULT_RESEARCH_MIN_NET_RR = 1.5;
+
+function numberSetting(name: string, fallback: number): number {
+  const parsed = Number(process.env[name]);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function priceMovePct(entry: number, exit: number): number {
   return entry > 0 ? Math.abs(exit - entry) / entry : Infinity;
 }
@@ -114,8 +122,9 @@ function rejected(candidate: StrategyCandidate, reasons: string[]): RiskPlan {
 
 /**
  * Research calls preserve the strategy's native realistic target instead of
- * forcing actionable evidence maturity, standard ROI, or standard R gates. Feed, confidence, structural
- * loss, cost, and liquidation protections remain mandatory.
+ * forcing actionable evidence maturity or actionable-tier thresholds. Research still requires
+ * economically meaningful net ROI and net R after modeled costs, plus feed, confidence, structural-loss
+ * and liquidation protections.
  */
 export function solveResearchRiskPlan(
   context: MarketContext,
@@ -144,7 +153,9 @@ export function solveResearchRiskPlan(
     candidate.strategyLeverageCap,
     Number(process.env.BTC_MAX_LEVERAGE || PLATFORM_MAX_LEVERAGE),
   ));
-  const maxPlannedLoss = Number(process.env.BTC_RESEARCH_MAX_PLANNED_LOSS_USD || DEFAULT_RESEARCH_MAX_PLANNED_LOSS_USD);
+  const maxPlannedLoss = numberSetting('BTC_RESEARCH_MAX_PLANNED_LOSS_USD', DEFAULT_RESEARCH_MAX_PLANNED_LOSS_USD);
+  const minimumNetRoiPct = numberSetting('BTC_RESEARCH_MIN_NET_ROI_PCT', DEFAULT_RESEARCH_MIN_NET_ROI_PCT);
+  const minimumNetRR = numberSetting('BTC_RESEARCH_MIN_NET_RR', DEFAULT_RESEARCH_MIN_NET_RR);
   const targetDistancePct = priceMovePct(candidate.preferredEntry, targetPrice);
   const failures = new Set<string>();
 
@@ -162,6 +173,16 @@ export function solveResearchRiskPlan(
       failures.add('native strategy target does not remain profitable after estimated costs');
       continue;
     }
+    const estimatedNetRR = safeDiv(estimatedRewardUsd, estimatedRiskUsd, 0);
+    const estimatedTargetRoiPct = estimatedRewardUsd / PAPER_MARGIN_USD * 100;
+    if (estimatedTargetRoiPct < minimumNetRoiPct) {
+      failures.add(`research target is below the ${minimumNetRoiPct.toFixed(1)}% projected net ROI quality floor`);
+      continue;
+    }
+    if (estimatedNetRR < minimumNetRR) {
+      failures.add(`research target is below the ${minimumNetRR.toFixed(2)}R net reward-to-risk quality floor`);
+      continue;
+    }
 
     const liquidationPrice = estimateLiquidationPrice(candidate.preferredEntry, leverage, candidate.direction, config);
     if (!stopSafelyBeforeLiquidation(candidate.preferredEntry, candidate.structuralStop, liquidationPrice)) {
@@ -171,8 +192,6 @@ export function solveResearchRiskPlan(
 
     const liquidationBufferPct = Math.abs(candidate.structuralStop - liquidationPrice)
       / candidate.preferredEntry * 100;
-    const estimatedNetRR = safeDiv(estimatedRewardUsd, estimatedRiskUsd, 0);
-
     return {
       approved: true,
       rejectionReasons: [],
@@ -188,7 +207,7 @@ export function solveResearchRiskPlan(
       estimatedRiskUsd,
       estimatedRewardUsd,
       estimatedNetRR,
-      estimatedTargetRoiPct: estimatedRewardUsd / PAPER_MARGIN_USD * 100,
+      estimatedTargetRoiPct,
       costs,
     };
   }
