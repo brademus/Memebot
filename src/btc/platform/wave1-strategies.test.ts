@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { WAVE1_STRATEGIES, resetWave1StrategyStateForTests } from './wave1-strategies';
 import { solveRiskPlan } from './risk';
-import { Candle, MarketContext, StrategyDefinition } from './types';
+import { Candle, MarketContext, StrategyCandidate, StrategyDefinition, StrategyPerformance } from './types';
 
 function candles(
   count: number,
@@ -135,6 +135,28 @@ function strategy(id: string): StrategyDefinition {
   return found;
 }
 
+function matureEvidence(candidate: StrategyCandidate): StrategyPerformance {
+  return {
+    strategyId: candidate.strategyId,
+    strategyVersion: candidate.strategyVersion,
+    strategyName: candidate.strategyName,
+    mode: candidate.mode,
+    leverageCap: candidate.strategyLeverageCap,
+    activeCalls: 0,
+    totalCalls: 40,
+    wins: 22,
+    losses: 18,
+    winRatePct: 55,
+    netPnlUsd: 80,
+    averageR: 0.25,
+    profitFactor: 1.3,
+  };
+}
+
+function actionablePlan(context: MarketContext, candidate: StrategyCandidate) {
+  return solveRiskPlan(context, candidate, matureEvidence(candidate));
+}
+
 function seedObservations(count = 16): void {
   for (let index = 0; index < count; index++) {
     const context = baseContext({
@@ -181,8 +203,9 @@ test('adaptive trend rider emits a long pullback candidate in aligned rolling tr
   context.prices = { ...context.prices, last: 99_900, bid: 99_899, ask: 99_901, mark: 99_900, index: 99_900, consolidatedFair: 99_900 };
   const candidates = strategy('btc-adaptive-trend-rider').evaluate(context);
   assert.equal(candidates.length, 1);
-  const plan = solveRiskPlan(context, candidates[0]!);
+  const plan = actionablePlan(context, candidates[0]!);
   assert.equal(plan.approved, true, plan.rejectionReasons.join('; '));
+  assert.equal(plan.expectancyEvidence?.ready, true);
   assert.equal(candidates[0].direction, 'long');
   assert.equal(candidates[0].setupType, 'adaptive_trend_pullback');
 });
@@ -199,8 +222,9 @@ test('Donchian strategy emits on accepted rolling-channel breakout without compr
   context.orderFlow.aggressiveSellUsd5m = 4_000_000;
   const candidates = strategy('btc-donchian-trend-breakout').evaluate(context);
   assert.equal(candidates.length, 1);
-  const plan = solveRiskPlan(context, candidates[0]!);
+  const plan = actionablePlan(context, candidates[0]!);
   assert.equal(plan.approved, true, plan.rejectionReasons.join('; '));
+  assert.equal(plan.expectancyEvidence?.ready, true);
   assert.equal(candidates[0].direction, 'long');
 });
 
@@ -228,8 +252,9 @@ test('funding crowding reversal requires rolling extreme plus price stall', () =
   latest.low = 99_820;
   const candidates = strategy('btc-funding-crowding-reversal').evaluate(context);
   assert.equal(candidates.length, 1);
-  const plan = solveRiskPlan(context, candidates[0]!);
+  const plan = actionablePlan(context, candidates[0]!);
   assert.equal(plan.approved, true, plan.rejectionReasons.join('; '));
+  assert.equal(plan.expectancyEvidence?.ready, true);
   assert.equal(candidates[0].direction, 'short');
 });
 
@@ -263,8 +288,9 @@ test('perpetual premium convergence emits after statistically rich perp begins r
   latest.close = 100_950;
   const candidates = strategy('btc-perp-premium-convergence').evaluate(context);
   assert.equal(candidates.length, 1);
-  const plan = solveRiskPlan(context, candidates[0]!);
+  const plan = actionablePlan(context, candidates[0]!);
   assert.equal(plan.approved, true, plan.rejectionReasons.join('; '));
+  assert.equal(plan.expectancyEvidence?.ready, true);
   assert.equal(candidates[0].direction, 'short');
   assert.equal(candidates[0].initialTarget, 100_000);
 });
@@ -284,8 +310,9 @@ test('price-OI state machine identifies long position building', () => {
   latest.close = 100_050;
   const candidates = strategy('btc-price-oi-state').evaluate(context);
   assert.equal(candidates.length, 1);
-  const plan = solveRiskPlan(context, candidates[0]!);
+  const plan = actionablePlan(context, candidates[0]!);
   assert.equal(plan.approved, true, plan.rejectionReasons.join('; '));
+  assert.equal(plan.expectancyEvidence?.ready, true);
   assert.equal(candidates[0].direction, 'long');
   assert.equal(candidates[0].setupType, 'long_position_building');
 });
