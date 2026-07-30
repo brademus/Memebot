@@ -53,3 +53,5 @@ jobs:
           git add src/btc/platform/ledger.ts src/btc/platform/platform.integration.test.ts public/btc-dashboard.js tools/install-btc-resolved-expectancy-fix.py
           git commit -m 'Use resolved research results for BTC promotion evidence'
           git push origin HEAD:fix/btc-resolved-research-expectancy
+
+# retriggered after the workflow file was registered
