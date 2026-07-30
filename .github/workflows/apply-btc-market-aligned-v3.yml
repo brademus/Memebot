@@ -7,6 +7,12 @@ on:
     paths:
       - scripts/apply-btc-market-aligned-v3.py
       - .github/workflows/apply-btc-market-aligned-v3.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - scripts/apply-btc-market-aligned-v3.py
+      - .github/workflows/apply-btc-market-aligned-v3.yml
   workflow_dispatch:
 
 permissions:
