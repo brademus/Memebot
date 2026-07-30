@@ -277,10 +277,80 @@ export async function strategyPerformance(strategies: readonly StrategyDefinitio
   });
 }
 
+
+export interface BtcPnlLedgerSummary {
+  actionableResolvedCalls: number;
+  researchResolvedCalls: number;
+  actionableWins: number;
+  actionableLosses: number;
+  researchWins: number;
+  researchLosses: number;
+  actionableRealizedPnlUsd: number;
+  researchRealizedPnlUsd: number;
+  actionableResolvedMarginUsd: number;
+  researchResolvedMarginUsd: number;
+}
+
+const EMPTY_PNL_LEDGER_SUMMARY: BtcPnlLedgerSummary = {
+  actionableResolvedCalls: 0,
+  researchResolvedCalls: 0,
+  actionableWins: 0,
+  actionableLosses: 0,
+  researchWins: 0,
+  researchLosses: 0,
+  actionableRealizedPnlUsd: 0,
+  researchRealizedPnlUsd: 0,
+  actionableResolvedMarginUsd: 0,
+  researchResolvedMarginUsd: 0,
+};
+
+export async function pnlLedgerSummary(): Promise<BtcPnlLedgerSummary> {
+  if (!pool) return { ...EMPTY_PNL_LEDGER_SUMMARY };
+  const result = await pool.query(`SELECT
+    COUNT(*) FILTER (WHERE book='actionable' AND status IN ('won','lost','closed','liquidated'))::int actionable_resolved_calls,
+    COUNT(*) FILTER (WHERE book='research' AND status IN ('won','lost','closed','liquidated'))::int research_resolved_calls,
+    COUNT(*) FILTER (WHERE book='actionable' AND status='won')::int actionable_wins,
+    COUNT(*) FILTER (WHERE book='actionable' AND status IN ('lost','liquidated'))::int actionable_losses,
+    COUNT(*) FILTER (WHERE book='research' AND status='won')::int research_wins,
+    COUNT(*) FILTER (WHERE book='research' AND status IN ('lost','liquidated'))::int research_losses,
+    COALESCE(SUM(net_pnl_usd) FILTER (
+      WHERE book='actionable' AND status IN ('won','lost','closed','liquidated')
+    ),0) actionable_realized_pnl,
+    COALESCE(SUM(net_pnl_usd) FILTER (
+      WHERE book='research' AND status IN ('won','lost','closed','liquidated')
+    ),0) research_realized_pnl,
+    COALESCE(SUM(margin_usd) FILTER (
+      WHERE book='actionable' AND status IN ('won','lost','closed','liquidated')
+    ),0) actionable_resolved_margin,
+    COALESCE(SUM(margin_usd) FILTER (
+      WHERE book='research' AND status IN ('won','lost','closed','liquidated')
+    ),0) research_resolved_margin
+    FROM btc_paper_calls`);
+  const row = result.rows[0] || {};
+  return {
+    actionableResolvedCalls: number(row.actionable_resolved_calls),
+    researchResolvedCalls: number(row.research_resolved_calls),
+    actionableWins: number(row.actionable_wins),
+    actionableLosses: number(row.actionable_losses),
+    researchWins: number(row.research_wins),
+    researchLosses: number(row.research_losses),
+    actionableRealizedPnlUsd: number(row.actionable_realized_pnl),
+    researchRealizedPnlUsd: number(row.research_realized_pnl),
+    actionableResolvedMarginUsd: number(row.actionable_resolved_margin),
+    researchResolvedMarginUsd: number(row.research_resolved_margin),
+  };
+}
+
 export async function actionableDayStats(): Promise<{ callsToday: number; realizedPnlToday: number }> {
   if (!pool) return { callsToday: 0, realizedPnlToday: 0 };
-  const result = await pool.query(`SELECT COUNT(*)::int calls_today,COALESCE(SUM(net_pnl_usd),0) realized_pnl
-    FROM btc_paper_calls WHERE book='actionable'
-      AND opened_at >= date_trunc('day',now() AT TIME ZONE 'America/Chicago') AT TIME ZONE 'America/Chicago'`);
+  const result = await pool.query(`SELECT
+    COUNT(*) FILTER (
+      WHERE opened_at >= date_trunc('day',now() AT TIME ZONE 'America/Chicago') AT TIME ZONE 'America/Chicago'
+    )::int calls_today,
+    COALESCE(SUM(net_pnl_usd) FILTER (
+      WHERE status IN ('won','lost','closed','liquidated')
+        AND closed_at >= date_trunc('day',now() AT TIME ZONE 'America/Chicago') AT TIME ZONE 'America/Chicago'
+    ),0) realized_pnl
+    FROM btc_paper_calls WHERE book='actionable'`);
   return { callsToday: number(result.rows[0]?.calls_today), realizedPnlToday: number(result.rows[0]?.realized_pnl) };
 }

@@ -31,6 +31,8 @@ function directionalMove(direction: BtcDirection, entry: number, exit: number): 
 }
 
 function plannedRisk(call: PaperCall): number {
+  const fixed = Number(call.features.estimatedRiskUsd);
+  if (Number.isFinite(fixed) && fixed > 0) return fixed;
   const gross = call.notionalUsd * Math.abs(call.entryPrice - call.stopPrice) / call.entryPrice;
   return Math.max(0.01, gross + call.feesUsd);
 }
@@ -44,6 +46,26 @@ function exitCosts(notional: number, context: MarketContext, emergency = false):
   const fragility = clamp(context.orderFlow.bookFragility, 0, 1);
   const slippageBps = (emergency ? 2.5 : 0.8) + spreadBps * 0.45 + fragility * (emergency ? 8 : 4);
   return notional * (DEFAULT_COST_MODEL.takerFeeRate + slippageBps / 10_000);
+}
+
+function updatePnlAccountingFeatures(call: PaperCall, projectedExitCostsUsd: number): void {
+  const grossPnlUsd = call.netPnlUsd + call.feesUsd + projectedExitCostsUsd - call.fundingUsd;
+  call.features.grossPnlUsd = grossPnlUsd;
+  call.features.projectedExitCostsUsd = projectedExitCostsUsd;
+  call.features.totalModeledCostsUsd = call.feesUsd + projectedExitCostsUsd;
+}
+
+function markRemainingPosition(call: PaperCall, context: MarketContext, exit: number): void {
+  const remainingNotional = call.notionalUsd * call.remainingFraction;
+  const grossUnrealized = remainingNotional * directionalMove(call.direction, call.entryPrice, exit);
+  const projectedExitCostsUsd = exitCosts(remainingNotional, context);
+  call.unrealizedPnlUsd = grossUnrealized - projectedExitCostsUsd + call.fundingUsd;
+  call.netPnlUsd = call.realizedPnlUsd + call.unrealizedPnlUsd;
+  call.roiPct = call.netPnlUsd / call.marginUsd * 100;
+  call.currentR = currentR(call);
+  call.maxFavorableR = Math.max(call.maxFavorableR, call.currentR);
+  call.maxAdverseR = Math.min(call.maxAdverseR, call.currentR);
+  updatePnlAccountingFeatures(call, projectedExitCostsUsd);
 }
 
 function estimateFunding(call: PaperCall, context: MarketContext, at: number): number {
@@ -83,7 +105,9 @@ export function createPaperCall(
   supportingStrategies: string[] = [candidate.strategyId],
 ): { call: PaperCall; event: ExecutionEvent } {
   const fill = executablePrice(context, candidate.direction, 'entry');
-  const initialCosts = plan.costs.entryFeeUsd + plan.costs.entrySlippageUsd + plan.costs.spreadUsd;
+  // The executable ask/bid fill already contains the market spread. Charging
+  // plan.costs.spreadUsd again would double-count it.
+  const initialCosts = plan.costs.entryFeeUsd + plan.costs.entrySlippageUsd;
   const call: PaperCall = {
     id: crypto.randomUUID(),
     book,
@@ -115,7 +139,7 @@ export function createPaperCall(
     realizedPnlUsd: -initialCosts,
     unrealizedPnlUsd: 0,
     netPnlUsd: -initialCosts,
-    roiPct: -initialCosts,
+    roiPct: -initialCosts / plan.marginUsd * 100,
     currentR: -safeDiv(initialCosts, plan.estimatedRiskUsd, 0),
     resultR: null,
     maxFavorableR: 0,
@@ -145,6 +169,11 @@ export function createPaperCall(
       expectancyAverageR: plan.expectancyEvidence?.averageR ?? null,
       expectancyProfitFactor: plan.expectancyEvidence?.profitFactor ?? null,
       strategyLeverageCap: candidate.strategyLeverageCap,
+      pnlAccountingVersion: 2,
+      grossPnlUsd: 0,
+      projectedExitCostsUsd: 0,
+      totalModeledCostsUsd: initialCosts,
+      estimatedSpreadUsdIncludedInExecutablePrices: plan.costs.spreadUsd,
     },
   };
   return {
@@ -172,6 +201,7 @@ function finishCall(
   call.netPnlUsd = call.realizedPnlUsd;
   call.roiPct = call.netPnlUsd / call.marginUsd * 100;
   call.currentR = currentR(call);
+  updatePnlAccountingFeatures(call, 0);
   call.resultR = call.currentR;
   call.maxFavorableR = Math.max(call.maxFavorableR, call.currentR);
   call.maxAdverseR = Math.min(call.maxAdverseR, call.currentR);
@@ -198,15 +228,7 @@ export function markPaperCall(call: PaperCall, context: MarketContext): Executio
   call.currentPrice = exit;
   call.fundingUsd = estimateFunding(call, context, at);
 
-  const remainingNotional = call.notionalUsd * call.remainingFraction;
-  const grossUnrealized = remainingNotional * directionalMove(call.direction, call.entryPrice, exit);
-  const projectedExitCosts = exitCosts(remainingNotional, context);
-  call.unrealizedPnlUsd = grossUnrealized - projectedExitCosts + call.fundingUsd;
-  call.netPnlUsd = call.realizedPnlUsd + call.unrealizedPnlUsd;
-  call.roiPct = call.netPnlUsd / call.marginUsd * 100;
-  call.currentR = currentR(call);
-  call.maxFavorableR = Math.max(call.maxFavorableR, call.currentR);
-  call.maxAdverseR = Math.min(call.maxAdverseR, call.currentR);
+  markRemainingPosition(call, context, exit);
 
   const liquidationHit = call.direction === 'long' ? mark <= call.liquidationPrice : mark >= call.liquidationPrice;
   if (liquidationHit) {
@@ -225,14 +247,15 @@ export function markPaperCall(call: PaperCall, context: MarketContext): Executio
   const exitModel = String(call.features.exitModel || 'fixed');
   if (targetHit && !call.runnerActivated && exitModel === 'partial_runner') {
     const delta = closeFraction(call, context, exit, 0.75);
+    // Re-mark only the remaining 25%. The previous implementation retained the
+    // full-position unrealized P&L after closing 75%, temporarily double-counting it.
+    markRemainingPosition(call, context, exit);
     call.runnerActivated = true;
     call.status = 'partial';
     const costBufferPct = safeDiv(call.feesUsd + Math.max(0, -call.fundingUsd), call.notionalUsd * Math.max(call.remainingFraction, 0.01));
     call.trailingStopPrice = call.direction === 'long'
       ? call.entryPrice * (1 + costBufferPct)
       : call.entryPrice * (1 - costBufferPct);
-    call.netPnlUsd = call.realizedPnlUsd + call.unrealizedPnlUsd;
-    call.roiPct = call.netPnlUsd / call.marginUsd * 100;
     events.push({
       type: 'partial_take_profit', call, price: exit, timestamp: at,
       reason: '75% closed at the initial net target; 25% runner activated', realizedPnlDeltaUsd: delta,
