@@ -178,7 +178,7 @@ test('CVD divergence compares cumulative delta at two confirmed price pivots bef
   const context = baseContext({
     regime: { ...baseContext().regime, direction: 'range', directionalScore: 0 },
   });
-  const sample = candles(45, 60, 100_000, 2, 20, 100);
+  const sample = candles(45, 60, 100_000, 2, 50, 100);
 
   for (let index = 0; index <= 15; index++) {
     sample[index]!.buyVolume = 30;
