@@ -8,6 +8,7 @@ const expected = new Map<string, { version: string; leverageCap: number; mode: '
   ['btc-orderflow-absorption', { version: '0.4.0-shadow', leverageCap: 8, mode: 'shadow' }],
   ['btc-cvd-divergence', { version: '0.3.0-shadow', leverageCap: 8, mode: 'shadow' }],
   ['btc-adaptive-trend-rider', { version: '2.0.0', leverageCap: 10, mode: 'actionable' }],
+  ['btc-perp-premium-convergence', { version: '2.0.0', leverageCap: 12, mode: 'actionable' }],
 ]);
 
 test('market-aligned BTC redesign remains independently versioned with reduced leverage', () => {
