@@ -6,12 +6,14 @@ on:
       - refine/btc-market-aligned-v3
     paths:
       - scripts/apply-btc-market-aligned-v3.py
+      - scripts/fix-btc-market-aligned-applicator.py
       - .github/workflows/apply-btc-market-aligned-v3.yml
   pull_request:
     branches:
       - main
     paths:
       - scripts/apply-btc-market-aligned-v3.py
+      - scripts/fix-btc-market-aligned-applicator.py
       - .github/workflows/apply-btc-market-aligned-v3.yml
   workflow_dispatch:
 
@@ -28,6 +30,8 @@ jobs:
         with:
           ref: refine/btc-market-aligned-v3
           fetch-depth: 0
+      - name: Repair applicator transform
+        run: python3 scripts/fix-btc-market-aligned-applicator.py
       - name: Apply evidence-driven redesign
         run: python3 scripts/apply-btc-market-aligned-v3.py
       - name: Commit permanent redesign
