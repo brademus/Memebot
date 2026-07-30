@@ -71,7 +71,15 @@ export async function recoverPaperMark(ca: string): Promise<RecoveredPaperMark |
   const request = (async () => {
     diag.attempts++;
     const snapshot = await fetchTokenSnapshot(ca);
-    const value = snapshot && Number.isFinite(snapshot.price) && snapshot.price > 0
+    // DUST GUARD (2026-07-30): dexscreener keeps echoing a frozen last price for
+    // dead pools long after real trading ends, which kept 0% zombie rows "alive"
+    // for many hours (observed: a 12.7h open call bit-frozen at entry). A pool
+    // with almost no liquidity is not a genuine market observation — treat it as
+    // a miss so the tracking-lost clocks can run honestly.
+    const MIN_GENUINE_LIQUIDITY_USD = 100;
+    const genuine = snapshot && Number.isFinite(snapshot.price) && snapshot.price > 0
+      && (Number(snapshot.liq) || 0) >= MIN_GENUINE_LIQUIDITY_USD;
+    const value = genuine
       ? {
           price: snapshot.price,
           liquidityUsd: Math.max(0, Number(snapshot.liq) || 0),

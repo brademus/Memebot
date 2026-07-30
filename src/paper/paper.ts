@@ -151,18 +151,21 @@ async function mark() {
     if (!(price > 0)) {
       const fallback = await recoverPaperMark(row.ca);
       if (!fallback) {
-        // BACKLOG RULE: a position that NEVER moved off its entry price and whose
-        // coin has been unobservable for a full day is not pending evidence — no
-        // revival we would want to record starts from 24h of silence at 1.00x
-        // (the aged/revival scanners would re-enter such a coin as a NEW entry
-        // anyway). Reap it immediately through the normal close path; the 6h
-        // grace remains for anything that ever showed life.
+        // NEVER-MOVED REAP (tightened 2026-07-30): a position whose price has
+        // never once left ±0.1% of entry in EITHER direction and that has been
+        // unobservable for two hours is dead with near-certainty — pre-grad
+        // coins that die minutes after entry get no dexscreener coverage and no
+        // enhanced polling (cost discipline), so without this they sat at 0%
+        // for the full 6h grace. Two silent hours at exactly 1.00x is not
+        // pending evidence; a revival from there would re-enter as a NEW coin
+        // via the momentum/aged scanners. Anything that EVER printed a
+        // different price keeps the full 6h grace.
         const entry = Number(row.entry_price);
         const neverMoved = entry > 0
           && Math.abs(Number(row.peak_price) / entry - 1) <= 0.001
           && Math.abs(Number(row.trough_price || row.entry_price) / entry - 1) <= 0.001;
-        const entryAgeMs = Date.now() - new Date(row.entry_at).getTime();
-        if (neverMoved && entryAgeMs > 24 * 3_600_000) {
+        const silenceMs = Date.now() - new Date(row.last_at || row.entry_at).getTime();
+        if (neverMoved && silenceMs > 2 * 3_600_000) {
           noteTrackingLostAfterGrace();
           await closeAt(row, token || null, null, 'tracking_lost');
           continue;

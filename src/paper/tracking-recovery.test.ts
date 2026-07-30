@@ -52,7 +52,7 @@ test('concurrent recovery requests share one network request', { concurrency: fa
   globalThis.fetch = (async () => {
     fetches++;
     await new Promise(resolve => setTimeout(resolve, 20));
-    return new Response(JSON.stringify({ pairs: [{ priceUsd: '1', liquidity: { usd: 1 }, fdv: 2 }] }), {
+    return new Response(JSON.stringify({ pairs: [{ priceUsd: '1', liquidity: { usd: 5_000 }, fdv: 2 }] }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     });
@@ -67,6 +67,21 @@ test('concurrent recovery requests share one network request', { concurrency: fa
     assert.equal(right?.price, 1);
     assert.equal(fetches, 1);
     assert.equal(trackingRecoveryDiag().deduped, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    __resetTrackingRecoveryForTest();
+  }
+});
+
+test('dust-liquidity pools are not genuine observations (frozen zombie guard)', { concurrency: false }, async () => {
+  __resetTrackingRecoveryForTest();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    pairs: [{ chainId: 'solana', liquidity: { usd: 1 }, priceUsd: '0.001', fdv: 100 }],
+  }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+  try {
+    const mark = await recoverPaperMark('ghost-pool-mint');
+    assert.equal(mark, null, 'a $1-liquidity pool echoing a frozen price must not reset tracking clocks');
   } finally {
     globalThis.fetch = originalFetch;
     __resetTrackingRecoveryForTest();
