@@ -1,6 +1,7 @@
 import WebSocket from 'ws';
 import { BtcMultiStrategyEngine } from './platform/engine';
 import { buildCrossAssetState, TimedPrice } from './platform/cross-asset';
+import { assessOrderbookSequence } from './platform/bybit-sequence';
 import { classifyRegime, clamp, median, safeDiv } from './platform/indicators';
 import {
   BtcDirection,
@@ -40,7 +41,6 @@ const asks = new Map<number, number>();
 const trades: TradeTick[] = [];
 const liquidations: LiquidationTick[] = [];
 const ethObservations: TimedPrice[] = [];
-const sequences = new Map<string, number>();
 
 let started = false;
 let bybitSocket: WebSocket | null = null;
@@ -54,6 +54,7 @@ let latestCoinbaseAt: number | null = null;
 let latestKrakenAt: number | null = null;
 let latestEthAt: number | null = null;
 let sequenceGapAt: number | null = null;
+let orderbookUpdateId: number | null = null;
 let lastPrice = 0;
 let bidPrice = 0;
 let askPrice = 0;
@@ -143,12 +144,15 @@ function recordTrade(price: number, size: number, at: number, direction: BtcDire
   }
 }
 
-function updateSequence(topic: string, sequence: unknown): void {
-  if (!Number.isInteger(sequence)) return;
-  const value = Number(sequence);
-  const previous = sequences.get(topic);
-  if (previous !== undefined && value > previous + 1) sequenceGapAt = Date.now();
-  sequences.set(topic, Math.max(previous || 0, value));
+function requestOrderbookResync(now = Date.now()): void {
+  sequenceGapAt = now;
+  orderbookUpdateId = null;
+  bids.clear();
+  asks.clear();
+  const socket = bybitSocket;
+  if (socket?.readyState === WebSocket.OPEN) {
+    socket.close(1012, 'orderbook sequence gap');
+  }
 }
 
 function setBookSide(map: Map<number, number>, levels: unknown): void {
@@ -168,7 +172,6 @@ function parseBybit(raw: WebSocket.RawData): void {
   try { message = JSON.parse(raw.toString()); } catch { return; }
   if (message.op === 'pong' || message.ret_msg === 'pong') return;
   const topic = String(message.topic || '');
-  updateSequence(topic, message.cs);
   const now = Date.now();
 
   if (topic === `tickers.${PRODUCT}`) {
@@ -210,7 +213,18 @@ function parseBybit(raw: WebSocket.RawData): void {
   }
 
   if (topic === `orderbook.50.${PRODUCT}`) {
-    if (message.type === 'snapshot') { bids.clear(); asks.clear(); }
+    const decision = assessOrderbookSequence(orderbookUpdateId, message.type, message.data?.u);
+    if (decision.gap) {
+      requestOrderbookResync(now);
+      return;
+    }
+    if (!decision.accept) return;
+    if (decision.reset) {
+      bids.clear();
+      asks.clear();
+      sequenceGapAt = null;
+    }
+    orderbookUpdateId = decision.current;
     setBookSide(bids, message.data?.b);
     setBookSide(asks, message.data?.a);
     const bestBid = [...bids.keys()].sort((a, b) => b - a)[0];
@@ -243,6 +257,7 @@ function connectBybit(): void {
   bybitSocket = ws;
   ws.on('open', () => {
     bybitReconnectAttempt = 0;
+    orderbookUpdateId = null;
     ws.send(JSON.stringify({
       op: 'subscribe',
       args: [`tickers.${PRODUCT}`, `publicTrade.${PRODUCT}`, `orderbook.50.${PRODUCT}`, `allLiquidation.${PRODUCT}`],
@@ -526,7 +541,7 @@ function quality(now = Date.now()): FeedQuality {
   const spreadBps = effectiveBid && effectiveAsk ? (effectiveAsk - effectiveBid) / ((effectiveAsk + effectiveBid) / 2) * 10_000 : null;
   const markIndexBps = referenceFresh ? Math.abs(markPrice - indexPrice) / ((markPrice + indexPrice) / 2) * 10_000 : null;
   const crossVenueBps = effectiveMark && fair ? Math.abs(effectiveMark - fair) / ((effectiveMark + fair) / 2) * 10_000 : null;
-  const recentSequenceGap = sequenceGapAt !== null && now - sequenceGapAt < 60_000;
+  const recentSequenceGap = sequenceGapAt !== null;
   const blockers: string[] = [];
   if (!referenceFresh && !fallbackFresh) blockers.push('both reference-perpetual and Coinbase fallback prices are stale');
   if (coinbaseAgeMs === null || coinbaseAgeMs > 30_000) blockers.push('Coinbase spot validation is stale');
@@ -534,7 +549,7 @@ function quality(now = Date.now()): FeedQuality {
   if (spreadBps === null || spreadBps > 15) blockers.push('executable spread is abnormal');
   if (markIndexBps !== null && markIndexBps > 35) blockers.push('reference mark/index divergence is abnormal');
   if (crossVenueBps !== null && crossVenueBps > 45) blockers.push('reference market and spot validation disagree');
-  if (recentSequenceGap) blockers.push('a recent market-data sequence gap was detected');
+  if (recentSequenceGap) blockers.push('order-book resynchronization is pending after a sequence gap');
   return {
     healthy: blockers.filter(reason => !reason.includes('reference-perpetual')).length === 0 && (referenceFresh || fallbackFresh),
     derivativesHealthy: referenceFresh,
