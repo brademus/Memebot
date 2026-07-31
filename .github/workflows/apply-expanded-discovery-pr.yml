@@ -36,6 +36,17 @@ jobs:
               for line in body.splitlines()
           )
           exec(compile(body, 'expanded-discovery-patch', 'exec'))
+
+          index = Path('src/index.ts')
+          text = index.read_text()
+          old = """    const sourceBonus = token.source === 'wallet' ? 500
+      : token.source === 'social' ? 300
+        : token.source === 'momentum' ? 250 : 0;"""
+          new = """    const sourceBonus = token.source === 'wallet' ? 500
+      : token.source === 'momentum' ? 250
+        : token.source === 'aged' ? 150 : 0;"""
+          assert old in text
+          index.write_text(text.replace(old, new, 1))
       - name: Verify source and tests
         run: npm run check
       - name: Commit source-only result
