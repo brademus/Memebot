@@ -4,7 +4,7 @@ name: Apply BTC Report Feature
 on:
   pull_request:
     branches: [main]
-    types: [opened]
+    types: [opened, synchronize]
   workflow_dispatch:
 
 permissions:
@@ -21,25 +21,41 @@ jobs:
         with:
           ref: feature/btc-downloadable-trade-report
           fetch-depth: 0
+      - name: Detect pending applicator
+        id: gate
+        shell: bash
+        run: |
+          if [[ -f scripts/apply-btc-report-feature.mjs ]]; then
+            echo "apply=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "apply=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Set up Node.js
+        if: steps.gate.outputs.apply == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - name: Apply existing-file integrations
+        if: steps.gate.outputs.apply == 'true'
         run: node scripts/apply-btc-report-feature.mjs
       - name: Remove one-time applicator
+        if: steps.gate.outputs.apply == 'true'
         run: rm scripts/apply-btc-report-feature.mjs
       - name: Install dependencies
+        if: steps.gate.outputs.apply == 'true'
         run: npm ci
       - name: Compile and run unit tests
+        if: steps.gate.outputs.apply == 'true'
         run: npm run check
       - name: Validate dashboard JavaScript
+        if: steps.gate.outputs.apply == 'true'
         run: node --check public/btc-review.js && node --check public/btc-dashboard.js
       - name: Commit feature implementation
+        if: steps.gate.outputs.apply == 'true'
         run: |
           git config user.name "Memebot Builder"
           git config user.email "actions@github.com"
-          git add src/api/server.ts src/btc/platform/execution.ts public/index.html public/btc-review.js src/api/btc-report.ts src/api/btc-report-jobs.ts src/api/btc-report-jobs.test.ts src/api/btc-report.integration.test.ts .github/workflows/ci.yml scripts/apply-btc-report-feature.mjs
+          git add src/api/server.ts src/btc/platform/execution.ts public/index.html public/btc-review.js src/api/btc-report.ts src/api/btc-report-jobs.ts src/api/btc-report-jobs.test.ts src/api/btc-report.integration.test.ts scripts/apply-btc-report-feature.mjs
           git commit -m "Add downloadable all-time BTC trade review" || exit 0
           git push origin HEAD:feature/btc-downloadable-trade-report
