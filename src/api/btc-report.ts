@@ -75,6 +75,93 @@ function mapPnlSnapshot(row: any) {
     roiPct: number(row.roi_pct),
     currentR: number(row.current_r),
     liquidationBufferPct: number(row.liquidation_buffer_pct),
+    marketContext: row.market_snapshot_at ? {
+      at: iso(row.market_snapshot_at),
+      referenceVenue: row.market_reference_venue || null,
+      lastPrice: nullableNumber(row.market_last_price),
+      bidPrice: nullableNumber(row.market_bid_price),
+      askPrice: nullableNumber(row.market_ask_price),
+      markPrice: nullableNumber(row.market_mark_price),
+      indexPrice: nullableNumber(row.market_index_price),
+      fundingRate: nullableNumber(row.market_funding_rate),
+      openInterest: nullableNumber(row.market_open_interest),
+      regime: jsonObject(row.market_regime),
+      feedQuality: jsonObject(row.market_feed_quality),
+      derivatives: jsonObject(row.market_derivatives),
+      orderFlow: jsonObject(row.market_order_flow),
+    } : null,
+  };
+}
+
+function summarizeTradeCohort(trades: any[]) {
+  const resolved = trades.filter(trade => ['won', 'lost', 'closed', 'liquidated'].includes(String(trade.status)));
+  const active = trades.filter(trade => ['armed', 'open', 'partial'].includes(String(trade.status)));
+  const wins = resolved.filter(trade => trade.status === 'won').length;
+  const losses = resolved.filter(trade => trade.status === 'lost' || trade.status === 'liquidated').length;
+  const resolvedNetPnlUsd = resolved.reduce((sum, trade) => sum + number(trade.result.netPnlUsd), 0);
+  const activeNetPnlUsd = active.reduce((sum, trade) => sum + number(trade.result.netPnlUsd), 0);
+  const modeledCostsUsd = resolved.reduce((sum, trade) => sum + number(trade.result.feesUsd), 0);
+  const grossPnlBeforeCostsUsd = resolved.reduce((sum, trade) => (
+    sum + number(trade.result.netPnlUsd) + number(trade.result.feesUsd) - number(trade.result.fundingUsd)
+  ), 0);
+  return {
+    calls: trades.length,
+    resolved: resolved.length,
+    active: active.length,
+    wins,
+    losses,
+    winRatePct: wins + losses ? wins / (wins + losses) * 100 : null,
+    resolvedNetPnlUsd,
+    activeNetPnlUsd,
+    totalNetPnlUsd: resolvedNetPnlUsd + activeNetPnlUsd,
+    grossPnlBeforeCostsUsd,
+    modeledCostsUsd,
+    costShareOfAbsoluteResolvedLossPct: resolvedNetPnlUsd < 0
+      ? modeledCostsUsd / Math.abs(resolvedNetPnlUsd) * 100 : null,
+  };
+}
+
+function diagnoseTrade(trade: any) {
+  const entry = number(trade.prices.entry);
+  const stopDistancePct = entry > 0 ? Math.abs(number(trade.prices.stop) - entry) / entry * 100 : 0;
+  const targetDistancePct = entry > 0 ? Math.abs(number(trade.prices.target) - entry) / entry * 100 : 0;
+  const moves = trade.pnlPath.map((snapshot: any) => {
+    const exit = number(snapshot.executableExitPrice);
+    return trade.direction === 'long' ? (exit - entry) / entry * 100 : (entry - exit) / entry * 100;
+  });
+  const grossMfePct = moves.length ? Math.max(...moves) : nullableNumber(trade.result.grossMfePct);
+  const grossMaePct = moves.length ? Math.min(...moves) : nullableNumber(trade.result.grossMaePct);
+  const grossRiskUsd = number(trade.sizing.notionalUsd) * stopDistancePct / 100;
+  const feeToGrossRiskPct = grossRiskUsd > 0 ? number(trade.result.feesUsd) / grossRiskUsd * 100 : null;
+  const targetProgressPct = targetDistancePct > 0 && grossMfePct !== null
+    ? grossMfePct / targetDistancePct * 100 : null;
+  const grossMfeR = stopDistancePct > 0 && grossMfePct !== null ? grossMfePct / stopDistancePct : null;
+  const failureModes: string[] = [];
+  const resolvedLoss = trade.status === 'lost' || trade.status === 'liquidated';
+  if (resolvedLoss && feeToGrossRiskPct !== null && feeToGrossRiskPct >= 100) {
+    failureModes.push('friction_exceeded_structural_risk');
+  } else if (resolvedLoss && feeToGrossRiskPct !== null && feeToGrossRiskPct >= 50) {
+    failureModes.push('friction_consumed_over_half_risk');
+  }
+  if (resolvedLoss && grossMfePct !== null && grossMfePct <= 0) failureModes.push('entry_never_moved_favorably');
+  if (resolvedLoss && targetProgressPct !== null && targetProgressPct < 25) failureModes.push('target_path_probability_mismatch');
+  if (resolvedLoss && grossMfeR !== null && grossMfeR >= 1) failureModes.push('gave_back_at_least_one_gross_r');
+  if (trade.status === 'liquidated') failureModes.push('liquidation');
+  if (String(trade.result.exitReason || '').includes('maximum holding')) failureModes.push('time_stop');
+  if (String(trade.result.exitReason || '').includes('structural stop')) failureModes.push('structural_stop');
+  if (String(trade.result.exitReason || '').includes('feed degradation')) failureModes.push('data_quality_exit');
+  if (trade.status === 'won') failureModes.push('profitable');
+  if (['armed', 'open', 'partial'].includes(String(trade.status))) failureModes.push('active_observation');
+  return {
+    grossMfePct,
+    grossMaePct,
+    grossMfeR,
+    feeToGrossRiskPct,
+    targetProgressPct,
+    grossRiskUsd,
+    grossFinalPnlBeforeCostsUsd: number(trade.result.netPnlUsd) + number(trade.result.feesUsd) - number(trade.result.fundingUsd),
+    primaryFailure: failureModes[0] || null,
+    failureModes,
   };
 }
 
@@ -281,8 +368,20 @@ export async function buildBtcTradeReport(days = 3650): Promise<Record<string, u
       JOIN btc_paper_calls call ON call.call_id=fill.call_id
       WHERE call.opened_at >= ${cutoffSql}
       ORDER BY fill.call_id,fill.fill_at,fill.fill_id`, [boundedDays]),
-    pool.query(`SELECT snapshot.* FROM btc_pnl_snapshots snapshot
+    pool.query(`SELECT snapshot.*,
+      market.snapshot_at market_snapshot_at,market.reference_venue market_reference_venue,
+      market.last_price market_last_price,market.bid_price market_bid_price,market.ask_price market_ask_price,
+      market.mark_price market_mark_price,market.index_price market_index_price,
+      market.funding_rate market_funding_rate,market.open_interest market_open_interest,
+      market.regime market_regime,market.feed_quality market_feed_quality,
+      market.derivatives market_derivatives,market.order_flow market_order_flow
+      FROM btc_pnl_snapshots snapshot
       JOIN btc_paper_calls call ON call.call_id=snapshot.call_id
+      LEFT JOIN LATERAL (
+        SELECT market.* FROM btc_market_snapshots market
+         WHERE market.snapshot_at <= snapshot.snapshot_at
+         ORDER BY market.snapshot_at DESC LIMIT 1
+      ) market ON TRUE
       WHERE call.opened_at >= ${cutoffSql}
       ORDER BY snapshot.call_id,snapshot.snapshot_at`, [boundedDays]),
     pool.query(`SELECT call.call_id,market.* FROM btc_paper_calls call
@@ -355,18 +454,38 @@ export async function buildBtcTradeReport(days = 3650): Promise<Record<string, u
   const fills = groupByCall(fillRows.rows);
   const snapshots = groupByCall(pnlRows.rows);
   const entryMarkets = new Map(entryMarketRows.rows.map(row => [String(row.call_id), row]));
+  const currentVersionKeys = new Set(
+    (Array.isArray((liveStatus as any).strategies) ? (liveStatus as any).strategies : [])
+      .map((strategy: any) => `${strategy.strategyId}:${strategy.strategyVersion}`),
+  );
   const trades = tradeRows.rows.map(row => mapTrade(
     row,
     events.get(String(row.call_id)) || [],
     fills.get(String(row.call_id)) || [],
     snapshots.get(String(row.call_id)) || [],
     entryMarkets.get(String(row.call_id)),
-  ));
+  )).map((trade: any) => {
+    const currentVersion = currentVersionKeys.has(`${trade.strategy.id}:${trade.strategy.version}`);
+    return {
+      ...trade,
+      cohort: { currentVersion, label: currentVersion ? 'current_version' : 'legacy_version' },
+      diagnostics: diagnoseTrade(trade),
+    };
+  });
 
   const resolved = trades.filter(trade => terminalStatuses.includes(String(trade.status)));
   const wins = resolved.filter(trade => trade.status === 'won').length;
   const losses = resolved.filter(trade => trade.status === 'lost' || trade.status === 'liquidated').length;
   const netPnlUsd = trades.reduce((sum, trade) => sum + number((trade as any).result.netPnlUsd), 0);
+  const currentVersionTrades = trades.filter((trade: any) => trade.cohort.currentVersion);
+  const legacyVersionTrades = trades.filter((trade: any) => !trade.cohort.currentVersion);
+  const failureModeCounts = trades
+    .filter((trade: any) => ['won', 'lost', 'closed', 'liquidated'].includes(String(trade.status)))
+    .flatMap((trade: any) => trade.diagnostics.failureModes)
+    .reduce((counts: Record<string, number>, mode: string) => {
+      counts[mode] = (counts[mode] || 0) + 1;
+      return counts;
+    }, {});
 
   return {
     ...base,
@@ -383,6 +502,11 @@ export async function buildBtcTradeReport(days = 3650): Promise<Record<string, u
       firstTradeAt: trades.length ? trades.at(-1)?.timing.openedAt : null,
       latestTradeAt: trades[0]?.timing.openedAt || null,
     },
+    cohorts: {
+      currentVersions: summarizeTradeCohort(currentVersionTrades),
+      legacyVersions: summarizeTradeCohort(legacyVersionTrades),
+    },
+    failureModeCounts,
     strategyVersions: versionRows.rows,
     strategyPerformance: strategyRows.rows.map(row => ({
       ...row,
@@ -400,6 +524,9 @@ export async function buildBtcTradeReport(days = 3650): Promise<Record<string, u
       linkedCandidate: 'sourceCandidate is the nearest preceding candidate for the same strategy version and direction within the candidate lifetime window',
       linkedRiskDecision: 'sourceRiskDecision is the final decision for that linked candidate and trade book',
       entryMarketTelemetry: 'newer calls store entry regime, feed, order-flow, derivatives, and cross-venue scalars in features; older cohorts may have partial telemetry',
+      pathMarketTelemetry: 'each P&L snapshot is joined to the nearest preceding BTC market snapshot so regime, feed, derivatives, and order flow can be compared with the trade path',
+      diagnostics: 'every trade includes gross MFE/MAE reconstructed from executable exits, friction versus structural risk, target progress, and explicit failure-mode labels',
+      currentVsLegacy: 'cohorts.currentVersions only includes strategy ID/version pairs currently loaded by the engine; legacy losses remain available but are not evidence about the replacement logic',
       immutableCohorts: 'strategy versions must be analyzed separately; old losing versions remain in this report and are never rewritten',
     },
   };

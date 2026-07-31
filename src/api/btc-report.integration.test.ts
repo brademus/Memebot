@@ -4,10 +4,12 @@ import { randomUUID } from 'node:crypto';
 import { pool } from '../db';
 import {
   initializeBtcPlatformSchema,
+  appendCallEvent,
   insertCall,
   persistCandidate,
   persistRiskDecision,
   registerStrategies,
+  updateCall,
 } from '../btc/platform/ledger';
 import { buildBtcTradeReport } from './btc-report';
 
@@ -23,7 +25,7 @@ integration('BTC report joins calls to decisions, events, fills, P&L paths, and 
   const now = Date.now();
   const openedAt = now - 60_000;
   const closedAt = now - 10_000;
-  const marketAt = new Date(openedAt - 1_000);
+  const marketAt = new Date(Math.floor(openedAt / 60_000) * 60_000 - 1_000);
 
   const strategy = {
     id: strategyId,
@@ -148,17 +150,27 @@ integration('BTC report joins calls to decisions, events, fills, P&L paths, and 
     assert.equal(await persistCandidate(candidate), true);
     await persistRiskDecision(candidate, 'research', plan);
     await insertCall(call);
-    await pool!.query(`INSERT INTO btc_call_events
-      (call_id,event_type,event_at,price,reason,realized_pnl_delta_usd,snapshot)
-      VALUES($1,'position_closed',$2,$3,$4,$5,$6::jsonb)`, [
-      callId, new Date(closedAt), 99_500, 'integration structural stop', -3,
-      JSON.stringify({ status: 'lost', currentR: -1 }),
-    ]);
-    await pool!.query(`INSERT INTO btc_fills
-      (call_id,fill_at,side,purpose,price,notional_usd,fraction,fee_usd,slippage_usd,metadata)
-      VALUES($1,$2,'buy','entry',100000,500,1,0.25,0.05,$3::jsonb)`, [
-      callId, new Date(openedAt), JSON.stringify({ fixture: true }),
-    ]);
+    call.features.grossMfePct = 0.75;
+    call.features.grossMaePct = -0.5;
+    await updateCall(call);
+    await appendCallEvent({
+      type: 'position_closed',
+      call,
+      price: 99_500,
+      timestamp: closedAt,
+      reason: 'integration structural stop',
+      realizedPnlDeltaUsd: -3,
+      fill: {
+        side: 'sell',
+        purpose: 'exit',
+        price: 99_500,
+        notionalUsd: 500,
+        fraction: 1,
+        feeUsd: 0.25,
+        slippageUsd: 0.05,
+        metadata: { fixture: true },
+      },
+    });
     await pool!.query(`INSERT INTO btc_pnl_snapshots
       (call_id,snapshot_at,mark_price,executable_exit_price,realized_pnl_usd,unrealized_pnl_usd,
        net_pnl_usd,roi_pct,current_r,liquidation_buffer_pct)
@@ -185,7 +197,10 @@ integration('BTC report joins calls to decisions, events, fills, P&L paths, and 
     assert.equal(trade.events.length, 1);
     assert.equal(trade.fills.length, 1);
     assert.equal(trade.pnlPath.length, 1);
+    assert.equal(trade.pnlPath[0].marketContext.referenceVenue, 'BYBIT-BTCUSDT');
     assert.equal(trade.entryMarketSnapshot.referenceVenue, 'BYBIT-BTCUSDT');
+    assert.equal(trade.features.grossMfePct, 0.75);
+    assert.ok(Array.isArray(trade.diagnostics.failureModes));
     assert.equal(trade.features.integrationFixture, undefined);
     assert.equal(trade.sourceCandidate.features.integrationFixture, true);
   } finally {
