@@ -110,11 +110,13 @@ function evidence(overrides: Partial<StrategyPerformance> = {}): StrategyPerform
   };
 }
 
-test('BTC strategy registry contains seventeen unique versioned strategies', () => {
-  assert.equal(BTC_STRATEGIES.length, 17);
-  assert.equal(new Set(BTC_STRATEGIES.map(strategy => strategy.id)).size, 17);
+test('BTC strategy registry contains twenty-seven unique versioned strategies', () => {
+  // 17 pre-wave-3 (10 actionable-mode, 7 shadow) + the 10 wave-3 shadow
+  // research strategies added 2026-07-31.
+  assert.equal(BTC_STRATEGIES.length, 27);
+  assert.equal(new Set(BTC_STRATEGIES.map(strategy => strategy.id)).size, 27);
   assert.equal(BTC_STRATEGIES.filter(strategy => strategy.mode === 'actionable').length, 10);
-  assert.equal(BTC_STRATEGIES.filter(strategy => strategy.mode === 'shadow').length, 7);
+  assert.equal(BTC_STRATEGIES.filter(strategy => strategy.mode === 'shadow').length, 17);
   for (const strategy of BTC_STRATEGIES) {
     assert.ok(strategy.version.length > 0);
     assert.ok(strategy.leverageCap >= 1 && strategy.leverageCap <= 50);
