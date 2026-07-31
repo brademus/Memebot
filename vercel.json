@@ -4,5 +4,26 @@
     "api/[...path].js": {
       "maxDuration": 60
     }
-  }
+  },
+  "rewrites": [
+    {
+      "source": "/api/btc-review-jobs/:id/chunks/:index",
+      "destination": "/api/btc-review-chunk?id=:id&index=:index"
+    },
+    {
+      "source": "/api/btc-review-jobs/:id",
+      "destination": "/api/btc-review-job?id=:id"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/btc-review.js",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store, max-age=0"
+        }
+      ]
+    }
+  ]
 }
