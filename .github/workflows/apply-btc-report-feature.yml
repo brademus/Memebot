@@ -1,0 +1,43 @@
+name: Apply BTC Report Feature
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/apply-btc-report-feature.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/btc-downloadable-trade-report
+          fetch-depth: 0
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Apply existing-file integrations
+        run: node scripts/apply-btc-report-feature.mjs
+      - name: Remove one-time applicator
+        run: rm scripts/apply-btc-report-feature.mjs
+      - name: Install dependencies
+        run: npm ci
+      - name: Compile and run unit tests
+        run: npm run check
+      - name: Validate dashboard JavaScript
+        run: node --check public/btc-review.js && node --check public/btc-dashboard.js
+      - name: Commit feature implementation
+        run: |
+          git config user.name "Memebot Builder"
+          git config user.email "actions@github.com"
+          git add src/api/server.ts src/btc/platform/execution.ts public/index.html public/btc-review.js src/api/btc-report.ts src/api/btc-report-jobs.ts src/api/btc-report-jobs.test.ts src/api/btc-report.integration.test.ts .github/workflows/ci.yml scripts/apply-btc-report-feature.mjs
+          git commit -m "Add downloadable all-time BTC trade review" || exit 0
+          git push origin HEAD:feature/btc-downloadable-trade-report
