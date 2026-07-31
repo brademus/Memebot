@@ -497,6 +497,16 @@ export async function buildBtcTradeReport(days = 3650): Promise<Record<string, u
       winRatePct: wins + losses ? wins / (wins + losses) * 100 : null,
       active: trades.length - resolved.length,
       netPnlUsd,
+      // Book-split honesty (2026-07-31): the research book is deliberately
+      // permissive — its job is dying informatively to earn the 30-resolved
+      // expectancy evidence the actionable gate demands. Netting that tuition
+      // into one headline read as "the bot lost $117" when the actionable book
+      // (the only book that would ever touch money) held a single open trade.
+      // Same lesson as the memecoin side: dishonest displays are bugs.
+      actionableNetPnlUsd: trades.filter(trade => trade.book === 'actionable')
+        .reduce((sum, trade) => sum + number(trade.result.netPnlUsd), 0),
+      researchNetPnlUsd: trades.filter(trade => trade.book === 'research')
+        .reduce((sum, trade) => sum + number(trade.result.netPnlUsd), 0),
       actionableCalls: trades.filter(trade => trade.book === 'actionable').length,
       researchCalls: trades.filter(trade => trade.book === 'research').length,
       firstTradeAt: trades.length ? trades.at(-1)?.timing.openedAt : null,

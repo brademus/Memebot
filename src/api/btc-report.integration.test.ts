@@ -195,6 +195,16 @@ integration('BTC report joins calls to decisions, events, fills, P&L paths, and 
     assert.equal(trade.sourceCandidate.candidateId, candidateId);
     assert.equal(trade.sourceRiskDecision.approved, true);
     assert.equal(trade.events.length, 1);
+
+    // Book-split honesty: the headline money number must separate the
+    // actionable book from research tuition (2026-07-31).
+    const summary = (report as any).summary;
+    assert.equal(typeof summary.actionableNetPnlUsd, 'number');
+    assert.equal(typeof summary.researchNetPnlUsd, 'number');
+    assert.ok(
+      Math.abs(summary.actionableNetPnlUsd + summary.researchNetPnlUsd - summary.netPnlUsd) < 1e-6,
+      'book PnLs must reconcile to the total',
+    );
     assert.equal(trade.fills.length, 1);
     assert.equal(trade.pnlPath.length, 1);
     assert.equal(trade.pnlPath[0].marketContext.referenceVenue, 'BYBIT-BTCUSDT');
