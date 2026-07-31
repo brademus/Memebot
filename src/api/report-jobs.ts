@@ -59,6 +59,10 @@ const DEFAULT_ARCHIVE_CHUNK_BYTES = 192 * 1024;
 const DEFAULT_READY_TTL_MS = 30 * 60_000;
 const DEFAULT_RUNNING_TTL_MS = 10 * 60_000;
 const DEFAULT_MAX_RETAINED_JOBS = 2;
+// Background jobs have no HTTP request to protect: give the heavy all-time
+// sections minutes, not seconds. Still bounded — a hung query degrades to an
+// explicit section error instead of a silent forever-build.
+const JOB_SECTION_TIMEOUT_MS = Math.max(18_000, Math.min(10 * 60_000, Number(process.env.REPORT_JOB_SECTION_TIMEOUT_MS || 180_000)));
 
 export class ReportJobManager {
   private readonly jobs = new Map<string, InternalReportJob>();
@@ -69,7 +73,8 @@ export class ReportJobManager {
   private readonly maxRetainedJobs: number;
 
   constructor(
-    private readonly builder: (days: number) => Promise<unknown> = buildReport,
+    private readonly builder: (days: number) => Promise<unknown> =
+      (days: number) => buildReport(days, { sectionTimeoutMs: JOB_SECTION_TIMEOUT_MS }),
     options: ReportJobManagerOptions = {},
   ) {
     this.archiveChunkBytes = Math.max(32 * 1024, options.archiveChunkBytes || DEFAULT_ARCHIVE_CHUNK_BYTES);
