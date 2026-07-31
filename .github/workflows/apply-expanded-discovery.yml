@@ -1,0 +1,212 @@
+name: Apply Expanded Helius and PumpPortal Discovery
+
+on:
+  push:
+    branches: [feature/expand-helius-pumpportal-discovery]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/expand-helius-pumpportal-discovery
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Expand quality-first discovery capacity
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace(path, old, new, count=1):
+              p = Path(path)
+              text = p.read_text()
+              assert old in text, f'missing anchor in {path}: {old[:120]!r}'
+              text = text.replace(old, new, count)
+              p.write_text(text)
+
+          replace('src/ingest/pumpportal-persistent-budget.ts',
+              "// BUDGET TARGET (user-set 2026-07-28): ~$10/week of paid data. At 0.01 SOL per\n// 10,000 messages and SOL ~$75: $10/week = 0.133 SOL/week = 19,000 events/day.\n// Events are the true unit — the dollar figure drifts with SOL's price. The clamp\n// ceilings below allow env-var headroom to ~1.5x the target but make runaway\n// spend impossible regardless of configuration mistakes.",
+              "// EXPANDED DISCOVERY TARGET (user-set 2026-07-31): use the full bounded\n// 30,000-event daily allowance, equal to 0.03 SOL/day or 0.21 SOL/week at the\n// provider's fixed 0.01 SOL per 10,000 trade messages. Events remain the durable\n// accounting unit; the USD value changes with SOL. Hard clamps still make runaway\n// spend impossible regardless of environment-variable mistakes.")
+          replace('src/ingest/pumpportal-persistent-budget.ts',
+              "Math.min(30_000, Number(process.env.PUMPPORTAL_DAILY_PAID_EVENT_LIMIT || 19_000))",
+              "Math.min(30_000, Number(process.env.PUMPPORTAL_DAILY_PAID_EVENT_LIMIT || 30_000))")
+          replace('src/ingest/pumpportal-persistent-budget.ts',
+              "Math.min(420_000, Number(process.env.PUMPPORTAL_ROLLING_14D_EVENT_LIMIT || 266_000))",
+              "Math.min(420_000, Number(process.env.PUMPPORTAL_ROLLING_14D_EVENT_LIMIT || 420_000))")
+
+          replace('src/ingest/pumpportal-guard.ts',
+              "const MAX_ACTIVE_TOKENS = Math.max(1, Math.min(100, Number(process.env.PUMPPORTAL_MAX_ACTIVE_TOKENS || 40)));\nconst MAX_PENDING_TOKENS = Math.max(40, Math.min(250, Number(process.env.PUMPPORTAL_MAX_PENDING_TOKENS || 250)));",
+              "const MAX_ACTIVE_TOKENS = Math.max(1, Math.min(100, Number(process.env.PUMPPORTAL_MAX_ACTIVE_TOKENS || 70)));\nconst MAX_PENDING_TOKENS = Math.max(80, Math.min(500, Number(process.env.PUMPPORTAL_MAX_PENDING_TOKENS || 400)));\nconst CONSERVATION_START_RATIO = Math.max(0.5, Math.min(0.95, Number(process.env.PUMPPORTAL_CONSERVATION_START_RATIO || 0.8)));\nconst CONSERVATION_ACTIVE_TOKENS = Math.max(5, Math.min(MAX_ACTIVE_TOKENS, Number(process.env.PUMPPORTAL_CONSERVATION_ACTIVE_TOKENS || 20)));")
+          replace('src/ingest/pumpportal-guard.ts',
+              "Number(process.env.PUMPPORTAL_QUIET_SLOT_LEASE_MS || 2 * 60_000)",
+              "Number(process.env.PUMPPORTAL_QUIET_SLOT_LEASE_MS || 90_000)")
+          replace('src/ingest/pumpportal-guard.ts',
+              "Number(process.env.PUMPPORTAL_ACTIVE_IDLE_LEASE_MS || 10 * 60_000)",
+              "Number(process.env.PUMPPORTAL_ACTIVE_IDLE_LEASE_MS || 5 * 60_000)")
+          replace('src/ingest/pumpportal-guard.ts',
+              "Number(process.env.PUMPPORTAL_ROTATION_INTERVAL_MS || 30_000)",
+              "Number(process.env.PUMPPORTAL_ROTATION_INTERVAL_MS || 15_000)")
+
+          replace('src/ingest/pumpportal-guard.ts',
+              "let pinnedKeysProvider: () => string[] = () => [];\n/** Wired at boot to the open-positions cache: pinned keys are open timed-entry",
+              "let pinnedKeysProvider: () => string[] = () => [];\nlet subscriptionPriorityProvider: (key: string) => number = () => 0;\n\nexport function setSubscriptionPriorityProvider(provider: (key: string) => number) {\n  subscriptionPriorityProvider = provider;\n}\n\nfunction subscriptionPriority(key: string): number {\n  try {\n    const value = Number(subscriptionPriorityProvider(key));\n    return Number.isFinite(value) ? value : 0;\n  } catch { return 0; }\n}\n\nfunction pendingRankScore(key: string, pinned: Set<string>): number {\n  return (pinned.has(key) ? 1_000_000_000 : 0)\n    + (state.urgentKeys.has(key) ? 1_000_000 : 0)\n    + subscriptionPriority(key);\n}\n\n/** Wired at boot to the open-positions cache: pinned keys are open timed-entry")
+
+          replace('src/ingest/pumpportal-guard.ts',
+              "    const oldest = [...state.pendingKeys.keys()].find(key => !pinned.has(key));\n    if (!oldest) break;\n    state.pendingKeys.delete(oldest);\n    state.urgentKeys.delete(oldest);",
+              "    const lowest = [...state.pendingKeys.keys()]\n      .filter(key => !pinned.has(key))\n      .sort((left, right) => pendingRankScore(left, pinned) - pendingRankScore(right, pinned)\n        || Number(state.pendingKeys.get(left) || 0) - Number(state.pendingKeys.get(right) || 0))[0];\n    if (!lowest) break;\n    state.pendingKeys.delete(lowest);\n    state.urgentKeys.delete(lowest);")
+
+          old_next = """function nextPending(openSlots: number): string[] {
+  if (openSlots <= 0) return [];
+  const pinned = pinnedSet();
+  const pinnedPending = [...state.pendingKeys.keys()].filter(key => pinned.has(key)).slice(0, openSlots);
+  const urgent = [pinnedPending, [...state.urgentKeys.keys()].reverse()].flat()
+    .filter((key, index, all) => all.indexOf(key) === index).slice(0, openSlots);
+  const selected = [...urgent];
+  if (selected.length < openSlots) {
+    const urgentSet = new Set(urgent);
+    const regular = [...state.pendingKeys.keys()].reverse()
+      .filter(key => !urgentSet.has(key))
+      .slice(0, openSlots - selected.length);
+    selected.push(...regular);
+  }
+  return selected;
+}
+"""
+          new_next = """function nextPending(openSlots: number): string[] {
+  if (openSlots <= 0) return [];
+  const pinned = pinnedSet();
+  return [...state.pendingKeys.keys()]
+    .sort((left, right) => pendingRankScore(right, pinned) - pendingRankScore(left, pinned)
+      || Number(state.pendingKeys.get(right) || 0) - Number(state.pendingKeys.get(left) || 0))
+    .slice(0, openSlots);
+}
+
+function effectiveActiveLimit(): number {
+  const budget = pumpPortalPersistentBudgetDiag();
+  const used = Number(budget.actualToday || 0);
+  const limit = Math.max(1, Number(budget.dailyEventLimit || 1));
+  return used / limit >= CONSERVATION_START_RATIO ? CONSERVATION_ACTIVE_TOKENS : MAX_ACTIVE_TOKENS;
+}
+
+function enforceActiveLimit(socket: WebSocket): void {
+  const limit = effectiveActiveLimit();
+  if (state.active.size <= limit) return;
+  const pinned = pinnedSet();
+  const removable = [...state.active.entries()]
+    .filter(([key]) => !pinned.has(key))
+    .sort((left, right) => subscriptionPriority(left[0]) - subscriptionPriority(right[0])
+      || (left[1].lastEventAt ?? left[1].subscribedAt) - (right[1].lastEventAt ?? right[1].subscribedAt));
+  const keys = removable.slice(0, Math.max(0, state.active.size - limit)).map(([key]) => key);
+  if (!keys.length) return;
+  unsubscribe(socket, keys);
+  for (const key of keys) state.active.delete(key);
+  queueKeys(keys, false);
+  state.evictedKeys += keys.length;
+}
+"""
+          replace('src/ingest/pumpportal-guard.ts', old_next, new_next)
+          replace('src/ingest/pumpportal-guard.ts',
+              "  const openSlots = Math.max(0, MAX_ACTIVE_TOKENS - state.active.size);",
+              "  const openSlots = Math.max(0, effectiveActiveLimit() - state.active.size);")
+          replace('src/ingest/pumpportal-guard.ts',
+              "    .sort((left, right) => (left[1].lastEventAt ?? left[1].subscribedAt) - (right[1].lastEventAt ?? right[1].subscribedAt))[0];",
+              "    .sort((left, right) => subscriptionPriority(left[0]) - subscriptionPriority(right[0])\n      || (left[1].lastEventAt ?? left[1].subscribedAt) - (right[1].lastEventAt ?? right[1].subscribedAt))[0];")
+          replace('src/ingest/pumpportal-guard.ts',
+              "  // Only a fresh single-token request may replace a slot. Streams that have produced a\n  // paid event are never rotated. Bulk reconciler traffic cannot churn provider state.\n  rotateOneQuietSlot(socket, now);",
+              "  // Preserve the last 20% of the daily allowance for the highest-priority candidates\n  // and open positions instead of letting broad discovery burn the entire day early.\n  enforceActiveLimit(socket);\n  rotateOneQuietSlot(socket, now);")
+          replace('src/ingest/pumpportal-guard.ts',
+              "    subscriptionStrategy: 'single_owner_fresh_priority_no_scanner_unsubscribe',",
+              "    subscriptionStrategy: 'single_owner_fresh_priority_no_scanner_unsubscribe',\n    qualityPriorityEnabled: true,\n    effectiveActiveLimit: effectiveActiveLimit(),\n    conservationStartRatio: CONSERVATION_START_RATIO,\n    conservationActiveTokens: CONSERVATION_ACTIVE_TOKENS,\n    conservationMode: effectiveActiveLimit() < MAX_ACTIVE_TOKENS,\n    highestPendingQualityPriority: state.pendingKeys.size\n      ? Math.max(...[...state.pendingKeys.keys()].map(subscriptionPriority)) : null,\n    lowestActiveQualityPriority: state.active.size\n      ? Math.min(...[...state.active.keys()].map(subscriptionPriority)) : null,")
+
+          replace('src/index.ts',
+              "import { setPinnedKeysProvider } from './ingest/pumpportal-guard';",
+              "import { setPinnedKeysProvider, setSubscriptionPriorityProvider } from './ingest/pumpportal-guard';")
+          replace('src/index.ts',
+              "  setPinnedKeysProvider(openTimedEntryCas);",
+              "  setPinnedKeysProvider(openTimedEntryCas);\n  setSubscriptionPriorityProvider((ca) => {\n    const token = getToken(ca);\n    if (!token) return 0;\n    const sourceBonus = token.source === 'wallet' ? 500\n      : token.source === 'social' ? 300\n        : token.source === 'momentum' ? 250 : 0;\n    const stateBonus = token.state === 'TRIGGER' ? 800\n      : token.state === 'HEATING' ? 450\n        : token.gated === true ? 300 : 0;\n    const trades = Math.max(0, Number(token.totalBuys || 0) + Number(token.totalSells || 0));\n    const uniqueBuyers = Array.isArray(token.uniqueBuyers) ? token.uniqueBuyers.length : 0;\n    const bondedSol = Math.max(0, Number(token.curveSol || 0) - 30);\n    return Math.round(sourceBonus + stateBonus + Number(token.score || 0) * 6\n      + Math.min(80, trades) * 3 + Math.min(50, uniqueBuyers) * 8\n      + Math.min(40, bondedSol) * 12);\n  });")
+
+          replace('src/helius-free-budget.ts',
+              "const ENHANCED_DAILY_CREDITS = Math.max(5_000, Math.min(200_000, Number(process.env.HELIUS_DAILY_CREDITS || 30_000)));",
+              "const ENHANCED_DAILY_CREDITS = Math.max(5_000, Math.min(200_000, Number(process.env.HELIUS_DAILY_CREDITS || 50_000)));")
+          replace('src/helius-free-budget.ts',
+              "const RPC_DAILY_CREDITS = Math.max(5_000, Math.min(500_000, Number(process.env.HELIUS_DAILY_RPC_CREDITS || 50_000)));",
+              "const RPC_DAILY_CREDITS = Math.max(5_000, Math.min(500_000, Number(process.env.HELIUS_DAILY_RPC_CREDITS || 100_000)));")
+
+          replace('src/gates/bundle.ts',
+              "const NEUTRAL: BundleCheck = { pass: true, reason: null, stats: null };\n\nexport async function checkBundle",
+              "const NEUTRAL: BundleCheck = { pass: true, reason: null, stats: null };\n\nexport function bundleHeliusPlan(token: Pick<TokenRecord, 'score' | 'state' | 'uniqueBuyers' | 'totalBuys' | 'totalSells'>): { maxPages: number; priority: 'fg' | 'bg' } {\n  const trades = Math.max(0, Number(token.totalBuys || 0) + Number(token.totalSells || 0));\n  const uniqueBuyers = Array.isArray(token.uniqueBuyers) ? token.uniqueBuyers.length : 0;\n  const highQuality = token.state !== 'WATCHING' || Number(token.score || 0) >= 60 || uniqueBuyers >= 20 || trades >= 35;\n  if (highQuality) return { maxPages: 5, priority: 'fg' };\n  const developing = Number(token.score || 0) >= 45 || uniqueBuyers >= 12 || trades >= 20;\n  return developing ? { maxPages: 2, priority: 'bg' } : { maxPages: 1, priority: 'bg' };\n}\n\nexport async function checkBundle")
+          replace('src/gates/bundle.ts',
+              "    const mintTransactions = await heliusTxsToCreation(token.ca, 5, 'bg');\n    if (!mintTransactions.length) return NEUTRAL;",
+              "    const plan = bundleHeliusPlan(token);\n    const mintTransactions = await heliusTxsToCreation(token.ca, plan.maxPages, plan.priority);\n    if (!mintTransactions.length) return NEUTRAL;\n    // A full shallow page may not contain the creation slot. Do not manufacture a\n    // bundle verdict from a later trade cluster; retry with deeper foreground coverage\n    // only if the token develops enough quality to justify it.\n    if (plan.maxPages < 5 && mintTransactions.length >= plan.maxPages * 100) return NEUTRAL;")
+          replace('src/gates/bundle.ts',
+              "      const deployerTransactions = await heliusTxs(deployer, 100, undefined, 'bg');",
+              "      const deployerTransactions = await heliusTxs(deployer, 100, undefined, plan.priority);")
+
+          replace('src/ingest/pumpportal-guard.test.ts',
+              "  assert.ok(diag.maxPendingTokens <= 250);",
+              "  assert.ok(diag.maxPendingTokens <= 500);")
+          guard_test = Path('src/ingest/pumpportal-guard.test.ts')
+          guard_text = guard_test.read_text()
+          guard_text += """
+
+test('PumpPortal pending selection favors measured coin quality within the fresh-token lane', async () => {
+  const { setSubscriptionPriorityProvider, __guardInternalsForTest } = await import('./pumpportal-guard');
+  const { state, queueKeys, nextPending } = __guardInternalsForTest;
+  state.pendingKeys.clear();
+  state.urgentKeys.clear();
+  setSubscriptionPriorityProvider(key => key === 'high-quality' ? 500 : 5);
+  try {
+    queueKeys(['low-quality', 'high-quality'], true);
+    assert.equal(nextPending(1)[0], 'high-quality');
+  } finally {
+    state.pendingKeys.clear();
+    state.urgentKeys.clear();
+    setSubscriptionPriorityProvider(() => 0);
+  }
+});
+"""
+          guard_test.write_text(guard_text)
+
+          Path('src/gates/bundle-capacity.test.ts').write_text("""import test from 'node:test';
+import assert from 'node:assert/strict';
+import { bundleHeliusPlan } from './bundle';
+
+function token(overrides: Record<string, unknown> = {}) {
+  return {
+    score: 25,
+    state: 'WATCHING',
+    uniqueBuyers: [],
+    totalBuys: 5,
+    totalSells: 2,
+    ...overrides,
+  } as any;
+}
+
+test('bundle Helius depth spends one page on weak candidates and preserves five-page foreground coverage for quality', () => {
+  assert.deepEqual(bundleHeliusPlan(token()), { maxPages: 1, priority: 'bg' });
+  assert.deepEqual(bundleHeliusPlan(token({ score: 48, uniqueBuyers: Array(12).fill('wallet') })), { maxPages: 2, priority: 'bg' });
+  assert.deepEqual(bundleHeliusPlan(token({ score: 65 })), { maxPages: 5, priority: 'fg' });
+  assert.deepEqual(bundleHeliusPlan(token({ state: 'HEATING' })), { maxPages: 5, priority: 'fg' });
+});
+""")
+      - name: Verify source and tests
+        run: npm run check
+      - name: Commit source-only result
+        shell: bash
+        run: |
+          rm .github/workflows/apply-expanded-discovery.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/ingest/pumpportal-persistent-budget.ts src/ingest/pumpportal-guard.ts src/ingest/pumpportal-guard.test.ts src/index.ts src/helius-free-budget.ts src/gates/bundle.ts src/gates/bundle-capacity.test.ts .github/workflows/apply-expanded-discovery.yml
+          git commit -m "Expand quality-first Helius and PumpPortal discovery capacity"
+          git push origin HEAD:feature/expand-helius-pumpportal-discovery
