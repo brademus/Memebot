@@ -21,7 +21,7 @@ function assertRejects(request: any, expectedStatus: number) {
   assert.equal(statusCode, expectedStatus);
 }
 
-test('read-only daily reports work without ADMIN_KEY', () => {
+test('read-only daily and BTC reports work without ADMIN_KEY', () => {
   const previous = process.env.ADMIN_KEY;
   delete process.env.ADMIN_KEY;
   assertPasses({
@@ -34,6 +34,24 @@ test('read-only daily reports work without ADMIN_KEY', () => {
     method: 'GET',
     path: '/api/daily-review-jobs/job-123',
     originalUrl: '/api/daily-review-jobs/job-123',
+    header: () => undefined,
+  } as any);
+  assertPasses({
+    method: 'POST',
+    path: '/api/btc-review-jobs',
+    originalUrl: '/api/btc-review-jobs?days=3650',
+    header: () => undefined,
+  } as any);
+  assertPasses({
+    method: 'GET',
+    path: '/api/btc-review-jobs/job-123',
+    originalUrl: '/api/btc-review-jobs/job-123',
+    header: () => undefined,
+  } as any);
+  assertPasses({
+    method: 'GET',
+    path: '/api/btc-review-jobs/job-123/chunks/0',
+    originalUrl: '/api/btc-review-jobs/job-123/chunks/0',
     header: () => undefined,
   } as any);
   if (previous === undefined) delete process.env.ADMIN_KEY;
