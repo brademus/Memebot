@@ -80,7 +80,12 @@ export function classifyHeliusRequest(url: string): { cost: number; category: st
   }
 }
 
-const rpcUsed = () => byCategory['rpc'] || 0;
+/** One definition of the cheap-essentials pool, shared by the decision and the counters. */
+export function isRpcPoolCategory(category: string): boolean {
+  return category === 'rpc' || category === 'webhook_admin';
+}
+const rpcUsed = () => Object.entries(byCategory)
+  .reduce((sum, [category, credits]) => sum + (isRpcPoolCategory(category) ? Number(credits) : 0), 0);
 const enhancedUsed = () => estimatedCreditsToday - rpcUsed();
 const enhancedCeiling = () => (pool ? ENHANCED_DAILY_CREDITS : PROCESS_FALLBACK_ENHANCED_CREDITS);
 const rpcCeiling = () => (pool ? RPC_DAILY_CREDITS : PROCESS_FALLBACK_RPC_CREDITS);
@@ -101,7 +106,12 @@ export function decideHeliusRequest(
   rpcCeilingValue: number,
   enhancedCeilingValue: number,
 ): { allowed: boolean; scope: 'enhanced' | 'rpc' } {
-  const isRpc = category === 'rpc';
+  // webhook_admin is a 1-credit administrative call (list/register webhooks) that
+  // smart-wallet tracking depends on. Leaving it in the enhanced pool meant a
+  // spent enrichment budget ALSO kept the wallet webhook unregistered — observed
+  // live 2026-07-31: addressCount 0 for days, lastError naming the enhanced
+  // budget. Cheap essentials ride the RPC pool.
+  const isRpc = isRpcPoolCategory(category);
   const soFar = isRpc ? rpcUsedSoFar : enhancedUsedSoFar;
   const ceiling = isRpc ? rpcCeilingValue : enhancedCeilingValue;
   return { allowed: soFar + cost <= ceiling, scope: isRpc ? 'rpc' : 'enhanced' };

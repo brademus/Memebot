@@ -483,7 +483,7 @@ export async function buildMasterReview(days = 3650) {
            ROUND(MAX(o.multiple_from_first)::numeric, 2) AS peak_multiple_from_kill
       FROM outcomes o JOIN tokens t ON t.ca=o.ca
      WHERE o.taken_at > now()-($1||' days')::interval
-       AND t.gate_result='kill'
+       AND t.gate_result='failed'
        AND NOT EXISTS (SELECT 1 FROM paper_trades p WHERE p.ca=t.ca)
      GROUP BY t.ca
     HAVING MAX(o.multiple_from_first) >= 3

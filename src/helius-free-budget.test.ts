@@ -47,3 +47,12 @@ test('a request that would exactly fill a ceiling is allowed; one credit more is
   assert.equal(decideHeliusRequest('rpc', 1, 49_999, 0, 50_000, 30_000).allowed, true);
   assert.equal(decideHeliusRequest('rpc', 2, 49_999, 0, 50_000, 30_000).allowed, false);
 });
+
+test('webhook-admin calls ride the RPC pool — a spent enhanced budget must not silence wallet tracking', async () => {
+  const { decideHeliusRequest, isRpcPoolCategory } = await import('./helius-free-budget');
+  assert.equal(isRpcPoolCategory('webhook_admin'), true);
+  assert.equal(isRpcPoolCategory('enhanced_address_history'), false);
+  const call = decideHeliusRequest('webhook_admin', 1, 100, 30_000, 50_000, 30_000);
+  assert.equal(call.allowed, true, 'enhanced fully spent, webhook admin must still work');
+  assert.equal(call.scope, 'rpc');
+});
