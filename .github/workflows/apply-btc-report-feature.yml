@@ -1,3 +1,4 @@
+# One-time feature branch applicator; delete after the branch commit lands.
 name: Apply BTC Report Feature
 
 on:
