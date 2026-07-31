@@ -3,7 +3,7 @@ name: Apply BTC Profitability Diagnostics
 on:
   pull_request:
     branches: [main]
-    types: [opened]
+    types: [opened, synchronize]
   workflow_dispatch:
 
 permissions:
@@ -26,7 +26,16 @@ jobs:
           node-version: 22
           cache: npm
       - name: Apply audited BTC changes
-        run: node scripts/apply-btc-profitability-diagnostics.mjs
+        run: |
+          node scripts/apply-btc-profitability-diagnostics.mjs
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const path = 'src/btc/platform/engine.ts';
+          const source = fs.readFileSync(path, 'utf8');
+          const before = 'this.strategyHasActiveResearch(armed.candidate.strategyId)';
+          if (!source.includes(before)) throw new Error('expected fill-time research exposure check was not found');
+          fs.writeFileSync(path, source.replace(before, 'this.strategyHasResearchExposure(armed.candidate.strategyId)'));
+          NODE
       - name: Remove one-time applicator
         run: rm scripts/apply-btc-profitability-diagnostics.mjs .github/workflows/apply-btc-profitability-diagnostics.yml
       - name: Install dependencies
