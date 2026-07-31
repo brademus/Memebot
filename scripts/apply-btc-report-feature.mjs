@@ -1,3 +1,4 @@
+// One-time source integration; removed after the generated source commit lands.
 import fs from 'node:fs';
 
 function read(path) {
