@@ -31,22 +31,21 @@ jobs:
           const fs = require('node:fs');
           const path = 'src/btc/platform/engine.ts';
           let source = fs.readFileSync(path, 'utf8');
-          const exposureMethod = `  private strategyHasResearchExposure(strategyId: string): boolean {
-            const active = this.activeCalls.some(call => call.book === 'research'
-              && call.strategyId === strategyId && activeStates.has(call.status));
-            const armed = [...this.armed.values()].some(item => item.book === 'research'
-              && item.candidate.strategyId === strategyId);
-            return active || armed;
-          }
-          `;
-          const replacement = `${exposureMethod}
-          private strategyHasActiveResearch(strategyId: string): boolean {
-            return this.activeCalls.some(call => call.book === 'research'
-              && call.strategyId === strategyId && activeStates.has(call.status));
-          }
-          `;
-          if (!source.includes(exposureMethod)) throw new Error('research exposure method target is missing');
-          source = source.replace(exposureMethod, replacement);
+          const anchor = `    return active || armed;
+            }
+
+            private strategyCooldownActive`;
+          const insertion = `    return active || armed;
+            }
+
+            private strategyHasActiveResearch(strategyId: string): boolean {
+              return this.activeCalls.some(call => call.book === 'research'
+                && call.strategyId === strategyId && activeStates.has(call.status));
+            }
+
+            private strategyCooldownActive`;
+          if (!source.includes(anchor)) throw new Error('research exposure insertion anchor is missing');
+          source = source.replace(anchor, insertion);
           const oldFillGuard = `if (armed.book === 'research' && this.strategyHasResearchExposure(armed.candidate.strategyId))`;
           if (!source.includes(oldFillGuard)) throw new Error('fill-time research guard target is missing');
           source = source.replace(oldFillGuard,
