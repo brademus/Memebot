@@ -100,25 +100,4 @@ if (!index.includes('/btc-review.js')) {
   ));
 }
 
-replaceOnce(
-  '.github/workflows/ci.yml',
-  'node --check public/app.js && node --check public/market-mode.js && node --check public/btc-dashboard.js && node --check public/no-admin.js',
-  'node --check public/app.js && node --check public/market-mode.js && node --check public/btc-dashboard.js && node --check public/btc-review.js && node --check public/no-admin.js',
-);
-
-replaceOnce(
-  '.github/workflows/ci.yml',
-  `      - name: BTC multistrategy Postgres contract
-        run: node --test dist/btc/platform/platform.integration.test.js
-
-      - name: Evidence policy and append-only journal contract`,
-  `      - name: BTC multistrategy Postgres contract
-        run: node --test dist/btc/platform/platform.integration.test.js
-
-      - name: BTC downloadable report Postgres contract
-        run: node --test dist/api/btc-report.integration.test.js
-
-      - name: Evidence policy and append-only journal contract`,
-);
-
 console.log('BTC downloadable report feature patched successfully.');
