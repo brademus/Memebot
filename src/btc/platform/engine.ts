@@ -142,6 +142,11 @@ export class BtcMultiStrategyEngine {
     return active || armed;
   }
 
+  private strategyHasActiveResearch(strategyId: string): boolean {
+    return this.activeCalls.some(call => call.book === 'research'
+      && call.strategyId === strategyId && activeStates.has(call.status));
+  }
+
   private strategyCooldownActive(candidate: StrategyCandidate): boolean {
     const recent = [...this.activeCalls, ...this.recentCalls]
       .filter(call => call.strategyId === candidate.strategyId)
@@ -337,7 +342,7 @@ export class BtcMultiStrategyEngine {
         continue;
       }
       if (!canFill(context, armed)) continue;
-      if (armed.book === 'research' && this.strategyHasResearchExposure(armed.candidate.strategyId)) {
+      if (armed.book === 'research' && this.strategyHasActiveResearch(armed.candidate.strategyId)) {
         this.armed.delete(key);
         continue;
       }
