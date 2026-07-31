@@ -132,7 +132,7 @@ jobs:
           retention-days: 7
 
       - name: Dashboard JavaScript syntax
-        run: node --check public/app.js && node --check public/market-mode.js && node --check public/btc-dashboard.js && node --check public/no-admin.js && node --check public/daily-review.js && node --check public/observed-wins.js
+        run: node --check public/app.js && node --check public/market-mode.js && node --check public/btc-dashboard.js && node --check public/btc-review.js && node --check public/no-admin.js && node --check public/daily-review.js && node --check public/observed-wins.js
 
   postgres-persistence:
     needs: build-and-test
@@ -183,6 +183,9 @@ jobs:
 
       - name: BTC multistrategy Postgres contract
         run: node --test dist/btc/platform/platform.integration.test.js
+
+      - name: BTC downloadable report Postgres contract
+        run: node --test dist/api/btc-report.integration.test.js
 
       - name: Evidence policy and append-only journal contract
         run: node --test dist/evidence/system-v3.integration.test.js
