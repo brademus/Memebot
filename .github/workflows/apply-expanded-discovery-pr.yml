@@ -27,11 +27,15 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
-          from textwrap import dedent
+
           workflow = Path('.github/workflows/apply-expanded-discovery.yml').read_text()
           body = workflow.split("      - name: Expand quality-first discovery capacity\n        shell: python\n        run: |\n", 1)[1]
           body = body.split("      - name: Verify source and tests\n", 1)[0]
-          exec(compile(dedent(body), 'expanded-discovery-patch', 'exec'))
+          body = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in body.splitlines()
+          )
+          exec(compile(body, 'expanded-discovery-patch', 'exec'))
       - name: Verify source and tests
         run: npm run check
       - name: Commit source-only result
