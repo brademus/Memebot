@@ -1,0 +1,85 @@
+name: Verify BTC Report Live
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.event.pull_request.head.ref == 'verify/btc-report-live'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Start production BTC report and reconstruct ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='https://memebot-olive.vercel.app'
+          start=''
+          for attempt in $(seq 1 60); do
+            code=$(curl -sS -o start.json -w '%{http_code}' -X POST "$base/api/btc-review-jobs" || true)
+            if [[ "$code" == '202' ]]; then
+              start=$(cat start.json)
+              break
+            fi
+            echo "Attempt $attempt: report start returned HTTP $code: $(cat start.json 2>/dev/null || true)"
+            sleep 5
+          done
+          [[ -n "$start" ]] || { echo 'production BTC report route never became available'; exit 1; }
+          id=$(jq -er '.id' <<<"$start")
+          echo "Started BTC report job $id"
+
+          for attempt in $(seq 1 240); do
+            curl -fsS "$base/api/btc-review-jobs/$id" -o status.json
+            status=$(jq -er '.status' status.json)
+            message=$(jq -r '.message // ""' status.json)
+            echo "Poll $attempt: $status — $message"
+            if [[ "$status" == 'ready' ]]; then break; fi
+            if [[ "$status" == 'error' ]]; then cat status.json; exit 1; fi
+            sleep 2
+          done
+          [[ "$(jq -r '.status' status.json)" == 'ready' ]] || { cat status.json; exit 1; }
+
+          chunks=$(jq -er '.totalChunks' status.json)
+          expected=$(jq -er '.archiveBytes' status.json)
+          filename=$(jq -er '.downloadFilename' status.json)
+          : > report.zip
+          for index in $(seq 0 $((chunks - 1))); do
+            curl -fsS "$base/api/btc-review-jobs/$id/chunks/$index" -o chunk.json
+            jq -er --argjson index "$index" '.index == $index and .encoding == "base64" and (.chunk | type == "string")' chunk.json >/dev/null
+            jq -r '.chunk' chunk.json | base64 --decode >> report.zip
+          done
+          actual=$(stat -c '%s' report.zip)
+          [[ "$actual" == "$expected" ]] || { echo "ZIP size mismatch: $actual != $expected"; exit 1; }
+          unzip -t report.zip
+          unzip -p report.zip btc-trade-review-all-time.json > report.json
+          jq -e '
+            .reportType == "btc_strategy_trade_review" and
+            .paperOnly == true and
+            .executionEnabled == false and
+            (.trades | type == "array") and
+            (.strategyPerformance | type == "array") and
+            (.candidateFunnel | type == "array") and
+            (.riskRejectionReasons | type == "array") and
+            (.overlappingExposure | type == "array")
+          ' report.json >/dev/null
+          echo "LIVE_BTC_REPORT_FILENAME=$filename"
+          echo "LIVE_BTC_REPORT_ARCHIVE_BYTES=$actual"
+          echo "LIVE_BTC_REPORT_TRADES=$(jq -r '.summary.calls' report.json)"
+          echo "LIVE_BTC_REPORT_RESOLVED=$(jq -r '.summary.resolved' report.json)"
+          echo "LIVE_BTC_REPORT_STRATEGY_ROWS=$(jq -r '.strategyPerformance | length' report.json)"
+          echo "LIVE_BTC_REPORT_CANDIDATE_FUNNEL_ROWS=$(jq -r '.candidateFunnel | length' report.json)"
+
+      - name: Upload verified live archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-live-btc-report
+          path: |
+            report.zip
+            report.json
+            status.json
+          retention-days: 2
