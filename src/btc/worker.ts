@@ -1,4 +1,5 @@
 import { getBtcStatus, startBtcPaperEngine } from './runtime';
+import { startBtcMarketIntelligencePersistence } from './market-intelligence-persistence';
 
 let publishing = false;
 
@@ -16,6 +17,7 @@ async function publishStatus(): Promise<void> {
 
 async function main(): Promise<void> {
   await startBtcPaperEngine();
+  await startBtcMarketIntelligencePersistence();
   await publishStatus();
   setInterval(() => void publishStatus(), 5_000);
   console.log('[btc-worker] isolated paper engine active');
