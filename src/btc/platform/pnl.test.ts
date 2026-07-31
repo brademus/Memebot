@@ -127,8 +127,11 @@ const near = (actual: number, expected: number, message: string) => {
 };
 
 test('BTC open PnL equals executable gross move minus charged and projected costs without charging spread twice', () => {
-  const { call } = createPaperCall(candidate, plan, baseContext, 'actionable');
+  const { call, event } = createPaperCall(candidate, plan, baseContext, 'actionable');
   near(call.realizedPnlUsd, -0.60, 'entry charged costs');
+  assert.equal(event.fill?.purpose, 'entry');
+  near(Number(event.fill?.feeUsd), 0.55, 'entry fill fee');
+  near(Number(event.fill?.slippageUsd), 0.05, 'entry fill slippage');
   near(call.feesUsd, 0.60, 'stored charged costs');
   assert.equal(call.features.pnlAccountingVersion, 2);
 
@@ -145,7 +148,11 @@ test('BTC open PnL equals executable gross move minus charged and projected cost
 test('BTC partial exit re-marks only the remaining fraction and does not double-count closed PnL', () => {
   const { call } = createPaperCall(candidate, plan, baseContext, 'actionable');
   const context = closeContext(100.50);
-  markPaperCall(call, context);
+  const events = markPaperCall(call, context);
+  const partial = events.find(event => event.type === 'partial_take_profit');
+  assert.equal(partial?.fill?.purpose, 'partial_exit');
+  near(Number(partial?.fill?.fraction), 0.75, 'partial fill fraction');
+  near(Number(partial?.fill?.notionalUsd), 750, 'partial fill notional');
 
   const gross = 1000 * (100.50 - 100.01) / 100.01;
   const chargedEntry = 0.60;

@@ -134,8 +134,12 @@ export class BtcMultiStrategyEngine {
     }
   }
 
-  private strategyHasActiveResearch(strategyId: string): boolean {
-    return this.activeCalls.some(call => call.book === 'research' && call.strategyId === strategyId && activeStates.has(call.status));
+  private strategyHasResearchExposure(strategyId: string): boolean {
+    const active = this.activeCalls.some(call => call.book === 'research'
+      && call.strategyId === strategyId && activeStates.has(call.status));
+    const armed = [...this.armed.values()].some(item => item.book === 'research'
+      && item.candidate.strategyId === strategyId);
+    return active || armed;
   }
 
   private strategyCooldownActive(candidate: StrategyCandidate): boolean {
@@ -161,10 +165,25 @@ export class BtcMultiStrategyEngine {
     return candidate.createdAt - recent.openedAt < cooldownMinutes * 60_000;
   }
 
-  private hasResearchExposure(): boolean {
-    const active = this.activeCalls.some(call => call.book === 'research' && activeStates.has(call.status));
-    const armed = [...this.armed.values()].some(item => item.book === 'research');
-    return active || armed;
+  private researchCapacityReason(candidate: StrategyCandidate): string | null {
+    const active = this.activeCalls
+      .filter(call => call.book === 'research' && activeStates.has(call.status))
+      .map(call => ({ direction: call.direction }));
+    const armed = [...this.armed.values()]
+      .filter(item => item.book === 'research')
+      .map(item => ({ direction: item.candidate.direction }));
+    const exposures = [...active, ...armed];
+    const configured = Number(process.env.BTC_MAX_ACTIVE_RESEARCH_CALLS || 4);
+    const maxGlobal = Number.isFinite(configured) ? Math.max(1, Math.min(8, Math.floor(configured))) : 4;
+    if (exposures.length >= maxGlobal) {
+      return `research concurrency cap of ${maxGlobal} active or armed calls is reached`;
+    }
+    const maxPerDirection = Math.max(1, Math.ceil(maxGlobal / 2));
+    const sameDirection = exposures.filter(item => item.direction === candidate.direction).length;
+    if (sameDirection >= maxPerDirection) {
+      return `research ${candidate.direction}-direction cap of ${maxPerDirection} is reached`;
+    }
+    return null;
   }
 
   private async armResearch(candidate: StrategyCandidate, plan: RiskPlan): Promise<boolean> {
@@ -172,12 +191,13 @@ export class BtcMultiStrategyEngine {
       await persistRiskDecision(candidate, 'research', plan, plan.rejectionReasons);
       return false;
     }
-    if (this.hasResearchExposure()) {
-      await persistRiskDecision(candidate, 'research', plan, ['global research exposure is already active or armed']);
+    if (this.strategyHasResearchExposure(candidate.strategyId)) {
+      await persistRiskDecision(candidate, 'research', plan, ['research strategy already has an active or armed call']);
       return false;
     }
-    if (this.strategyHasActiveResearch(candidate.strategyId)) {
-      await persistRiskDecision(candidate, 'research', plan, ['research strategy already has an active call']);
+    const capacityReason = this.researchCapacityReason(candidate);
+    if (capacityReason) {
+      await persistRiskDecision(candidate, 'research', plan, [capacityReason]);
       return false;
     }
     if (this.strategyCooldownActive(candidate)) {
@@ -231,8 +251,12 @@ export class BtcMultiStrategyEngine {
       this.realizedPnlToday,
       DEFAULT_PORTFOLIO_LIMITS,
     );
-    await persistRiskDecision(candidate, 'actionable', plan, assessment.reasons);
-    if (!assessment.approved || this.strategyCooldownActive(candidate)) return;
+    const cooldownActive = this.strategyCooldownActive(candidate);
+    await persistRiskDecision(candidate, 'actionable', plan, [
+      ...assessment.reasons,
+      ...(cooldownActive ? ['strategy cooldown is active'] : []),
+    ]);
+    if (!assessment.approved || cooldownActive) return;
     this.armed.set(`actionable:${candidate.id}`, {
       candidate, plan, book: 'actionable', supportingStrategies, armedAt: candidate.createdAt,
     });
@@ -296,19 +320,12 @@ export class BtcMultiStrategyEngine {
       .filter(item => !actionableCandidateIds.has(item.candidate.id))
       .filter(item => item.candidate.mode === 'shadow' || !item.actionablePlan.approved)
       .sort((a, b) => combinedConfidence(b.candidate) - combinedConfidence(a.candidate));
-    let selectedResearch = false;
     for (const item of researchPool) {
       if (!item.researchPlan.approved) {
         await persistRiskDecision(item.candidate, 'research', item.researchPlan, item.researchPlan.rejectionReasons);
         continue;
       }
-      if (!selectedResearch && !this.hasResearchExposure()) {
-        selectedResearch = await this.armResearch(item.candidate, item.researchPlan);
-        if (selectedResearch) continue;
-      }
-      await persistRiskDecision(item.candidate, 'research', item.researchPlan, [
-        'not selected by global research event coordinator; correlated market exposure already selected',
-      ]);
+      await this.armResearch(item.candidate, item.researchPlan);
     }
   }
 
@@ -320,7 +337,7 @@ export class BtcMultiStrategyEngine {
         continue;
       }
       if (!canFill(context, armed)) continue;
-      if (armed.book === 'research' && this.strategyHasActiveResearch(armed.candidate.strategyId)) {
+      if (armed.book === 'research' && this.strategyHasResearchExposure(armed.candidate.strategyId)) {
         this.armed.delete(key);
         continue;
       }

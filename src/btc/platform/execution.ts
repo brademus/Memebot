@@ -12,6 +12,17 @@ import { DEFAULT_COST_MODEL } from './risk';
 
 export type ExecutionEventType = 'entry_filled' | 'pnl_snapshot' | 'partial_take_profit' | 'stop_updated' | 'position_closed' | 'position_liquidated';
 
+export interface ExecutionFill {
+  side: 'buy' | 'sell';
+  purpose: 'entry' | 'partial_exit' | 'exit' | 'liquidation';
+  price: number;
+  notionalUsd: number;
+  fraction: number;
+  feeUsd: number;
+  slippageUsd: number;
+  metadata: Record<string, unknown>;
+}
+
 export interface ExecutionEvent {
   type: ExecutionEventType;
   call: PaperCall;
@@ -19,6 +30,7 @@ export interface ExecutionEvent {
   timestamp: number;
   reason: string;
   realizedPnlDeltaUsd: number;
+  fill?: ExecutionFill;
 }
 
 function executablePrice(context: MarketContext, direction: BtcDirection, action: 'entry' | 'exit'): number {
@@ -41,11 +53,20 @@ function currentR(call: PaperCall): number {
   return safeDiv(call.netPnlUsd, plannedRisk(call));
 }
 
-function exitCosts(notional: number, context: MarketContext, emergency = false): number {
+interface ExitCostBreakdown {
+  totalUsd: number;
+  feeUsd: number;
+  slippageUsd: number;
+  slippageBps: number;
+}
+
+function exitCostBreakdown(notional: number, context: MarketContext, emergency = false): ExitCostBreakdown {
   const spreadBps = Math.max(0, context.feed.spreadBps ?? 4);
   const fragility = clamp(context.orderFlow.bookFragility, 0, 1);
   const slippageBps = (emergency ? 2.5 : 0.8) + spreadBps * 0.45 + fragility * (emergency ? 8 : 4);
-  return notional * (DEFAULT_COST_MODEL.takerFeeRate + slippageBps / 10_000);
+  const feeUsd = notional * DEFAULT_COST_MODEL.takerFeeRate;
+  const slippageUsd = notional * slippageBps / 10_000;
+  return { totalUsd: feeUsd + slippageUsd, feeUsd, slippageUsd, slippageBps };
 }
 
 function updatePnlAccountingFeatures(call: PaperCall, projectedExitCostsUsd: number): void {
@@ -58,7 +79,7 @@ function updatePnlAccountingFeatures(call: PaperCall, projectedExitCostsUsd: num
 function markRemainingPosition(call: PaperCall, context: MarketContext, exit: number): void {
   const remainingNotional = call.notionalUsd * call.remainingFraction;
   const grossUnrealized = remainingNotional * directionalMove(call.direction, call.entryPrice, exit);
-  const projectedExitCostsUsd = exitCosts(remainingNotional, context);
+  const projectedExitCostsUsd = exitCostBreakdown(remainingNotional, context).totalUsd;
   call.unrealizedPnlUsd = grossUnrealized - projectedExitCostsUsd + call.fundingUsd;
   call.netPnlUsd = call.realizedPnlUsd + call.unrealizedPnlUsd;
   call.roiPct = call.netPnlUsd / call.marginUsd * 100;
@@ -82,22 +103,38 @@ function estimateFunding(call: PaperCall, context: MarketContext, at: number): n
   return pays ? -amount : amount;
 }
 
+interface ClosedFraction {
+  netUsd: number;
+  grossUsd: number;
+  notionalUsd: number;
+  fraction: number;
+  feeUsd: number;
+  slippageUsd: number;
+}
+
 function closeFraction(
   call: PaperCall,
   context: MarketContext,
   price: number,
   fraction: number,
   emergency = false,
-): number {
-  const closeFraction = clamp(fraction, 0, call.remainingFraction);
-  const notionalClosed = call.notionalUsd * closeFraction;
-  const gross = notionalClosed * directionalMove(call.direction, call.entryPrice, price);
-  const costs = exitCosts(notionalClosed, context, emergency);
-  const net = gross - costs;
-  call.realizedPnlUsd += net;
-  call.feesUsd += costs;
-  call.remainingFraction = Math.max(0, call.remainingFraction - closeFraction);
-  return net;
+): ClosedFraction {
+  const fractionClosed = clamp(fraction, 0, call.remainingFraction);
+  const notionalClosed = call.notionalUsd * fractionClosed;
+  const grossUsd = notionalClosed * directionalMove(call.direction, call.entryPrice, price);
+  const costs = exitCostBreakdown(notionalClosed, context, emergency);
+  const netUsd = grossUsd - costs.totalUsd;
+  call.realizedPnlUsd += netUsd;
+  call.feesUsd += costs.totalUsd;
+  call.remainingFraction = Math.max(0, call.remainingFraction - fractionClosed);
+  return {
+    netUsd,
+    grossUsd,
+    notionalUsd: notionalClosed,
+    fraction: fractionClosed,
+    feeUsd: costs.feeUsd,
+    slippageUsd: costs.slippageUsd,
+  };
 }
 
 export function createPaperCall(
@@ -231,6 +268,23 @@ export function createPaperCall(
     event: {
       type: 'entry_filled', call, price: fill, timestamp: context.timestamp,
       reason: `${book} paper entry filled after risk approval`, realizedPnlDeltaUsd: -initialCosts,
+      fill: {
+        side: candidate.direction === 'long' ? 'buy' : 'sell',
+        purpose: 'entry',
+        price: fill,
+        notionalUsd: plan.notionalUsd,
+        fraction: 1,
+        feeUsd: plan.costs.entryFeeUsd,
+        slippageUsd: plan.costs.entrySlippageUsd,
+        metadata: {
+          book,
+          candidateId: candidate.id,
+          strategyId: candidate.strategyId,
+          strategyVersion: candidate.strategyVersion,
+          referenceVenue: context.feed.referenceVenue,
+          plannedEntryPrice: plan.entryPrice,
+        },
+      },
     },
   };
 }
@@ -243,7 +297,7 @@ function finishCall(
   reason: string,
   liquidated = false,
 ): ExecutionEvent {
-  const delta = closeFraction(call, context, price, call.remainingFraction, liquidated || reason.includes('emergency'));
+  const closed = closeFraction(call, context, price, call.remainingFraction, liquidated || reason.includes('emergency'));
   call.currentPrice = price;
   call.unrealizedPnlUsd = 0;
   call.fundingUsd = estimateFunding(call, context, at);
@@ -265,7 +319,23 @@ function finishCall(
     price,
     timestamp: at,
     reason,
-    realizedPnlDeltaUsd: delta + call.fundingUsd,
+    realizedPnlDeltaUsd: closed.netUsd + call.fundingUsd,
+    fill: {
+      side: call.direction === 'long' ? 'sell' : 'buy',
+      purpose: liquidated ? 'liquidation' : 'exit',
+      price,
+      notionalUsd: closed.notionalUsd,
+      fraction: closed.fraction,
+      feeUsd: closed.feeUsd,
+      slippageUsd: closed.slippageUsd,
+      metadata: {
+        book: call.book,
+        strategyId: call.strategyId,
+        strategyVersion: call.strategyVersion,
+        reason,
+        emergency: reason.includes('emergency'),
+      },
+    },
   };
 }
 
@@ -296,7 +366,7 @@ export function markPaperCall(call: PaperCall, context: MarketContext): Executio
   const targetHit = call.direction === 'long' ? exit >= call.targetPrice : exit <= call.targetPrice;
   const exitModel = String(call.features.exitModel || 'fixed');
   if (targetHit && !call.runnerActivated && exitModel === 'partial_runner') {
-    const delta = closeFraction(call, context, exit, 0.75);
+    const closed = closeFraction(call, context, exit, 0.75);
     // Re-mark only the remaining 25%. The previous implementation retained the
     // full-position unrealized P&L after closing 75%, temporarily double-counting it.
     markRemainingPosition(call, context, exit);
@@ -308,7 +378,22 @@ export function markPaperCall(call: PaperCall, context: MarketContext): Executio
       : call.entryPrice * (1 - costBufferPct);
     events.push({
       type: 'partial_take_profit', call, price: exit, timestamp: at,
-      reason: '75% closed at the initial net target; 25% runner activated', realizedPnlDeltaUsd: delta,
+      reason: '75% closed at the initial net target; 25% runner activated', realizedPnlDeltaUsd: closed.netUsd,
+      fill: {
+        side: call.direction === 'long' ? 'sell' : 'buy',
+        purpose: 'partial_exit',
+        price: exit,
+        notionalUsd: closed.notionalUsd,
+        fraction: closed.fraction,
+        feeUsd: closed.feeUsd,
+        slippageUsd: closed.slippageUsd,
+        metadata: {
+          book: call.book,
+          strategyId: call.strategyId,
+          strategyVersion: call.strategyVersion,
+          runnerRemainingFraction: call.remainingFraction,
+        },
+      },
     });
     events.push({
       type: 'stop_updated', call, price: call.trailingStopPrice, timestamp: at,

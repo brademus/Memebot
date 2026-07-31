@@ -135,12 +135,12 @@ export async function updateCall(call: PaperCall): Promise<void> {
     extended_target_price=$6,closed_at=$7,exit_price=$8,exit_reason=$9,realized_pnl_usd=$10,
     unrealized_pnl_usd=$11,net_pnl_usd=$12,roi_pct=$13,current_r=$14,result_r=$15,
     max_favorable_r=$16,max_adverse_r=$17,remaining_fraction=$18,runner_activated=$19,
-    trailing_stop_price=$20,fees_usd=$21,funding_usd=$22,updated_at=now() WHERE call_id=$1`, [
+    trailing_stop_price=$20,fees_usd=$21,funding_usd=$22,features=$23::jsonb,updated_at=now() WHERE call_id=$1`, [
     call.id, call.status, call.currentPrice, call.stopPrice, call.targetPrice, call.extendedTargetPrice,
     call.closedAt === null ? null : toDate(call.closedAt), call.exitPrice, call.exitReason,
     call.realizedPnlUsd, call.unrealizedPnlUsd, call.netPnlUsd, call.roiPct, call.currentR,
     call.resultR, call.maxFavorableR, call.maxAdverseR, call.remainingFraction, call.runnerActivated,
-    call.trailingStopPrice, call.feesUsd, call.fundingUsd,
+    call.trailingStopPrice, call.feesUsd, call.fundingUsd, JSON.stringify(call.features),
   ]);
 }
 
@@ -157,8 +157,25 @@ export async function appendCallEvent(event: ExecutionEvent): Promise<void> {
       currentR: event.call.currentR,
       remainingFraction: event.call.remainingFraction,
       trailingStopPrice: event.call.trailingStopPrice,
+      maxFavorableR: event.call.maxFavorableR,
+      maxAdverseR: event.call.maxAdverseR,
+      feesUsd: event.call.feesUsd,
+      fundingUsd: event.call.fundingUsd,
+      grossPnlUsd: event.call.features.grossPnlUsd ?? null,
+      grossMfePct: event.call.features.grossMfePct ?? null,
+      grossMaePct: event.call.features.grossMaePct ?? null,
+      totalModeledCostsUsd: event.call.features.totalModeledCostsUsd ?? null,
     }),
   ]);
+  if (event.fill) {
+    await pool.query(`INSERT INTO btc_fills
+      (call_id,fill_at,side,purpose,price,notional_usd,fraction,fee_usd,slippage_usd,metadata)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)`, [
+      event.call.id, toDate(event.timestamp), event.fill.side, event.fill.purpose,
+      event.fill.price, event.fill.notionalUsd, event.fill.fraction,
+      event.fill.feeUsd, event.fill.slippageUsd, JSON.stringify(event.fill.metadata),
+    ]);
+  }
   if (event.type === 'pnl_snapshot') {
     const liquidationBufferPct = Math.abs(event.call.currentPrice - event.call.liquidationPrice) / event.call.entryPrice * 100;
     await pool.query(`INSERT INTO btc_pnl_snapshots
