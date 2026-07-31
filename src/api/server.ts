@@ -5,6 +5,7 @@ import { activeTokens, allTokens, recentScans, hydration } from '../store';
 import { pool } from '../db';
 import { buildReport } from './report';
 import { reportJobs } from './report-jobs';
+import { btcReportJobs } from './btc-report-jobs';
 import { runAiReview } from '../ai/reviewer';
 import { geminiLastError, geminiConfigured } from '../ai/gemini';
 import { runSystemMonitor } from '../ai/monitor';
@@ -171,6 +172,32 @@ export function startServer() {
     const job = reportJobs.get(req.params.id);
     if (!job) {
       res.status(404).json({ error: 'report job was not found or expired' });
+      return;
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(job);
+  });
+
+  app.post('/api/btc-review-jobs', expensiveApiLimit, adminOnly, (req, res) => {
+    const days = Math.min(3650, Math.max(1, parseInt(String(req.query.days || '3650'), 10) || 3650));
+    res.status(202).json(btcReportJobs.start(days));
+  });
+
+  app.get('/api/btc-review-jobs/:id/chunks/:index', adminOnly, (req, res) => {
+    const index = parseInt(req.params.index, 10);
+    const chunk = btcReportJobs.getChunk(req.params.id, index);
+    if (!chunk) {
+      res.status(404).json({ error: 'BTC report chunk is unavailable or the report job expired' });
+      return;
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(chunk);
+  });
+
+  app.get('/api/btc-review-jobs/:id', adminOnly, (req, res) => {
+    const job = btcReportJobs.get(req.params.id);
+    if (!job) {
+      res.status(404).json({ error: 'BTC report job was not found or expired' });
       return;
     }
     res.setHeader('Cache-Control', 'no-store');
