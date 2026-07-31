@@ -1,5 +1,7 @@
 'use strict';
 
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const handler = require('../api/[...path].js');
@@ -61,4 +63,31 @@ test('flat BTC report endpoints proxy nested Railway job and chunk paths', async
     if (previousBackend === undefined) delete process.env.MEMEBOT_BACKEND_URL;
     else process.env.MEMEBOT_BACKEND_URL = previousBackend;
   }
+});
+
+test('Vercel preserves cached nested BTC report URLs and disables stale report JavaScript caching', () => {
+  const config = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'vercel.json'), 'utf8'));
+  assert.deepEqual(config.rewrites, [
+    {
+      source: '/api/btc-review-jobs/:id/chunks/:index',
+      destination: '/api/btc-review-chunk?id=:id&index=:index',
+    },
+    {
+      source: '/api/btc-review-jobs/:id',
+      destination: '/api/btc-review-job?id=:id',
+    },
+  ]);
+  const reportScriptHeaders = config.headers.find(item => item.source === '/btc-review.js');
+  assert.ok(reportScriptHeaders, 'BTC report script cache policy is missing');
+  assert.ok(reportScriptHeaders.headers.some(item => (
+    item.key === 'Cache-Control' && item.value.includes('no-store')
+  )));
+});
+
+test('BTC report UI restarts a PostgreSQL-backed export after an in-memory worker job is lost', () => {
+  const script = fs.readFileSync(path.join(__dirname, '..', 'public', 'btc-review.js'), 'utf8');
+  assert.match(script, /MAX_WORKER_RESTARTS = 3/);
+  assert.match(script, /error\.status = response\.status/);
+  assert.match(script, /Number\(error\.status\) !== 404/);
+  assert.match(script, /No trade data was lost; the report is rebuilt from PostgreSQL/);
 });

@@ -18,6 +18,7 @@
   if (!output || !downloadButton) return;
 
   let archiveUrl = null;
+  const MAX_WORKER_RESTARTS = 3;
   const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
   const bytesLabel = value => {
     const bytes = Number(value) || 0;
@@ -30,9 +31,14 @@
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 30_000);
     try {
-      const response = await fetch(url, { ...options, signal: controller.signal });
+      const response = await fetch(url, { ...options, signal: controller.signal, cache: 'no-store' });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      if (!response.ok) {
+        const error = new Error(data.error || `HTTP ${response.status}`);
+        error.status = response.status;
+        error.payload = data;
+        throw error;
+      }
       return data;
     } catch (error) {
       if (error.name === 'AbortError') throw new Error('a BTC report request timed out');
@@ -69,52 +75,77 @@
     downloadButton.classList.remove('hidden');
   }
 
+  async function buildArchive() {
+    let job = await requestJson('/api/btc-review-jobs', { method: 'POST' });
+    const deadline = Date.now() + 10 * 60_000;
+    while (job.status === 'queued' || job.status === 'building') {
+      output.textContent = [
+        'Building and compressing the complete BTC trade review on the server.',
+        job.message || 'Collecting BTC evidence…',
+        `Elapsed: ${job.elapsedSeconds || 0}s`,
+        'The report includes database history, not only the trades currently visible on screen.',
+      ].join('\n');
+      if (Date.now() >= deadline) throw new Error('BTC report generation exceeded 10 minutes');
+      await sleep(1_500);
+      job = await requestJson(`/api/btc-review-job?id=${encodeURIComponent(job.id)}`);
+    }
+    if (job.status !== 'ready') throw new Error(job.error || 'the BTC report job did not complete');
+    if (!Number.isInteger(job.totalChunks) || job.totalChunks < 1) throw new Error('the BTC ZIP has no downloadable parts');
+
+    const parts = [];
+    let received = 0;
+    for (let index = 0; index < job.totalChunks; index++) {
+      output.textContent = [
+        `BTC report compressed: ${bytesLabel(job.resultBytes)} → ${bytesLabel(job.archiveBytes)} ZIP.`,
+        `Receiving ZIP part ${index + 1} of ${job.totalChunks}…`,
+      ].join('\n');
+      const chunk = await requestJson(`/api/btc-review-chunk?id=${encodeURIComponent(job.id)}&index=${index}`);
+      if (chunk.index !== index || chunk.totalChunks !== job.totalChunks
+        || chunk.encoding !== 'base64' || typeof chunk.chunk !== 'string') {
+        throw new Error(`BTC ZIP part ${index + 1} was invalid`);
+      }
+      const bytes = decodeBase64(chunk.chunk);
+      received += bytes.byteLength;
+      parts.push(bytes);
+    }
+    if (received !== Number(job.archiveBytes)) {
+      throw new Error(`BTC ZIP size mismatch: received ${received}, expected ${job.archiveBytes}`);
+    }
+    return {
+      blob: new Blob(parts, { type: 'application/zip' }),
+      filename: job.downloadFilename,
+      resultBytes: job.resultBytes,
+      archiveBytes: job.archiveBytes,
+    };
+  }
+
   reportButton.onclick = async () => {
     reportButton.disabled = true;
     releaseArchive();
     output.textContent = 'Starting the all-time BTC trade-review job…';
     panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
     try {
-      let job = await requestJson('/api/btc-review-jobs', { method: 'POST' });
-      const deadline = Date.now() + 10 * 60_000;
-      while (job.status === 'queued' || job.status === 'building') {
-        output.textContent = [
-          'Building and compressing the complete BTC trade review on the server.',
-          job.message || 'Collecting BTC evidence…',
-          `Elapsed: ${job.elapsedSeconds || 0}s`,
-          'The report includes database history, not only the trades currently visible on screen.',
-        ].join('\n');
-        if (Date.now() >= deadline) throw new Error('BTC report generation exceeded 10 minutes');
-        await sleep(1_500);
-        job = await requestJson(`/api/btc-review-job?id=${encodeURIComponent(job.id)}`);
-      }
-      if (job.status !== 'ready') throw new Error(job.error || 'the BTC report job did not complete');
-      if (!Number.isInteger(job.totalChunks) || job.totalChunks < 1) throw new Error('the BTC ZIP has no downloadable parts');
-
-      const parts = [];
-      let received = 0;
-      for (let index = 0; index < job.totalChunks; index++) {
-        output.textContent = [
-          `BTC report compressed: ${bytesLabel(job.resultBytes)} → ${bytesLabel(job.archiveBytes)} ZIP.`,
-          `Receiving ZIP part ${index + 1} of ${job.totalChunks}…`,
-        ].join('\n');
-        const chunk = await requestJson(`/api/btc-review-chunk?id=${encodeURIComponent(job.id)}&index=${index}`);
-        if (chunk.index !== index || chunk.totalChunks !== job.totalChunks
-          || chunk.encoding !== 'base64' || typeof chunk.chunk !== 'string') {
-          throw new Error(`BTC ZIP part ${index + 1} was invalid`);
+      let completed = null;
+      for (let restart = 0; restart <= MAX_WORKER_RESTARTS; restart++) {
+        try {
+          completed = await buildArchive();
+          break;
+        } catch (error) {
+          if (Number(error.status) !== 404 || restart >= MAX_WORKER_RESTARTS) throw error;
+          output.textContent = [
+            'The BTC report worker restarted during the export.',
+            `Restarting the job automatically (${restart + 1} of ${MAX_WORKER_RESTARTS})…`,
+            'No trade data was lost; the report is rebuilt from PostgreSQL.',
+          ].join('\n');
+          await sleep(2_000);
         }
-        const bytes = decodeBase64(chunk.chunk);
-        received += bytes.byteLength;
-        parts.push(bytes);
       }
-      if (received !== Number(job.archiveBytes)) {
-        throw new Error(`BTC ZIP size mismatch: received ${received}, expected ${job.archiveBytes}`);
-      }
-      showDownload(new Blob(parts, { type: 'application/zip' }), job.downloadFilename);
+      if (!completed) throw new Error('the BTC report could not survive the worker restart');
+      showDownload(completed.blob, completed.filename);
       output.textContent = [
         'BTC trade-review ZIP is ready.',
-        `Original JSON: ${bytesLabel(job.resultBytes)}`,
-        `Download size: ${bytesLabel(job.archiveBytes)}`,
+        `Original JSON: ${bytesLabel(completed.resultBytes)}`,
+        `Download size: ${bytesLabel(completed.archiveBytes)}`,
         '',
         'Tap “Download ZIP,” then upload that ZIP directly into this ChatGPT conversation.',
         'The archive contains btc-trade-review-all-time.json with every persisted BTC trade and its research evidence.',
