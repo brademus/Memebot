@@ -1,0 +1,63 @@
+name: Capture BTC Live Report
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    if: github.event.pull_request.head.ref == 'analysis/btc-live-report-20260731'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download production BTC report
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='https://memebot-olive.vercel.app'
+          start=''
+          for attempt in $(seq 1 30); do
+            code=$(curl -sS -o start.json -w '%{http_code}' -X POST "$base/api/btc-review-jobs" || true)
+            if [[ "$code" == '202' ]]; then start=$(cat start.json); break; fi
+            echo "start attempt $attempt returned HTTP $code"
+            cat start.json 2>/dev/null || true
+            sleep 5
+          done
+          [[ -n "$start" ]] || { echo 'BTC report job never started'; exit 1; }
+          id=$(jq -er '.id' <<<"$start")
+          echo "job=$id"
+          for attempt in $(seq 1 300); do
+            curl -fsS "$base/api/btc-review-job?id=$id" -o status.json
+            status=$(jq -er '.status' status.json)
+            message=$(jq -r '.message // ""' status.json)
+            echo "poll $attempt: $status — $message"
+            if [[ "$status" == 'ready' ]]; then break; fi
+            if [[ "$status" == 'error' ]]; then cat status.json; exit 1; fi
+            sleep 2
+          done
+          [[ "$(jq -r '.status' status.json)" == 'ready' ]] || { cat status.json; exit 1; }
+          chunks=$(jq -er '.totalChunks' status.json)
+          expected=$(jq -er '.archiveBytes' status.json)
+          : > btc-live-report.zip
+          for index in $(seq 0 $((chunks - 1))); do
+            curl -fsS "$base/api/btc-review-chunk?id=$id&index=$index" -o chunk.json
+            jq -er --argjson index "$index" '.index == $index and .encoding == "base64" and (.chunk | type == "string")' chunk.json >/dev/null
+            jq -r '.chunk' chunk.json | base64 --decode >> btc-live-report.zip
+          done
+          actual=$(stat -c '%s' btc-live-report.zip)
+          [[ "$actual" == "$expected" ]] || { echo "size mismatch $actual != $expected"; exit 1; }
+          unzip -t btc-live-report.zip
+          cp status.json btc-live-report-status.json
+      - name: Upload private workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: btc-live-report
+          path: |
+            btc-live-report.zip
+            btc-live-report-status.json
+          retention-days: 1
+          if-no-files-found: error
