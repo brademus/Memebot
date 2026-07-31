@@ -1,0 +1,1 @@
+Temporary branch used only to trigger a pull-request workflow that captures the production paper-trading BTC report as a short-lived GitHub Actions artifact. No report data is committed to Git history. Close without merging after analysis.
