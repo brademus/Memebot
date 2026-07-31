@@ -86,7 +86,7 @@
         ].join('\n');
         if (Date.now() >= deadline) throw new Error('BTC report generation exceeded 10 minutes');
         await sleep(1_500);
-        job = await requestJson(`/api/btc-review-jobs/${encodeURIComponent(job.id)}`);
+        job = await requestJson(`/api/btc-review-job?id=${encodeURIComponent(job.id)}`);
       }
       if (job.status !== 'ready') throw new Error(job.error || 'the BTC report job did not complete');
       if (!Number.isInteger(job.totalChunks) || job.totalChunks < 1) throw new Error('the BTC ZIP has no downloadable parts');
@@ -98,7 +98,7 @@
           `BTC report compressed: ${bytesLabel(job.resultBytes)} → ${bytesLabel(job.archiveBytes)} ZIP.`,
           `Receiving ZIP part ${index + 1} of ${job.totalChunks}…`,
         ].join('\n');
-        const chunk = await requestJson(`/api/btc-review-jobs/${encodeURIComponent(job.id)}/chunks/${index}`);
+        const chunk = await requestJson(`/api/btc-review-chunk?id=${encodeURIComponent(job.id)}&index=${index}`);
         if (chunk.index !== index || chunk.totalChunks !== job.totalChunks
           || chunk.encoding !== 'base64' || typeof chunk.chunk !== 'string') {
           throw new Error(`BTC ZIP part ${index + 1} was invalid`);
