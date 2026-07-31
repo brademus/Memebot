@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   verify:
-    if: github.event.pull_request.head.ref == 'verify/btc-report-live'
+    if: startsWith(github.event.pull_request.head.ref, 'verify/btc-report-live')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -19,30 +19,43 @@ jobs:
         run: |
           set -euo pipefail
           base='https://memebot-olive.vercel.app'
-          start=''
-          for attempt in $(seq 1 60); do
-            code=$(curl -sS -o start.json -w '%{http_code}' -X POST "$base/api/btc-review-jobs" || true)
-            if [[ "$code" == '202' ]]; then
-              start=$(cat start.json)
-              break
-            fi
-            echo "Attempt $attempt: report start returned HTTP $code: $(cat start.json 2>/dev/null || true)"
-            sleep 5
-          done
-          [[ -n "$start" ]] || { echo 'production BTC report route never became available'; exit 1; }
-          id=$(jq -er '.id' <<<"$start")
-          echo "Started BTC report job $id"
+          ready=false
 
-          for attempt in $(seq 1 240); do
-            curl -fsS "$base/api/btc-review-jobs/$id" -o status.json
-            status=$(jq -er '.status' status.json)
-            message=$(jq -r '.message // ""' status.json)
-            echo "Poll $attempt: $status — $message"
-            if [[ "$status" == 'ready' ]]; then break; fi
-            if [[ "$status" == 'error' ]]; then cat status.json; exit 1; fi
-            sleep 2
+          for generation in $(seq 1 10); do
+            start=''
+            for attempt in $(seq 1 30); do
+              code=$(curl -sS -o start.json -w '%{http_code}' -X POST "$base/api/btc-review-jobs" || true)
+              if [[ "$code" == '202' ]]; then
+                start=$(cat start.json)
+                break
+              fi
+              echo "Start attempt $attempt returned HTTP $code: $(cat start.json 2>/dev/null || true)"
+              sleep 3
+            done
+            [[ -n "$start" ]] || continue
+            id=$(jq -er '.id' <<<"$start")
+            echo "Started BTC report job $id (generation $generation)"
+
+            lost=false
+            for attempt in $(seq 1 240); do
+              code=$(curl -sS -o status.json -w '%{http_code}' "$base/api/btc-review-jobs/$id" || true)
+              if [[ "$code" == '404' ]]; then
+                echo "Job $id was lost during a process transition; starting a fresh generation."
+                lost=true
+                break
+              fi
+              [[ "$code" == '200' ]] || { echo "Status poll returned HTTP $code: $(cat status.json)"; sleep 2; continue; }
+              status=$(jq -er '.status' status.json)
+              message=$(jq -r '.message // ""' status.json)
+              echo "Poll $attempt: $status — $message"
+              if [[ "$status" == 'ready' ]]; then ready=true; break; fi
+              if [[ "$status" == 'error' ]]; then cat status.json; exit 1; fi
+              sleep 2
+            done
+            [[ "$ready" == true ]] && break
+            [[ "$lost" == true ]] && sleep 3
           done
-          [[ "$(jq -r '.status' status.json)" == 'ready' ]] || { cat status.json; exit 1; }
+          [[ "$ready" == true ]] || { echo 'no production BTC report job survived to ready'; exit 1; }
 
           chunks=$(jq -er '.totalChunks' status.json)
           expected=$(jq -er '.archiveBytes' status.json)
