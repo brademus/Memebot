@@ -68,6 +68,8 @@ function isReadOnlyReportRequest(req: Request): boolean {
   if (path === '/api/wallets' && req.method === 'GET') return true;
   if (path === '/api/daily-review-jobs' && req.method === 'POST') return true;
   if (/^\/api\/daily-review-jobs\/[^/]+(?:\/chunks\/\d+)?$/.test(path) && req.method === 'GET') return true;
+  if (path === '/api/btc-review-jobs' && req.method === 'POST') return true;
+  if (/^\/api\/btc-review-jobs\/[^/]+(?:\/chunks\/\d+)?$/.test(path) && req.method === 'GET') return true;
   return false;
 }
 
