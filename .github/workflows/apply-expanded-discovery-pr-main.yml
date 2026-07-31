@@ -1,7 +1,7 @@
 name: One-Time Expanded Discovery PR Implementation
 
 on:
-  pull_request:
+  pull_request_target:
     branches: [main]
     types: [opened, reopened, synchronize]
 
