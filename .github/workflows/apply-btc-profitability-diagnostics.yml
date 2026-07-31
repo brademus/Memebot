@@ -1,0 +1,42 @@
+name: Apply BTC Profitability Diagnostics
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'fix/btc-profitability-diagnostics-20260731'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/btc-profitability-diagnostics-20260731
+          fetch-depth: 0
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Apply audited BTC changes
+        run: node scripts/apply-btc-profitability-diagnostics.mjs
+      - name: Remove one-time applicator
+        run: rm scripts/apply-btc-profitability-diagnostics.mjs .github/workflows/apply-btc-profitability-diagnostics.yml
+      - name: Install dependencies
+        run: npm ci
+      - name: Compile and run unit tests
+        run: npm run check
+      - name: Commit implementation
+        run: |
+          git config user.name "Memebot Builder"
+          git config user.email "actions@github.com"
+          git add src/btc/platform/execution.ts src/btc/platform/ledger.ts src/btc/platform/engine.ts src/btc/platform/pnl.test.ts src/api/btc-report.ts src/api/btc-report.integration.test.ts scripts/apply-btc-profitability-diagnostics.mjs .github/workflows/apply-btc-profitability-diagnostics.yml
+          git commit -m "Make BTC research measurable and version-aware"
+          git push origin HEAD:fix/btc-profitability-diagnostics-20260731
