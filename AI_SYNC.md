@@ -46,7 +46,7 @@ The reasoning recorded here should be a detailed engineering decision record: ev
 
 | Status | Owner | Branch | Scope | Started (UTC) | Notes |
 |---|---|---|---|---|---|
-| IN PROGRESS | GPT-5.6 Thinking | `fix/btc-research-fallback-ai-sync` | Restore BTC research fallback when actionable portfolio admission rejects a selected candidate; establish shared AI coordination protocol | 2026-08-01T19:37:00Z | Keep the new $20 actionable target policy intact. Add regression coverage and verify CI before merge. |
+| READY FOR REVIEW | GPT-5.6 Thinking | `fix/btc-research-fallback-ai-sync` | Restore BTC research fallback when actionable portfolio admission rejects a selected candidate; establish shared AI coordination protocol | 2026-08-01T19:37:00Z | PR #94. All GitHub CI jobs and Vercel preview passed. Ready to merge; keep the new $20 actionable target policy intact. |
 
 Allowed statuses: `PLANNED`, `IN PROGRESS`, `BLOCKED`, `READY FOR REVIEW`, `MERGED`, `ABANDONED`.
 
@@ -63,8 +63,10 @@ Allowed statuses: `PLANNED`, `IN PROGRESS`, `BLOCKED`, `READY FOR REVIEW`, `MERG
 
 ### 2026-08-01T19:37:00Z — GPT-5.6 Thinking — BTC research fallback and multi-agent synchronization
 
-**Status:** IN PROGRESS  
+**Status:** READY FOR REVIEW  
 **Branch:** `fix/btc-research-fallback-ai-sync`  
+**Pull request:** #94 — `Restore BTC research fallback and add shared AI coordination ledger`  
+**Implementation commits:** `7aa3b25e6822dcb75fe82aa0239500ec6daf7e89`, `f26976ea0bf3bf04b855c3e487a3ad9c2ed0be42` plus coordination/documentation commits on the same branch  
 **Owner request:** Fix the BTC subsystem no longer producing calls, then create a durable coordination mechanism so ChatGPT and Claude read the same repository context before changes and document exact changes and rationale afterward.
 
 **Observed behavior and evidence:**
@@ -74,17 +76,29 @@ Allowed statuses: `PLANNED`, `IN PROGRESS`, `BLOCKED`, `READY FOR REVIEW`, `MERG
 - `armActionable()` returned no admission result. Therefore, when portfolio limits or cooldown rejected a selected actionable candidate, its ID remained excluded from `researchPool`. The candidate was persisted as an actionable rejection but received no research fallback, disappearing from both call books.
 - This flaw is capable of producing a silent call drought when high-ranked candidates repeatedly reach actionable selection but fail the later portfolio/cooldown gate. It is independent of strategy signal generation and does not justify weakening the new actionable profitability standard.
 
-**Chosen repair:**
+**Implemented repair:**
 
-- Make actionable arming report whether the candidate was actually admitted.
-- Exclude only successfully armed actionable candidate IDs from the research pool.
-- Route selected-but-not-admitted candidates through the existing research risk, capacity, cooldown, fill, and persistence path.
-- Add regression coverage that distinguishes "selected" from "admitted" and proves an actionable admission rejection remains eligible for research fallback.
+- `src/btc/platform/engine.ts`
+  - Added the pure, testable `shouldEvaluateResearchFallback()` decision function.
+  - Changed `armActionable()` from `Promise<void>` to `Promise<boolean>` so selection and actual portfolio admission are no longer conflated.
+  - Tracks `admittedActionableIds`, not merely selected candidate IDs.
+  - Sends selected-but-not-admitted candidates through the existing research risk, capacity, cooldown, fill-revalidation, and persistence path.
+  - Continues excluding successfully armed actionable candidates and approved candidates rejected only as duplicate/conflicting selections, preventing duplicate exposure.
+- `src/btc/platform/engine-research.test.ts`
+  - Added regression cases for selected/actionable-rejected fallback, successfully admitted actionable exclusion, duplicate-selection exclusion, shadow eligibility, and actionable-risk-rejected eligibility.
+- `AI_SYNC.md`
+  - Added this authoritative append-only coordination ledger, Active Work Board, invariants, detailed engineering decision record, and conflict protocol.
+- `AGENTS.md`
+  - Directs ChatGPT/Codex-style agents to read and update `AI_SYNC.md` before and after work.
+- `CLAUDE.md`
+  - Directs Claude to read `AGENTS.md` and `AI_SYNC.md`, claim work, avoid overlap, and update the ledger.
+- `.github/pull_request_template.md`
+  - Adds verification and AI-coordination completion checks to future pull requests.
 
 **Why this design:**
 
 - It preserves the strict actionable policy and portfolio protections.
-- It restores the original two-book contract: actionable rejection is not automatically research rejection.
+- It restores the intended two-book contract: actionable rejection is not automatically research rejection.
 - It reuses the existing research risk solver and capacity controls rather than bypassing them.
 - It prevents duplicate actionable/research exposure because successfully armed actionable IDs remain excluded.
 - It makes the transition measurable and testable instead of loosening thresholds to manufacture activity.
@@ -95,16 +109,29 @@ Allowed statuses: `PLANNED`, `IN PROGRESS`, `BLOCKED`, `READY FOR REVIEW`, `MERG
 - Increasing research concurrency blindly: rejected because the defect occurs before capacity admission and higher limits could increase correlated exposure.
 - Sending every actionable candidate to both books: rejected because it would duplicate exposure and contaminate research evidence with redundant calls.
 
-**Planned verification:**
+**Verification completed:**
 
-- Add focused unit/regression coverage.
-- Run the repository test suite through CI on the pull request.
-- Confirm the diff contains no execution-enablement or credential changes.
-- After deployment, verify BTC status shows scanning/healthy feeds and that selected-but-actionable-rejected candidates can create research decisions/calls when they pass research gates.
+- PR diff: six focused files, 216 additions, seven deletions; no environment, credential, live-execution, strategy-threshold, or memecoin implementation changes.
+- GitHub Actions run `30715416324`:
+  - `build-and-test`: SUCCESS, including TypeScript build, full test manifest, BTC regime/strategy tests, BTC multistrategy registry/leverage tests, BTC Wave 2 tests, cross-asset tests, API proxy regressions, and dashboard JavaScript syntax.
+  - `postgres-persistence`: SUCCESS, including real Postgres paper persistence, BTC safety contract, BTC multistrategy contract, BTC downloadable report contract, and append-only evidence journal contract.
+- Vercel preview status: SUCCESS.
+- PR #94 is mergeable with no branch divergence from the `main` base used for the repair.
 
-**Deployment/config impact:** None expected. No new environment variables or credentials.
+**Deployment/config impact:**
 
-**Risks and follow-up:**
+- No new environment variables, API keys, migrations, credentials, signing, broadcasting, or live exchange execution.
+- Merging to `main` should trigger the normal deployment pipeline. The code change affects only BTC candidate book routing and repository coordination documentation.
 
-- A live drought can also be caused by unhealthy market feeds, stale active calls consuming research capacity, or all candidates legitimately failing research geometry. The code repair addresses the confirmed suppression path; production status and rejection diagnostics should still be checked after deployment.
-- Consider adding aggregate scan diagnostics by rejection reason in a separate, coordinated change after this repair is measured.
+**Interaction with earlier work:**
+
+- Preserves commit `0f9137160173918383ee3d391fd66495c3e90909` and its $20 projected actionable-profit goal.
+- Does not alter the research risk solver, research concurrency limits, strategy cooldown durations, strategy versions, or promotion evidence thresholds.
+- Does not touch the separate Helius/PumpPortal discovery work.
+
+**Known risks and follow-up:**
+
+- A live drought can also be caused by unhealthy market feeds, stale active calls consuming research capacity, or all candidates legitimately failing research geometry. This repair addresses the confirmed suppression path; production status and rejection diagnostics should still be checked after deployment.
+- Aggregate scan diagnostics by rejection reason would make future droughts faster to distinguish and should be considered as a separate coordinated change after this repair is measured.
+
+**Next action:** Merge PR #94, allow the normal deployment, then confirm production BTC feed health and observe whether qualifying selected-but-actionable-rejected candidates resume entering the research book.
