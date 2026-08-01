@@ -10,12 +10,46 @@ export interface BundleCheck {
 }
 const NEUTRAL: BundleCheck = { pass: true, reason: null, stats: null };
 
+export interface BundleHeliusPlan {
+  maxPages: number;
+  priority: 'fg' | 'bg';
+  tier: 'probe' | 'developing' | 'quality';
+}
+
+/**
+ * Address-history is the expensive Helius category. Spend a cheap one-page probe
+ * on weak launches, two pages as evidence develops, and preserve full creation-
+ * depth history for candidates that may actually enter the conviction funnel.
+ */
+export function bundleHeliusPlan(
+  token: Pick<TokenRecord, 'score' | 'state' | 'uniqueBuyers' | 'totalBuys' | 'totalSells'>,
+): BundleHeliusPlan {
+  const trades = Math.max(0, Number(token.totalBuys || 0) + Number(token.totalSells || 0));
+  const uniqueBuyers = Array.isArray(token.uniqueBuyers) ? token.uniqueBuyers.length : 0;
+  const quality = token.state !== 'WATCHING'
+    || Number(token.score || 0) >= 60
+    || uniqueBuyers >= 20
+    || trades >= 35;
+  if (quality) return { maxPages: 5, priority: 'fg', tier: 'quality' };
+
+  const developing = Number(token.score || 0) >= 45 || uniqueBuyers >= 12 || trades >= 20;
+  if (developing) return { maxPages: 2, priority: 'bg', tier: 'developing' };
+  return { maxPages: 1, priority: 'bg', tier: 'probe' };
+}
+
 export async function checkBundle(token: TokenRecord): Promise<BundleCheck> {
   const config = cfg().bundle;
   if (!config.enabled || !env.HELIUS_API_KEY) return NEUTRAL;
   try {
-    const mintTransactions = await heliusTxsToCreation(token.ca, 5, 'bg');
+    const plan = bundleHeliusPlan(token);
+    const mintTransactions = await heliusTxsToCreation(token.ca, plan.maxPages, plan.priority);
     if (!mintTransactions.length) return NEUTRAL;
+
+    // A complete shallow page means creation may lie outside the probe. Do not
+    // manufacture a clean verdict from later activity. The scheduled retry will
+    // deepen automatically if the coin earns developing/quality status.
+    if (plan.maxPages < 5 && mintTransactions.length >= plan.maxPages * 100) return NEUTRAL;
+
     const minimumSlot = Math.min(...mintTransactions.map((tx: any) => Number(tx.slot) || Number.MAX_SAFE_INTEGER));
     const deployer = token.creator || mintTransactions.find((tx: any) => Number(tx.slot) === minimumSlot)?.feePayer || null;
 
@@ -35,7 +69,7 @@ export async function checkBundle(token: TokenRecord): Promise<BundleCheck> {
 
     const linked = new Set<string>();
     if (deployer) {
-      const deployerTransactions = await heliusTxs(deployer, 100, undefined, 'bg');
+      const deployerTransactions = await heliusTxs(deployer, 100, undefined, plan.priority);
       for (const tx of deployerTransactions) {
         for (const transfer of tx.nativeTransfers || []) {
           if (transfer.fromUserAccount === deployer && transfer.toUserAccount) linked.add(transfer.toUserAccount);

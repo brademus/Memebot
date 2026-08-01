@@ -8,8 +8,8 @@
     "test": "node --test $(find dist -name '*.test.js' ! -name '*.integration.test.js' -print)",
     "test:integration": "node --test $(find dist -name '*.integration.test.js' -print)",
     "check": "npm run build && npm test",
-    "start": "node --require ./dist/helius-free-budget.js --require ./dist/helius-quota-guard.js --require ./dist/ingest/pumpportal-guard.js dist/boot.js",
-    "dev": "tsx src/boot.ts"
+    "start": "node --require ./dist/discovery-capacity.js --require ./dist/helius-free-budget.js --require ./dist/helius-quota-guard.js --require ./dist/ingest/pumpportal-guard.js dist/boot.js",
+    "dev": "tsx --require ./src/discovery-capacity.ts src/boot.ts"
   },
   "engines": { "node": ">=20 <25" },
   "dependencies": {
