@@ -46,7 +46,7 @@ The reasoning recorded here should be a detailed engineering decision record: ev
 
 | Status | Owner | Branch | Scope | Started (UTC) | Notes |
 |---|---|---|---|---|---|
-| READY FOR REVIEW | GPT-5.6 Thinking | `fix/btc-research-fallback-ai-sync` | Restore BTC research fallback when actionable portfolio admission rejects a selected candidate; establish shared AI coordination protocol | 2026-08-01T19:37:00Z | PR #94. All GitHub CI jobs and Vercel preview passed. Ready to merge; keep the new $20 actionable target policy intact. |
+| MERGED | GPT-5.6 Thinking | `fix/btc-research-fallback-ai-sync` | Restore BTC research fallback when actionable portfolio admission rejects a selected candidate; establish shared AI coordination protocol | 2026-08-01T19:37:00Z | PR #94 merged to `main` as `96aef972758e93c2cde9b0196ba9018de7684e91`. All current-head GitHub CI jobs and Vercel preview passed. |
 
 Allowed statuses: `PLANNED`, `IN PROGRESS`, `BLOCKED`, `READY FOR REVIEW`, `MERGED`, `ABANDONED`.
 
@@ -63,9 +63,10 @@ Allowed statuses: `PLANNED`, `IN PROGRESS`, `BLOCKED`, `READY FOR REVIEW`, `MERG
 
 ### 2026-08-01T19:37:00Z — GPT-5.6 Thinking — BTC research fallback and multi-agent synchronization
 
-**Status:** READY FOR REVIEW  
+**Status:** MERGED  
 **Branch:** `fix/btc-research-fallback-ai-sync`  
 **Pull request:** #94 — `Restore BTC research fallback and add shared AI coordination ledger`  
+**Merged commit:** `96aef972758e93c2cde9b0196ba9018de7684e91`  
 **Implementation commits:** `7aa3b25e6822dcb75fe82aa0239500ec6daf7e89`, `f26976ea0bf3bf04b855c3e487a3ad9c2ed0be42` plus coordination/documentation commits on the same branch  
 **Owner request:** Fix the BTC subsystem no longer producing calls, then create a durable coordination mechanism so ChatGPT and Claude read the same repository context before changes and document exact changes and rationale afterward.
 
@@ -111,17 +112,17 @@ Allowed statuses: `PLANNED`, `IN PROGRESS`, `BLOCKED`, `READY FOR REVIEW`, `MERG
 
 **Verification completed:**
 
-- PR diff: six focused files, 216 additions, seven deletions; no environment, credential, live-execution, strategy-threshold, or memecoin implementation changes.
-- GitHub Actions run `30715416324`:
+- PR diff: six focused files, 243 additions, seven deletions; no environment, credential, live-execution, strategy-threshold, or memecoin implementation changes.
+- GitHub Actions run `30715498304` against the final PR head `c797b8f8e2cba738b049cb2a282d3b905ca0346d`:
   - `build-and-test`: SUCCESS, including TypeScript build, full test manifest, BTC regime/strategy tests, BTC multistrategy registry/leverage tests, BTC Wave 2 tests, cross-asset tests, API proxy regressions, and dashboard JavaScript syntax.
   - `postgres-persistence`: SUCCESS, including real Postgres paper persistence, BTC safety contract, BTC multistrategy contract, BTC downloadable report contract, and append-only evidence journal contract.
 - Vercel preview status: SUCCESS.
-- PR #94 is mergeable with no branch divergence from the `main` base used for the repair.
+- PR #94 merged successfully to `main` as `96aef972758e93c2cde9b0196ba9018de7684e91`.
 
 **Deployment/config impact:**
 
 - No new environment variables, API keys, migrations, credentials, signing, broadcasting, or live exchange execution.
-- Merging to `main` should trigger the normal deployment pipeline. The code change affects only BTC candidate book routing and repository coordination documentation.
+- The merge triggers the repository's normal deployment path. The code change affects only BTC candidate book routing and repository coordination documentation.
 
 **Interaction with earlier work:**
 
@@ -134,4 +135,4 @@ Allowed statuses: `PLANNED`, `IN PROGRESS`, `BLOCKED`, `READY FOR REVIEW`, `MERG
 - A live drought can also be caused by unhealthy market feeds, stale active calls consuming research capacity, or all candidates legitimately failing research geometry. This repair addresses the confirmed suppression path; production status and rejection diagnostics should still be checked after deployment.
 - Aggregate scan diagnostics by rejection reason would make future droughts faster to distinguish and should be considered as a separate coordinated change after this repair is measured.
 
-**Next action:** Merge PR #94, allow the normal deployment, then confirm production BTC feed health and observe whether qualifying selected-but-actionable-rejected candidates resume entering the research book.
+**Next action:** Confirm production BTC feed health after deployment and observe whether qualifying selected-but-actionable-rejected candidates resume entering the research book. Any follow-up change must begin by reading this ledger and claiming a new Active Work Board item.
