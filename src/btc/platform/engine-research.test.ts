@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { BtcMultiStrategyEngine } from './engine';
+import { BtcMultiStrategyEngine, shouldEvaluateResearchFallback } from './engine';
 
 test('armed research blocks duplicate admission without masquerading as an active filled call', () => {
   const engine = new BtcMultiStrategyEngine() as any;
@@ -18,4 +18,46 @@ test('armed research blocks duplicate admission without masquerading as an activ
     status: 'open',
   }];
   assert.equal(engine.strategyHasActiveResearch('strategy-1'), true);
+});
+
+test('a selected actionable candidate falls back to research when later portfolio admission rejects it', () => {
+  assert.equal(shouldEvaluateResearchFallback(
+    { mode: 'actionable' },
+    { approved: true },
+    true,
+    false,
+  ), true);
+});
+
+test('an admitted actionable candidate is excluded from the research book', () => {
+  assert.equal(shouldEvaluateResearchFallback(
+    { mode: 'actionable' },
+    { approved: true },
+    true,
+    true,
+  ), false);
+});
+
+test('an approved actionable candidate rejected only by duplicate selection remains excluded from duplicate research exposure', () => {
+  assert.equal(shouldEvaluateResearchFallback(
+    { mode: 'actionable' },
+    { approved: true },
+    false,
+    false,
+  ), false);
+});
+
+test('shadow and actionable-risk-rejected candidates remain eligible for research evaluation', () => {
+  assert.equal(shouldEvaluateResearchFallback(
+    { mode: 'shadow' },
+    { approved: false },
+    false,
+    false,
+  ), true);
+  assert.equal(shouldEvaluateResearchFallback(
+    { mode: 'actionable' },
+    { approved: false },
+    false,
+    false,
+  ), true);
 });
