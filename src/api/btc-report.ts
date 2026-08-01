@@ -509,6 +509,16 @@ export async function buildBtcTradeReport(days = 3650): Promise<Record<string, u
         .reduce((sum, trade) => sum + number(trade.result.netPnlUsd), 0),
       actionableCalls: trades.filter(trade => trade.book === 'actionable').length,
       researchCalls: trades.filter(trade => trade.book === 'research').length,
+      // Owner directive 2026-08-01: the per-trade goal is $20+ net on $100
+      // margin. Measured, not vibed: resolved winners split at the goal line.
+      twentyDollarGoal: (() => {
+        const resolvedWinners = resolved.filter(trade => number(trade.result.netPnlUsd) > 0);
+        return {
+          targetNetUsd: 20,
+          resolvedWinsAtOrAboveGoal: resolvedWinners.filter(trade => number(trade.result.netPnlUsd) >= 20).length,
+          resolvedWinsBelowGoal: resolvedWinners.filter(trade => number(trade.result.netPnlUsd) < 20).length,
+        };
+      })(),
       firstTradeAt: trades.length ? trades.at(-1)?.timing.openedAt : null,
       latestTradeAt: trades[0]?.timing.openedAt || null,
     },

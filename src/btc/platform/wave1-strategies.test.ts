@@ -268,8 +268,17 @@ test('Donchian signal is quarantined when native economics miss the research qua
 test('funding crowding reversal can qualify for an actionable tier after mature positive evidence', () => {
   resetWave1StrategyStateForTests();
   seedObservations();
+  // $20-goal note (2026-08-01): under the 20% ROI floor the qualification path
+  // needs realistic volatility — the old flat fixture produced a micro-stop
+  // whose derated geometry could not project $20 on $100 at any leverage. A
+  // ~0.6% ATR tape (range 600 on ~100k) reflects the regimes this strategy
+  // actually fires in, where 3.25R at its 18x cap projects ~30%+ net.
   const context = baseContext({
     timestamp: Date.now() + 17 * 5 * 60_000,
+    candles: {
+      ...baseContext().candles,
+      fiveMinute: candles(90, 300, 100_000 * 0.985, 18, { range: 600 }),
+    },
     derivatives: {
       ...baseContext().derivatives,
       fundingRate: 0.0007,
@@ -296,7 +305,7 @@ test('funding crowding reversal can qualify for an actionable tier after mature 
   assert.equal(candidates[0].direction, 'short');
 });
 
-test('perpetual premium convergence can qualify for an actionable tier after mature positive evidence', () => {
+test('perpetual premium convergence stays research-only under the $20 goal — its native geometry cannot project the floor', () => {
   resetWave1StrategyStateForTests();
   seedObservations();
   const context = baseContext({
@@ -327,9 +336,16 @@ test('perpetual premium convergence can qualify for an actionable tier after mat
   const candidates = strategy('btc-perp-premium-convergence').evaluate(context);
   assert.equal(candidates.length, 1);
   const plan = actionablePlan(context, candidates[0]!);
-  assert.equal(plan.approved, true, plan.rejectionReasons.join('; '));
-  assert.equal(plan.expectancyEvidence?.ready, true);
-  assert.ok(plan.actionableTier === 'standard' || plan.actionableTier === 'a_plus');
+  // $20-goal consequence (2026-08-01), pinned deliberately: this strategy's
+  // edge is small basis snaps — even this EXTREME 160bps fixture projects only
+  // ~17% net at its 12x cap, below the 20% ($20-on-$100) actionable floor. It
+  // remains research-only under the goal; the honest paths out are a higher
+  // leverage cap for extreme-basis entries or wider targets, both strategy-
+  // design decisions for the strategy's owning lane, not a test to soften.
+  assert.equal(plan.approved, false);
+  assert.ok(plan.rejectionReasons.some(reason => reason.includes('projected net ROI floor')),
+    plan.rejectionReasons.join('; '));
+  assert.equal(plan.expectancyEvidence?.ready, true, 'evidence maturity is not the blocker — the ROI floor is');
   assert.equal(candidates[0].direction, 'short');
   assert.equal(candidates[0].initialTarget, 100_000);
 });

@@ -123,15 +123,18 @@ test('BTC strategy registry contains twenty-seven unique versioned strategies', 
   }
 });
 
-test('standard actionable policy uses native target, 6% projected ROI, 2.25R and a $6 loss budget', () => {
+test('standard actionable policy uses native target, the $20-goal 20% ROI floor, 2.25R and a $13 loss budget', () => {
+  // Owner directive 2026-08-01: every actionable call must PROJECT >= $20 net
+  // on $100 margin at its initial target (20% ROI floor); the loss budget rose
+  // to $13 so 2.25R geometry can honestly reach $20-29 targets.
   const plan = solveRiskPlan(context, candidate(), evidence());
   assert.equal(plan.approved, true, plan.rejectionReasons.join('; '));
   assert.equal(plan.targetPrice, 101_600);
   assert.equal(plan.actionableTier, 'standard');
   assert.ok(plan.leverage >= 1 && plan.leverage <= 50);
-  assert.ok(plan.estimatedTargetRoiPct >= 6);
+  assert.ok(plan.estimatedTargetRoiPct >= 20);
   assert.ok(plan.estimatedNetRR >= 2.25);
-  assert.ok(plan.estimatedRiskUsd <= 6 + 1e-6);
+  assert.ok(plan.estimatedRiskUsd <= 13 + 1e-6);
   assert.ok(plan.liquidationBufferPct > 0);
   assert.equal(plan.expectancyEvidence?.ready, true);
 });
@@ -176,7 +179,10 @@ test('risk solver rejects an invalid structural stop beyond the maximum allowed 
 });
 
 test('strategy-specific leverage cap is enforced independently of the platform ceiling', () => {
-  const plan = solveRiskPlan(context, candidate({ strategyLeverageCap: 6, initialTarget: 102_000 }), evidence());
+  // Target widened so the plan clears the $20-goal ROI floor at a 6x cap
+  // (20% on $100 at 6x needs a ~3.5%+ net move); the assertion under test is
+  // the leverage ceiling, not the ROI policy.
+  const plan = solveRiskPlan(context, candidate({ strategyLeverageCap: 6, initialTarget: 104_500, maximumRealisticTarget: 106_000 }), evidence());
   assert.equal(plan.approved, true, plan.rejectionReasons.join('; '));
   assert.ok(plan.leverage <= 6);
 });

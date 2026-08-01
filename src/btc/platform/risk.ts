@@ -15,11 +15,23 @@ import { clamp, safeDiv } from './indicators';
 export const PAPER_MARGIN_USD = 100;
 export const PLATFORM_MAX_LEVERAGE = 50;
 
-export const DEFAULT_STANDARD_MIN_NET_ROI_PCT = 6;
+// OWNER DIRECTIVE 2026-08-01: the goal is $20+ net profit per $100 margin per
+// actionable trade (smaller realized wins are acceptable; the AIM at entry must
+// be >= $20). Translated into coherent gate math: the ROI floor rises 6% -> 20%
+// so every actionable call PROJECTS >= $20 net at its initial target, and the
+// planned-loss budget rises $6 -> $13 so the existing 2.25R net floor can
+// actually reach $20 targets (at $6 risk, a $20 target demanded 3.33R+ and
+// almost nothing would qualify — the loss budget is the hidden knob the goal
+// moves). Effective actionable geometry: risk ~$9-13 to target $20-29+, at up
+// to the platform's 50x where the solver's liquidation and cost caps allow.
+// Research book deliberately untouched: small, cheap experiments resolve
+// faster and their R-normalized evidence transfers.
+export const DEFAULT_STANDARD_MIN_NET_ROI_PCT = 20;
 export const DEFAULT_STANDARD_MIN_NET_RR = 2.25;
-export const DEFAULT_MAX_PLANNED_LOSS_USD = 6;
+export const DEFAULT_MAX_PLANNED_LOSS_USD = 13;
 
-export const DEFAULT_A_PLUS_MIN_NET_ROI_PCT = 20;
+// A+ must stay meaningfully above the standard floor now that standard = 20%.
+export const DEFAULT_A_PLUS_MIN_NET_ROI_PCT = 30;
 export const DEFAULT_A_PLUS_MIN_NET_RR = 3;
 export const DEFAULT_A_PLUS_MIN_CONFIDENCE = 82;
 export const DEFAULT_A_PLUS_MIN_EXECUTION_SCORE = 80;

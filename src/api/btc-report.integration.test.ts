@@ -205,6 +205,11 @@ integration('BTC report joins calls to decisions, events, fills, P&L paths, and 
       Math.abs(summary.actionableNetPnlUsd + summary.researchNetPnlUsd - summary.netPnlUsd) < 1e-6,
       'book PnLs must reconcile to the total',
     );
+
+    const goal = summary.twentyDollarGoal;
+    assert.equal(goal.targetNetUsd, 20);
+    assert.equal(typeof goal.resolvedWinsAtOrAboveGoal, 'number');
+    assert.equal(typeof goal.resolvedWinsBelowGoal, 'number');
     assert.equal(trade.fills.length, 1);
     assert.equal(trade.pnlPath.length, 1);
     assert.equal(trade.pnlPath[0].marketContext.referenceVenue, 'BYBIT-BTCUSDT');
