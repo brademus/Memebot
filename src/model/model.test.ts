@@ -121,3 +121,41 @@ test('observations record the highest reached milestone without retrofilling low
   assert.ok(keys.includes('curve_50pct'));
   assert.equal(keys.includes('curve_25pct'), false);
 });
+
+test('freeze verdict 2026-08-01: adverse regime raises the rank bar instead of vetoing outright', async () => {
+  const { decisionReasons } = await import('./ensemble');
+  const { cfg } = await import('../config');
+  const model = cfg().signal_model;
+  const adverseRegime: MarketRegime = { ...regime, id: 'test:adverse', kind: 'adverse' };
+  const token = { source: 'pumpfun', firstSeen: Date.now(), recentTrades: [], buys5m: 0, sells5m: 0 } as unknown as TokenRecord;
+  const passing = {
+    cohortSize: Math.max(model.min_cohort_size + 5, 25),
+    target: Math.min(0.95, model.min_target_before_stop + 0.2),
+    downside: Math.max(0.01, model.max_downside_probability - 0.05),
+    expectedValue: model.min_expected_value + 1,
+    uncertainty: 0.01,
+  };
+  const adverseFloor = Math.min(0.97, model.min_rank_percentile + 0.10);
+  const between = Math.min(adverseFloor - 0.02, model.min_rank_percentile + 0.05);
+  assert.ok(between > model.min_rank_percentile, 'test percentile must clear the base floor');
+
+  const call = (kind: MarketRegime, percentile: number) => decisionReasons(
+    token, good, kind, percentile, passing.cohortSize,
+    passing.target, passing.downside, passing.expectedValue, passing.uncertainty, Date.now(),
+  );
+
+  const blockedInAdverse = call(adverseRegime, between);
+  assert.ok(blockedInAdverse.core.some((reason: string) => reason.startsWith('adverse_regime_rank:')),
+    'below the raised bar in adverse tape must still block, with a measurable label');
+  assert.ok(!blockedInAdverse.core.includes('adverse_regime'), 'the unconditional veto label must be gone');
+
+  const passesRaisedBar = call(adverseRegime, Math.min(0.99, adverseFloor + 0.01));
+  assert.ok(!passesRaisedBar.core.some((reason: string) => reason.startsWith('adverse_regime')),
+    'clearing the raised bar in adverse tape must not be regime-blocked');
+
+  const normalSamePercentile = call(regime, between);
+  assert.ok(!normalSamePercentile.core.some((reason: string) => reason.startsWith('adverse_regime')),
+    'normal regime is untouched by the adverse bar');
+  assert.ok(!normalSamePercentile.core.some((reason: string) => reason.startsWith('rank:')),
+    'the same percentile passes the base floor in normal tape — the pair isolates the regime effect');
+});

@@ -201,7 +201,7 @@ function cohortRank(token: TokenRecord, features: SignalFeatureVector, regime: M
   return { alpha: targetAlpha, percentile: clamp01(percentile), size: scores.length };
 }
 
-function decisionReasons(
+export function decisionReasons(
   token: TokenRecord, features: SignalFeatureVector, regime: MarketRegime, percentile: number, cohortSize: number,
   target: number, downside: number, expectedValue: number, uncertainty: number, now: number,
 ): DecisionReasonGroups {
@@ -209,7 +209,24 @@ function decisionReasons(
   const core: string[] = [];
   const readiness: string[] = [];
   if (!recommendationEligibleSource(token.source) || features.sourceEligible < 1) core.push('source_quarantined');
-  if (regime.kind === 'adverse') core.push('adverse_regime');
+  // FREEZE VERDICT 2026-08-01: 'adverse' was an unconditional veto stacked on
+  // top of machinery that already prices adversity twice — competingRiskHazards
+  // applies a −0.42 regime lift (directly suppressing target_3x probability and
+  // raising stop/rug hazards, which the target/EV checks below then feel), and
+  // alphaScore takes a 0.22 penalty. The veto's own record convicted it: it
+  // blocked 39 of the 43 watched coins that went on to 3x, while the cohort it
+  // blocked still hit target-before-loss 13.7% of the time across 68,031
+  // decisions — barely below the 16.5% of coins blocked in NORMAL regimes. A
+  // market-wide median is not evidence about a cohort-ranked top-percentile
+  // candidate. Adverse tape now RAISES THE BAR (+0.10 rank percentile over the
+  // calibrator's floor, capped at 0.97) instead of closing the door; the reason
+  // label keeps the block measurable in the autopsy's missedByReason.
+  if (regime.kind === 'adverse') {
+    const adverseRankFloor = Math.min(0.97, model.min_rank_percentile + 0.10);
+    if (percentile < adverseRankFloor) {
+      core.push(`adverse_regime_rank:${percentile.toFixed(2)}<${adverseRankFloor.toFixed(2)}`);
+    }
+  }
   if (regime.kind === 'transition' && regime.changeProbability >= model.regime_change_abstain_threshold) core.push('regime_transition');
   if (cohortSize < model.min_cohort_size) core.push(`cohort_small:${cohortSize}`);
   if (percentile < model.min_rank_percentile) core.push(`rank:${percentile.toFixed(2)}`);
