@@ -69,6 +69,16 @@ function sameTrade(first: StrategyCandidate, second: StrategyCandidate): boolean
     && Math.abs(first.preferredEntry - second.preferredEntry) / Math.max(first.preferredEntry, 1) <= 0.0025;
 }
 
+export function shouldEvaluateResearchFallback(
+  candidate: Pick<StrategyCandidate, 'mode'>,
+  actionablePlan: Pick<RiskPlan, 'approved'>,
+  wasSelectedForActionable: boolean,
+  wasAdmittedToActionable: boolean,
+): boolean {
+  if (wasAdmittedToActionable) return false;
+  return candidate.mode === 'shadow' || !actionablePlan.approved || wasSelectedForActionable;
+}
+
 export class BtcMultiStrategyEngine {
   private activeCalls: PaperCall[] = [];
   private recentCalls: PaperCall[] = [];
@@ -247,7 +257,7 @@ export class BtcMultiStrategyEngine {
     candidate: StrategyCandidate,
     plan: RiskPlan,
     supportingStrategies: string[],
-  ): Promise<void> {
+  ): Promise<boolean> {
     const assessment = assessPortfolioAdmission(
       candidate,
       plan,
@@ -261,7 +271,7 @@ export class BtcMultiStrategyEngine {
       ...assessment.reasons,
       ...(cooldownActive ? ['strategy cooldown is active'] : []),
     ]);
-    if (!assessment.approved || cooldownActive) return;
+    if (!assessment.approved || cooldownActive) return false;
     this.armed.set(`actionable:${candidate.id}`, {
       candidate, plan, book: 'actionable', supportingStrategies, armedAt: candidate.createdAt,
     });
@@ -271,6 +281,7 @@ export class BtcMultiStrategyEngine {
         if (supporting) await markCandidateDecision(supporting.id, 'merged', `merged into actionable call led by ${candidate.strategyId}`);
       }
     }
+    return true;
   }
 
   private async evaluateStrategies(context: MarketContext): Promise<void> {
@@ -318,12 +329,20 @@ export class BtcMultiStrategyEngine {
         ['not selected by duplicate/conflict coordinator'],
       );
     }
-    for (const item of actionable) await this.armActionable(item.candidate, item.plan, item.supporting);
 
-    const actionableCandidateIds = new Set(actionable.map(item => item.candidate.id));
+    const admittedActionableIds = new Set<string>();
+    for (const item of actionable) {
+      const admitted = await this.armActionable(item.candidate, item.plan, item.supporting);
+      if (admitted) admittedActionableIds.add(item.candidate.id);
+    }
+
     const researchPool = fresh
-      .filter(item => !actionableCandidateIds.has(item.candidate.id))
-      .filter(item => item.candidate.mode === 'shadow' || !item.actionablePlan.approved)
+      .filter(item => shouldEvaluateResearchFallback(
+        item.candidate,
+        item.actionablePlan,
+        selectedIds.has(item.candidate.id),
+        admittedActionableIds.has(item.candidate.id),
+      ))
       .sort((a, b) => combinedConfidence(b.candidate) - combinedConfidence(a.candidate));
     for (const item of researchPool) {
       if (!item.researchPlan.approved) {
